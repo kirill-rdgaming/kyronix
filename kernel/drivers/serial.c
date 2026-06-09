@@ -11,6 +11,7 @@
 #define UART_DLL     0
 #define UART_DLH     1
 
+#define LSR_DR    (1 << 0)  /* data ready - a byte is waiting to be read */
 #define LSR_THRE  (1 << 5)
 #define LCR_DLAB  (1 << 7)
 
@@ -40,4 +41,13 @@ void serial_putchar(uint16_t port, char c) {
 void serial_write(uint16_t port, const char *s) {
     while (*s) serial_putchar(port, *s++);
 }
-// was easy
+
+bool serial_data_ready(uint16_t port) {
+    return (inb(port + UART_LSR) & LSR_DR) != 0;
+}
+
+uint8_t serial_getchar(uint16_t port) {
+    while (!serial_data_ready(port))
+        cpu_relax();
+    return inb(port + UART_DATA);
+}

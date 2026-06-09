@@ -86,6 +86,20 @@ INLINE void write_cr3(uint64_t val) {
     __asm__ volatile("mov %0, %%cr3" :: "r"(val) : "memory");
 }
 
+INLINE void write_cr0(uint64_t val) {
+    __asm__ volatile("mov %0, %%cr0" :: "r"(val) : "memory");
+}
+
+INLINE uint64_t read_cr4(void) {
+    uint64_t val;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(val));
+    return val;
+}
+
+INLINE void write_cr4(uint64_t val) {
+    __asm__ volatile("mov %0, %%cr4" :: "r"(val) : "memory");
+}
+
 
 typedef struct {
     uint16_t limit_low;
@@ -123,13 +137,3 @@ typedef struct {
     uint64_t int_no, error_code;
     uint64_t rip, cs, rflags, rsp, ss;
 } PACKED cpu_state_t;
-
-typedef struct {
-    uint32_t reserved0;
-    uint64_t rsp[3];
-    uint64_t reserved1;
-    uint64_t ist[7];
-    uint64_t reserved2;
-    uint16_t reserved3;
-    uint16_t iopb_offset;
-} PACKED tss_t;

@@ -1,115 +1,94 @@
 #include "gdt.h"
-#include "cpu.h"
+#include <stddef.h>
 
-#define MAKE_ACCESS(present, dpl, system, exec, dir_conf, rw) \
-    ((present << 7) | ((dpl) << 5) | (system << 4) | (exec << 3) | (dir_conf << 2) | (rw << 1))
+typedef struct {
+    uint32_t reserved0;
+    uint64_t rsp0;
+    uint64_t rsp1;
+    uint64_t rsp2;
+    uint64_t reserved1;
+    uint64_t ist[7];
+    uint64_t reserved2;
+    uint16_t reserved3;
+    uint16_t iopb_offset;   /* beyond TSS limit -> no IOPB -> deny all user I/O */
+} __attribute__((packed)) tss_t;
 
-#define GDT_LIMIT 0xFFFFF
-#define GDT_BASE  0
+typedef struct {
+    uint16_t limit_lo;
+    uint16_t base_lo;
+    uint8_t  base_mid;
+    uint8_t  type;          /* 0x89 = present, DPL=0, type=9 (64-bit TSS avail) */
+    uint8_t  lim_hi_flags;  /* [7:4] flags, [3:0] limit[19:16] */
+    uint8_t  base_hi1;
+    uint32_t base_hi2;
+    uint32_t zero;
+} __attribute__((packed)) tss_desc_t;
 
-enum {
-    GDT_ACC_RW     = 1,
-    GDT_ACC_EXEC   = 1,
-    GDT_ACC_SYSTEM = 1,
-};
+typedef struct {
+    uint64_t   null;
+    uint64_t   kernel_code;
+    uint64_t   kernel_data;
+    uint64_t   user_data;
+    uint64_t   user_code;
+    tss_desc_t tss;
+} __attribute__((packed, aligned(16))) gdt_t;
 
-enum {
-    GDT_FLG_64BIT   = (1 << 1),
-    GDT_FLG_GRAN4K  = (1 << 3),
-};
+static gdt_t  g_gdt;
+static tss_t  g_tss __attribute__((aligned(16)));
 
-#define GDT_REG_CNT 5
+void gdt_init(void) {
+    g_gdt.null        = 0ULL;
+    g_gdt.kernel_code = 0x00AF9A000000FFFFULL;
+    g_gdt.kernel_data = 0x00CF92000000FFFFULL;
+    g_gdt.user_data   = 0x00CFF2000000FFFFULL;
+    g_gdt.user_code   = 0x00AFFA000000FFFFULL;
 
-static struct {
-    gdt_entry_t      reg[GDT_REG_CNT];
-    tss_descriptor_t tss_desc;
-} PACKED gdt;
+    g_tss.iopb_offset = (uint16_t)sizeof(tss_t);
 
-static gdtr_t gdtr;
+    uint64_t base  = (uint64_t)&g_tss;
+    uint32_t limit = (uint32_t)(sizeof(tss_t) - 1);
 
-static void gdt_set_entry(int i, uint32_t base, uint32_t limit,
-                          uint8_t access, uint8_t flags)
-{
-    gdt.reg[i].limit_low   = limit & 0xFFFF;
-    gdt.reg[i].base_low    = base & 0xFFFF;
-    gdt.reg[i].base_mid    = (base >> 16) & 0xFF;
-    gdt.reg[i].access      = access;
-    gdt.reg[i].granularity = ((limit >> 16) & 0x0F) | (flags << 4);
-    gdt.reg[i].base_high   = (base >> 24) & 0xFF;
-}
+    g_gdt.tss = (tss_desc_t){
+        .limit_lo    = (uint16_t)(limit & 0xFFFF),
+        .base_lo     = (uint16_t)(base & 0xFFFF),
+        .base_mid    = (uint8_t)((base >> 16) & 0xFF),
+        .type        = 0x89,
+        .lim_hi_flags = (uint8_t)((limit >> 16) & 0x0F),
+        .base_hi1    = (uint8_t)((base >> 24) & 0xFF),
+        .base_hi2    = (uint32_t)(base >> 32),
+        .zero        = 0,
+    };
 
-static void tss_desc_init(const tss_t *tss)
-{
-    uint64_t base = (uint64_t)tss;
-    uint16_t limit = sizeof(tss_t) - 1;
-
-    gdt.tss_desc.limit_low   = limit;
-    gdt.tss_desc.base_low    = base & 0xFFFF;
-    gdt.tss_desc.base_mid    = (base >> 16) & 0xFF;
-    gdt.tss_desc.access      = 0x89;
-    gdt.tss_desc.granularity = (limit >> 16) & 0x0F;
-    gdt.tss_desc.base_high   = (base >> 24) & 0xFF;
-    gdt.tss_desc.base_upper  = (base >> 32) & 0xFFFFFFFF;
-    gdt.tss_desc.reserved    = 0;
-}
-
-static void gdt_load(void)
-{
-    gdtr.limit = sizeof(gdt) - 1;
-    gdtr.base  = (uint64_t)&gdt;
+    struct {
+        uint16_t limit;
+        uint64_t base;
+    } __attribute__((packed)) gdtr = {
+        .limit = (uint16_t)(sizeof(g_gdt) - 1),
+        .base  = (uint64_t)&g_gdt,
+    };
 
     __asm__ volatile(
-        "lgdt %0\n"
-        "mov  %1, %%ax\n"
-        "mov  %%ax, %%ds\n"
-        "mov  %%ax, %%es\n"
-        "mov  %%ax, %%fs\n"
-        "mov  %%ax, %%gs\n"
-        "mov  %%ax, %%ss\n"
-        "push %2\n"
-        "leaq 1f(%%rip), %%rax\n"
-        "push %%rax\n"
-        "lretq\n"
-        "1:\n"
-        : : "m"(gdtr),
-            "rm"((uint16_t)GDT_DS_SEL),
-            "i"((uint16_t)GDT_CS_SEL)
+        "lgdt   %0                  \n\t"
+        "pushq  $0x08               \n\t"   /* kernel CS */
+        "leaq   1f(%%rip), %%rax    \n\t"
+        "pushq  %%rax               \n\t"
+        "lretq                      \n\t"   /* flush CS */
+        "1:                         \n\t"
+        "movw   $0x10, %%ax         \n\t"   /* kernel DS */
+        "movw   %%ax,  %%ds         \n\t"
+        "movw   %%ax,  %%es         \n\t"
+        "movw   %%ax,  %%ss         \n\t"
+        "xorw   %%ax,  %%ax         \n\t"   /* FS=GS=0 (set via MSR later) */
+        "movw   %%ax,  %%fs         \n\t"
+        "movw   %%ax,  %%gs         \n\t"
+        "movw   $0x28, %%ax         \n\t"   /* TSS selector */
+        "ltr    %%ax                \n\t"
+        :
+        : "m"(gdtr)
         : "rax", "memory"
     );
 }
 
-static void tss_load(void)
-{
-    __asm__ volatile("ltr %0" : : "r"((uint16_t)GDT_TSS_SEL) : "memory");
-}
-
-static uint8_t tss_stack[4096] ALIGNED(16);
-static tss_t   tss;
-
-void gdt_init(void)
-{
-    gdt_set_entry(GDT_NULL,        0, 0, 0, 0);
-    gdt_set_entry(GDT_KERNEL_CODE,
-        GDT_BASE, GDT_LIMIT,
-        MAKE_ACCESS(1, 0, GDT_ACC_SYSTEM, GDT_ACC_EXEC, 0, GDT_ACC_RW),
-        GDT_FLG_64BIT | GDT_FLG_GRAN4K);
-    gdt_set_entry(GDT_KERNEL_DATA,
-        GDT_BASE, GDT_LIMIT,
-        MAKE_ACCESS(1, 0, GDT_ACC_SYSTEM, 0, 0, GDT_ACC_RW),
-        GDT_FLG_64BIT | GDT_FLG_GRAN4K);
-    gdt_set_entry(GDT_USER_DATA,
-        GDT_BASE, GDT_LIMIT,
-        MAKE_ACCESS(1, 3, GDT_ACC_SYSTEM, 0, 0, GDT_ACC_RW),
-        GDT_FLG_64BIT | GDT_FLG_GRAN4K);
-    gdt_set_entry(GDT_USER_CODE,
-        GDT_BASE, GDT_LIMIT,
-        MAKE_ACCESS(1, 3, GDT_ACC_SYSTEM, GDT_ACC_EXEC, 0, GDT_ACC_RW),
-        GDT_FLG_64BIT | GDT_FLG_GRAN4K);
-
-    tss.rsp[0] = (uint64_t)(tss_stack + sizeof(tss_stack));
-    tss.iopb_offset = sizeof(tss_t);
-    tss_desc_init(&tss);
-
-    gdt_load();
-    tss_load();
+void gdt_set_kernel_stack(uint64_t rsp0) {
+    g_tss.rsp0 = rsp0;
 }

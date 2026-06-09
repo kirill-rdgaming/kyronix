@@ -1,6 +1,8 @@
 .claude
 *.o
+*.d
 *.elf
-*.iso
-build/
-build-debug/
+*.cpio
+kyronix.iso
+user/init
+user/hello

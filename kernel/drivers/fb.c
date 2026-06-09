@@ -114,7 +114,6 @@ void fb_init(struct limine_framebuffer *fb) {
     g_fb.row    = 0;
     g_fb.fg     = COLOR_WHITE;
     g_fb.bg     = COLOR_BG;
-    // zzzzzzzzzz
 }
 
 void fb_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
@@ -141,8 +140,6 @@ void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color
             fb_put_pixel(x + dx, y + dy, color);
 }
 
-// for text
-
 void fb_set_color(uint32_t fg, uint32_t bg) {
     g_fb.fg = fg;
     g_fb.bg = bg;
@@ -157,7 +154,6 @@ static void scroll_up(void) {
 
     memmove(dst, src, copy_bytes);
 
-    // Clear the last row
     uint32_t last_y = (uint32_t)((rows_total - 1) * FONT_H);
     fb_fill_rect(0, last_y, (uint32_t)g_fb.width, FONT_H, g_fb.bg);
 }
@@ -170,8 +166,7 @@ static void draw_char(uint32_t col, uint32_t row, char c) {
     if ((unsigned char)c >= 0x20 && (unsigned char)c <= 0x7E)
         glyph = font8x16[(unsigned char)c - 0x20];
     else
-        glyph = font8x16[0]; // space for unknowns now
-    // im lazzzzzzyyyyyy
+        glyph = font8x16[0];
 
     for (int row_i = 0; row_i < FONT_H; row_i++) {
         uint8_t bits = glyph[row_i];

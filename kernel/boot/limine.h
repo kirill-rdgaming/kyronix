@@ -106,6 +106,37 @@ struct limine_hhdm_request {
     struct limine_hhdm_response *response;
 };
 
+#define LIMINE_MODULE_REQUEST \
+    { LIMINE_COMMON_MAGIC, 0x3e7e279702be32af, 0xca1c4f3bd1280cee }
+
+struct limine_file {
+    uint64_t  revision;
+    void     *address;
+    uint64_t  size;
+    char     *path;
+    char     *cmdline;
+    uint32_t  media_type;
+    uint32_t  unused;
+    uint32_t  tftp_ip;
+    uint32_t  tftp_port;
+    uint32_t  partition_index;
+    uint32_t  mbr_disk_id;
+};
+
+struct limine_module_response {
+    uint64_t            revision;
+    uint64_t            module_count;
+    struct limine_file **modules;
+};
+
+struct limine_module_request {
+    uint64_t                      id[4];
+    uint64_t                      revision;
+    struct limine_module_response *response;
+    uint64_t                      internal_module_count;
+    void                        **internal_modules;
+};
+
 // kernel address
 
 #define LIMINE_KERNEL_ADDRESS_REQUEST \

@@ -1,17 +1,9 @@
+# KyronixOS build system
+
 TARGET     := kernel.elf
 ISO        := kyronix.iso
 LIMINE_DIR := limine-binary
-SRC_DIR    := kernel
-
-DEBUG ?= 0
-
-ifeq ($(DEBUG), 0)
-OPT       := -O2
-BUILD_DIR := build
-else
-OPT       := -O0 -g
-BUILD_DIR := build-debug
-endif
+BUILD_DIR  := build
 
 ifneq (, $(shell which x86_64-elf-gcc 2>/dev/null))
     CC := x86_64-elf-gcc
@@ -23,7 +15,7 @@ endif
 
 CFLAGS := \
     -std=c11           \
-    $(OPT)             \
+    -O2                \
     -Wall -Wextra      \
     -Wno-unused-parameter \
     -ffreestanding     \
@@ -36,7 +28,6 @@ CFLAGS := \
     -mno-sse2          \
     -mno-red-zone      \
     -mcmodel=kernel    \
-    -MMD -MP           \
     -Ikernel           \
     -Ikernel/boot
 
@@ -46,41 +37,82 @@ LDFLAGS := \
     -static            \
     -z max-page-size=0x1000
 
-SRCS    := $(shell find $(SRC_DIR) -name '*.c')
-ASM_SRCS:= $(shell find $(SRC_DIR) -name '*.S')
-OBJS    := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
-OBJS    += $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(ASM_SRCS))
-DEPS    := $(filter %.d,$(OBJS:.o=.d))
+SRCS := \
+    kernel/kernel.c                    \
+    kernel/arch/x86_64/gdt.c          \
+    kernel/arch/x86_64/idt.c          \
+    kernel/mm/pmm.c                   \
+    kernel/mm/vmm.c                   \
+    kernel/mm/heap.c                  \
+    kernel/arch/x86_64/syscall_setup.c \
+    kernel/syscall/syscall.c          \
+    kernel/exec/elf.c                  \
+    kernel/exec/process.c              \
+    kernel/proc/proc.c                 \
+    kernel/proc/signal.c               \
+    kernel/fs/vfs.c                    \
+    kernel/fs/pipe.c                   \
+    kernel/fs/cpio.c                   \
+    kernel/drivers/serial.c           \
+    kernel/drivers/fb.c               \
+    kernel/lib/string.c               \
+    kernel/lib/printf.c
 
-QEMU_FLAGS := -M q35 -m 2G -cdrom $(ISO) -boot d -serial stdio -no-reboot -no-shutdown
+ASM_SRCS := \
+    kernel/arch/x86_64/idt_stubs.S    \
+    kernel/arch/x86_64/syscall_entry.S \
+    kernel/proc/sched.S
 
-.PHONY: all iso run run-serial run-uefi debug gdb clean
+OBJS := $(SRCS:%.c=$(BUILD_DIR)/%.o) $(ASM_SRCS:%.S=$(BUILD_DIR)/%.o)
+DEPS := $(OBJS:.o=.d)
 
-all: $(BUILD_DIR)/$(TARGET)
+INIT_BIN := build/bin/kyronix-init
+KSHELL   := build/bin/ksh
+INITRD   := initrd.cpio
 
-$(BUILD_DIR)/$(TARGET): $(OBJS)
+.PHONY: all iso run run-serial run-uefi clean
+
+all: $(TARGET) $(INIT_BIN) $(KSHELL)
+
+$(INIT_BIN):
+	$(MAKE) -C user/init_
+
+$(KSHELL):
+	$(MAKE) -C user/shell
+
+$(INITRD): $(INIT_BIN) $(KSHELL)
+	@rm -rf initrd_staging
+	@mkdir -p initrd_staging/etc initrd_staging/bin
+	@cp $(INIT_BIN) initrd_staging/init
+	@cp $(KSHELL) initrd_staging/bin/ksh
+	@printf "KyronixOS 0.0.1\n" > initrd_staging/etc/kyronix-release
+	@cd initrd_staging && find . | sort | cpio -o --format=newc > ../$(INITRD) 2>/dev/null
+	@rm -rf initrd_staging
+	@echo "  Built: $(INITRD)"
+
+$(TARGET): $(OBJS)
 	$(LD) $(LDFLAGS) -o $@ $^
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
-	mkdir -p $(@D)
-	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD_DIR)/%.o: %.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.S
-	mkdir -p $(@D)
-	$(CC) -std=c11 $(OPT) -ffreestanding -fno-pic -fno-pie -m64 -march=x86-64 \
-	      -Ikernel -Ikernel/boot -c $< -o $@
+$(BUILD_DIR)/%.o: %.S
+	@mkdir -p $(@D)
+	$(CC) -m64 -march=x86-64 -c $< -o $@
 
 -include $(DEPS)
 
 $(LIMINE_DIR)/limine: $(LIMINE_DIR)/limine.c
 	$(MAKE) -C $(LIMINE_DIR)
 
-iso: $(BUILD_DIR)/$(TARGET) $(LIMINE_DIR)/limine
+iso: $(TARGET) $(INITRD) $(LIMINE_DIR)/limine
 	rm -rf iso_root
 	mkdir -p iso_root/boot/limine
 	mkdir -p iso_root/EFI/BOOT
 
-	cp $(BUILD_DIR)/$(TARGET) iso_root/boot/kernel.elf
+	cp $(TARGET)              iso_root/boot/kernel.elf
+	cp $(INITRD)              iso_root/boot/initrd.cpio
 	cp limine.conf            iso_root/boot/limine/limine.conf
 	cp $(LIMINE_DIR)/limine-bios.sys    iso_root/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios-cd.bin iso_root/boot/limine/
@@ -103,31 +135,47 @@ iso: $(BUILD_DIR)/$(TARGET) $(LIMINE_DIR)/limine
 	@echo ""
 	@echo "  Built: $(ISO)"
 
-debug:
-	$(MAKE) DEBUG=1 all
-
-gdb:
-	$(MAKE) DEBUG=1 iso && \
-	qemu-system-x86_64 $(QEMU_FLAGS) -display none -s -S &
-	sleep 0.5
-	gdb build-debug/kernel.elf -ex "target remote :1234"
-
 run: iso
-	qemu-system-x86_64 $(QEMU_FLAGS) \
-	    -vga qxl -global qxl-vga.vgamem_mb=1024
+	qemu-system-x86_64              \
+	    -M q35                      \
+	    -m 2G                       \
+	    -cdrom $(ISO)               \
+	    -boot d                     \
+	    -serial stdio               \
+	    -vga qxl                    \
+	    -global qxl-vga.vgamem_mb=1024 \
+	    -no-reboot                  \
+	    -no-shutdown
 
 run-serial: iso
-	qemu-system-x86_64 $(QEMU_FLAGS) \
-	    -display none
+	qemu-system-x86_64              \
+	    -M q35                      \
+	    -m 2G                       \
+	    -cdrom $(ISO)               \
+	    -boot d                     \
+	    -display none               \
+	    -serial stdio               \
+	    -no-reboot                  \
+	    -no-shutdown
 
 OVMF ?= /usr/share/edk2/x64/OVMF.fd
 
 run-uefi: iso
-	qemu-system-x86_64 $(QEMU_FLAGS) \
-	    -bios $(OVMF) \
-	    -vga qxl -global qxl-vga.vgamem_mb=1024
+	qemu-system-x86_64              \
+	    -M q35                      \
+	    -m 2G                       \
+	    -cdrom $(ISO)               \
+	    -bios $(OVMF)               \
+	    -boot d                     \
+	    -serial stdio               \
+	    -vga qxl                    \
+	    -global qxl-vga.vgamem_mb=1024 \
+	    -no-reboot                  \
+	    -no-shutdown
 
 clean:
-	rm -rf $(BUILD_DIR) $(ISO)
-	rm -rf iso_root
-	$(MAKE) -C $(LIMINE_DIR) clean
+	rm -f $(TARGET) $(ISO) $(INITRD)
+	rm -rf $(BUILD_DIR) iso_root initrd_staging
+	$(MAKE) -C user/init_ clean
+	$(MAKE) -C user/shell clean
+	$(MAKE) -C $(LIMINE_DIR) clean 2>/dev/null; true
