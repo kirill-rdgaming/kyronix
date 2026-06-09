@@ -3,3 +3,4 @@
 *.elf
 *.iso
 build/
+build-debug/

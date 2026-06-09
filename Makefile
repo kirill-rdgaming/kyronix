@@ -1,10 +1,17 @@
-# KyronixOS build system
-
 TARGET     := kernel.elf
 ISO        := kyronix.iso
 LIMINE_DIR := limine-binary
-BUILD_DIR  := build
 SRC_DIR    := kernel
+
+DEBUG ?= 0
+
+ifeq ($(DEBUG), 0)
+OPT       := -O2
+BUILD_DIR := build
+else
+OPT       := -O0 -g
+BUILD_DIR := build-debug
+endif
 
 ifneq (, $(shell which x86_64-elf-gcc 2>/dev/null))
     CC := x86_64-elf-gcc
@@ -16,7 +23,7 @@ endif
 
 CFLAGS := \
     -std=c11           \
-    -O2                \
+    $(OPT)             \
     -Wall -Wextra      \
     -Wno-unused-parameter \
     -ffreestanding     \
@@ -43,7 +50,9 @@ SRCS := $(shell find $(SRC_DIR) -name '*.c')
 OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d)
 
-.PHONY: all iso run clean
+QEMU_FLAGS := -M q35 -m 2G -cdrom $(ISO) -boot d -serial stdio -no-reboot -no-shutdown
+
+.PHONY: all iso run run-serial run-uefi debug gdb clean
 
 all: $(BUILD_DIR)/$(TARGET)
 
@@ -87,43 +96,29 @@ iso: $(BUILD_DIR)/$(TARGET) $(LIMINE_DIR)/limine
 	@echo ""
 	@echo "  Built: $(ISO)"
 
+debug:
+	$(MAKE) DEBUG=1 all
+
+gdb:
+	$(MAKE) DEBUG=1 iso && \
+	qemu-system-x86_64 $(QEMU_FLAGS) -display none -s -S &
+	sleep 0.5
+	gdb build-debug/kernel.elf -ex "target remote :1234"
+
 run: iso
-	qemu-system-x86_64              \
-	    -M q35                      \
-	    -m 2G                       \
-	    -cdrom $(ISO)               \
-	    -boot d                     \
-	    -serial stdio               \
-	    -vga qxl                    \
-	    -global qxl-vga.vgamem_mb=1024 \
-	    -no-reboot                  \
-	    -no-shutdown
+	qemu-system-x86_64 $(QEMU_FLAGS) \
+	    -vga qxl -global qxl-vga.vgamem_mb=1024
 
 run-serial: iso
-	qemu-system-x86_64              \
-	    -M q35                      \
-	    -m 2G                       \
-	    -cdrom $(ISO)               \
-	    -boot d                     \
-	    -display none               \
-	    -serial stdio               \
-	    -no-reboot                  \
-	    -no-shutdown
+	qemu-system-x86_64 $(QEMU_FLAGS) \
+	    -display none
 
 OVMF ?= /usr/share/edk2/x64/OVMF.fd
 
 run-uefi: iso
-	qemu-system-x86_64              \
-	    -M q35                      \
-	    -m 2G                       \
-	    -cdrom $(ISO)               \
-	    -bios $(OVMF)               \
-	    -boot d                     \
-	    -serial stdio               \
-	    -vga qxl                    \
-	    -global qxl-vga.vgamem_mb=1024 \
-	    -no-reboot                  \
-	    -no-shutdown
+	qemu-system-x86_64 $(QEMU_FLAGS) \
+	    -bios $(OVMF) \
+	    -vga qxl -global qxl-vga.vgamem_mb=1024
 
 clean:
 	rm -rf $(BUILD_DIR) $(ISO)
