@@ -1,2 +1,0 @@
-# kyronix
-main repo
