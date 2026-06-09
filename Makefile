@@ -3,6 +3,8 @@
 TARGET     := kernel.elf
 ISO        := kyronix.iso
 LIMINE_DIR := limine-binary
+BUILD_DIR  := build
+SRC_DIR    := kernel
 
 ifneq (, $(shell which x86_64-elf-gcc 2>/dev/null))
     CC := x86_64-elf-gcc
@@ -27,6 +29,7 @@ CFLAGS := \
     -mno-sse2          \
     -mno-red-zone      \
     -mcmodel=kernel    \
+    -MMD -MP           \
     -Ikernel           \
     -Ikernel/boot
 
@@ -36,34 +39,32 @@ LDFLAGS := \
     -static            \
     -z max-page-size=0x1000
 
-SRCS := \
-    kernel/kernel.c         \
-    kernel/drivers/serial.c \
-    kernel/drivers/fb.c     \
-    kernel/lib/string.c     \
-    kernel/lib/printf.c
-
-OBJS := $(SRCS:.c=.o)
+SRCS := $(shell find $(SRC_DIR) -name '*.c')
+OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
+DEPS := $(OBJS:.o=.d)
 
 .PHONY: all iso run clean
 
-all: $(TARGET)
+all: $(BUILD_DIR)/$(TARGET)
 
-$(TARGET): $(OBJS)
+$(BUILD_DIR)/$(TARGET): $(OBJS)
 	$(LD) $(LDFLAGS) -o $@ $^
 
-%.o: %.c
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+	mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+-include $(DEPS)
 
 $(LIMINE_DIR)/limine: $(LIMINE_DIR)/limine.c
 	$(MAKE) -C $(LIMINE_DIR)
 
-iso: $(TARGET) $(LIMINE_DIR)/limine
+iso: $(BUILD_DIR)/$(TARGET) $(LIMINE_DIR)/limine
 	rm -rf iso_root
 	mkdir -p iso_root/boot/limine
 	mkdir -p iso_root/EFI/BOOT
 
-	cp $(TARGET)              iso_root/boot/kernel.elf
+	cp $(BUILD_DIR)/$(TARGET) iso_root/boot/kernel.elf
 	cp limine.conf            iso_root/boot/limine/limine.conf
 	cp $(LIMINE_DIR)/limine-bios.sys    iso_root/boot/limine/
 	cp $(LIMINE_DIR)/limine-bios-cd.bin iso_root/boot/limine/
@@ -125,6 +126,6 @@ run-uefi: iso
 	    -no-shutdown
 
 clean:
-	rm -f $(OBJS) $(TARGET) $(ISO)
+	rm -rf $(BUILD_DIR) $(ISO)
 	rm -rf iso_root
 	$(MAKE) -C $(LIMINE_DIR) clean
