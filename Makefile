@@ -72,14 +72,19 @@ DEPS := $(OBJS:.o=.d)
 SRC_DIR  := .
 INITRD   := initrd.cpio
 
-.PHONY: all iso run run-serial run-uefi clean
+.PHONY: all iso run run-serial run-uefi clean user-build
 
 all: $(TARGET) $(INITRD)
 
-$(INITRD):
+user-build:
 	$(MAKE) -C user
-	@cd rootfs && find . -not -name '.gitignore' | sort | cpio -o --format=newc > ../$(INITRD) 2>/dev/null
-	@echo "  Built: $(INITRD)"
+
+INITRD_DEPS := $(shell find rootfs -not -name '.gitignore' -type f | sort) \
+               $(wildcard build/bin/*)
+
+$(INITRD): $(INITRD_DEPS) | user-build
+	@cd rootfs && find . -not -name '.gitignore' | sort | cpio -o --format=newc > ../$@ 2>/dev/null
+	@echo "  Built: $@"
 
 $(TARGET): $(OBJS)
 	$(LD) $(LDFLAGS) -o $@ $^

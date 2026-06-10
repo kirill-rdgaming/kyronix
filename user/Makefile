@@ -10,12 +10,12 @@ all:
 	$(MAKE) -C sbase -f Makefile.kyronix
 	$(MAKE) -C fetch
 	mkdir -p $(ROOTFS)/bin
-	cp ../build/bin/kyronix-init $(ROOTFS)/bin/init
-	cp ../build/bin/ksh $(ROOTFS)/bin/
+	cp -u ../build/bin/kyronix-init $(ROOTFS)/bin/init
+	cp -u ../build/bin/ksh $(ROOTFS)/bin/
 	for f in ../build/bin/*; do \
 	    case "$$(basename $$f)" in \
 	        kyronix-init|ksh|sbase-tools.stamp) ;; \
-	        *) cp $$f $(ROOTFS)/bin/ ;; \
+	        *) cp -u $$f $(ROOTFS)/bin/ ;; \
 	    esac \
 	done
 
