@@ -8,8 +8,7 @@ all:
 	$(MAKE) -C sbase -f Makefile.kyronix
 	$(MAKE) -C fetch
 	mkdir -p $(ROOTFS)/bin
-	cp ../build/bin/kyronix-init $(ROOTFS)/init
-	cp ../build/bin/kyronix-init $(ROOTFS)/bin/
+	cp ../build/bin/kyronix-init $(ROOTFS)/bin/init
 	cp ../build/bin/ksh $(ROOTFS)/bin/
 	for f in ../build/bin/*; do \
 	    case "$$(basename $$f)" in \
@@ -23,4 +22,4 @@ clean:
 	$(MAKE) -C shell clean
 	-$(MAKE) -C sbase -f Makefile.kyronix clean 2>/dev/null
 	$(MAKE) -C fetch clean
-	rm -rf $(ROOTFS)/bin $(ROOTFS)/init
+	rm -rf $(ROOTFS)/bin $(ROOTFS)/bin/init
