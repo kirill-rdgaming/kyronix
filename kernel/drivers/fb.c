@@ -475,6 +475,11 @@ void fb_putchar(char c)
         }
         return;
     case ESC_CSI:
+        if (c == '\033')
+        {
+            g_esc = ESC_ESC;
+            return;
+        }
         if (c >= '0' && c <= '9')
         {
             g_esc_params[g_esc_np] = g_esc_params[g_esc_np] * 10 + (c - '0');
@@ -504,6 +509,44 @@ void fb_putchar(char c)
             int n = g_esc_params[0] > 0 ? g_esc_params[0] : 1;
             while (n-- > 0 && g_fb.col > 0)
                 g_fb.col--;
+            return;
+        }
+        if (c == 'H')
+        {
+            uint32_t row = (uint32_t) (g_esc_params[0] > 0 ? g_esc_params[0] - 1 : 0);
+            uint32_t col = (uint32_t) (g_esc_params[1] > 0 ? g_esc_params[1] - 1 : 0);
+            uint32_t cols = (uint32_t) (g_fb.width / FONT_W);
+            uint32_t rows = (uint32_t) (g_fb.height / FONT_H);
+            if (col < cols)
+                g_fb.col = col;
+            if (row < rows)
+                g_fb.row = row;
+            return;
+        }
+        if (c == 'J')
+        {
+            switch (g_esc_params[0])
+            {
+            case 0:
+                for (uint32_t c2 = g_fb.col; c2 < g_fb.width / FONT_W; c2++)
+                    draw_char(c2, g_fb.row, ' ');
+                for (uint32_t r = g_fb.row + 1; r < g_fb.height / FONT_H; r++)
+                    for (uint32_t c2 = 0; c2 < g_fb.width / FONT_W; c2++)
+                        draw_char(c2, r, ' ');
+                break;
+            case 1:
+                for (uint32_t r = 0; r < g_fb.row; r++)
+                    for (uint32_t c2 = 0; c2 < g_fb.width / FONT_W; c2++)
+                        draw_char(c2, r, ' ');
+                for (uint32_t c2 = 0; c2 <= g_fb.col; c2++)
+                    draw_char(c2, g_fb.row, ' ');
+                break;
+            case 2:
+            case 3:
+                fb_set_color(COLOR_WHITE, COLOR_BG);
+                fb_clear(g_fb.bg);
+                break;
+            }
             return;
         }
         return;

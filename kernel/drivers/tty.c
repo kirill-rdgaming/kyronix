@@ -64,7 +64,7 @@ static void tty_process_input(void)
         if ((tty_lflag & ISIG) && (c == 0x03 || c == 0x1C))
         {
             tty_putchar('^');
-            tty_putchar((char)('@' + c));
+            tty_putchar((char) ('@' + c));
             tty_putchar('\n');
             tty_send_sig_pgid((c == 0x03) ? SIGINT : SIGQUIT);
         }
@@ -85,7 +85,7 @@ static void tty_process_input(void)
             if ((tty_lflag & ISIG) && (c == 0x03 || c == 0x1C))
             {
                 tty_putchar('^');
-                tty_putchar((char)('@' + c));
+                tty_putchar((char) ('@' + c));
                 tty_putchar('\n');
                 tty_send_sig_pgid((c == 0x03) ? SIGINT : SIGQUIT);
             }
