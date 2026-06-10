@@ -659,42 +659,134 @@ static int read_line(char* line, size_t size)
     }
 }
 
-static int spawn_external(char** argv)
+static int exec_pipeline(char** argv, int argc)
 {
+    int pipe_at[32];
+    int n_pipes = 0;
+    for (int i = 0; i < argc; i++)
+    {
+        if (strcmp(argv[i], "|") == 0)
+            pipe_at[n_pipes++] = i;
+    }
+    int n_stages = n_pipes + 1;
+
+    int st_start[32], st_end[32];
+    char* outfile[32];
+    int append[32];
+    int prev = 0;
+    for (int s = 0; s < n_stages; s++)
+    {
+        int end = (s < n_pipes) ? pipe_at[s] : argc;
+        st_start[s] = prev;
+        st_end[s] = end;
+        outfile[s] = NULL;
+        append[s] = 0;
+        for (int i = prev; i < end; i++)
+        {
+            if (strcmp(argv[i], ">") == 0 && i + 1 < end)
+            {
+                outfile[s] = argv[i + 1];
+                append[s] = 0;
+                st_end[s] = i;
+                break;
+            }
+            if (strcmp(argv[i], ">>") == 0 && i + 1 < end)
+            {
+                outfile[s] = argv[i + 1];
+                append[s] = 1;
+                st_end[s] = i;
+                break;
+            }
+        }
+        argv[st_end[s]] = NULL;
+        prev = end + 1;
+    }
+
     sigset_t sigmask, oldmask;
     sigemptyset(&sigmask);
     sigaddset(&sigmask, SIGINT);
     sigprocmask(SIG_BLOCK, &sigmask, &oldmask);
 
-    pid_t pid = fork();
-    if (pid == -1)
+    int prev_read = -1;
+    pid_t children[32];
+    int n_children = 0;
+
+    for (int s = 0; s < n_stages; s++)
     {
-        perror("fork");
-        sigprocmask(SIG_SETMASK, &oldmask, NULL);
-        return 1;
-    }
-    if (pid == 0)
-    {
-        setpgid(0, 0);
-        tcsetpgrp(0, getpgrp());
-        signal(SIGINT, SIG_DFL);
-        sigprocmask(SIG_SETMASK, &oldmask, NULL);
-        execvp(argv[0], argv);
-        perror(argv[0]);
-        _exit(127);
+        int pipe_w[2] = {-1, -1};
+        if (s < n_stages - 1 && pipe(pipe_w) < 0)
+        {
+            perror("pipe");
+            sigprocmask(SIG_SETMASK, &oldmask, NULL);
+            return 1;
+        }
+
+        pid_t pid = fork();
+        if (pid == -1)
+        {
+            perror("fork");
+            sigprocmask(SIG_SETMASK, &oldmask, NULL);
+            return 1;
+        }
+        if (pid == 0)
+        {
+            signal(SIGINT, SIG_DFL);
+            sigprocmask(SIG_SETMASK, &oldmask, NULL);
+
+            if (prev_read >= 0)
+            {
+                dup2(prev_read, STDIN_FILENO);
+                close(prev_read);
+            }
+            if (pipe_w[1] >= 0)
+            {
+                close(pipe_w[0]);
+                dup2(pipe_w[1], STDOUT_FILENO);
+                close(pipe_w[1]);
+            }
+            if (outfile[s] != NULL)
+            {
+                int flags = O_WRONLY | O_CREAT | (append[s] ? O_APPEND : O_TRUNC);
+                int fd = open(outfile[s], flags, 0666);
+                if (fd < 0)
+                {
+                    perror(outfile[s]);
+                    _exit(1);
+                }
+                dup2(fd, STDOUT_FILENO);
+                close(fd);
+            }
+
+            setpgid(0, 0);
+            tcsetpgrp(0, getpgrp());
+            execvp(argv[st_start[s]], argv + st_start[s]);
+            perror(argv[st_start[s]]);
+            _exit(127);
+        }
+
+        children[n_children++] = pid;
+
+        if (prev_read >= 0)
+            close(prev_read);
+        if (pipe_w[1] >= 0)
+            close(pipe_w[1]);
+        prev_read = pipe_w[0];
     }
 
-    tcsetpgrp(0, pid);
+    if (prev_read >= 0)
+        close(prev_read);
+
+    tcsetpgrp(0, children[0]);
     sigprocmask(SIG_SETMASK, &oldmask, NULL);
 
     int status = 0;
-    if (waitpid(pid, &status, 0) == -1)
+    for (int i = 0; i < n_children; i++)
     {
-        perror("waitpid");
-        tcsetpgrp(0, getpgrp());
-        return 1;
+        if (waitpid(children[i], &status, 0) == -1)
+            perror("waitpid");
     }
     tcsetpgrp(0, getpgrp());
+
     return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 
@@ -847,6 +939,14 @@ static int run_command(int argc, char** argv)
 
     if (strcmp(argv[0], "cd") == 0)
     {
+        for (int i = 1; i < argc; i++)
+        {
+            if (strcmp(argv[i], "|") == 0 || strcmp(argv[i], ">") == 0 || strcmp(argv[i], ">>") == 0)
+            {
+                fputs("cd: pipes/redirections not supported\n", stderr);
+                return 1;
+            }
+        }
         const char* dir = argv[1] != NULL ? argv[1] : getenv("HOME");
         if (dir == NULL)
         {
@@ -869,7 +969,7 @@ static int run_command(int argc, char** argv)
         return 0;
     }
 
-    return spawn_external(argv);
+    return exec_pipeline(argv, argc);
 }
 
 int main(void)
@@ -905,7 +1005,11 @@ int main(void)
             break;
         }
 
-        int argc = split_line(line, argv);
+        char line_copy[MAX_LINE];
+        strncpy(line_copy, line, sizeof(line_copy) - 1);
+        line_copy[sizeof(line_copy) - 1] = '\0';
+
+        int argc = split_line(line_copy, argv);
         if (argc > 0)
         {
             history_add(line);
