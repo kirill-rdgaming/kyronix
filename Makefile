@@ -69,6 +69,7 @@ ASM_SRCS := \
 OBJS := $(SRCS:%.c=$(BUILD_DIR)/%.o) $(ASM_SRCS:%.S=$(BUILD_DIR)/%.o)
 DEPS := $(OBJS:.o=.d)
 
+SRC_DIR  := .
 INITRD   := initrd.cpio
 
 .PHONY: all iso run run-serial run-uefi clean
@@ -170,7 +171,7 @@ fmt:
 
 fmt-check:
 	@echo "Checking code style..."
-	@find $(SRC_DIR) -type f \( -name "*.c" -o -name "*.h" \) -exec clang-format --dry-
+	@find $(SRC_DIR) -type f \( -name "*.c" -o -name "*.h" \) -exec clang-format --dry-run -Werror {} +
 
 clean:
 	rm -f $(TARGET) $(ISO) $(INITRD)

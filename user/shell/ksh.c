@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200809L
+#define _POSIX_C_SOURCE 200809
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -67,10 +67,9 @@ static void build_prompt(char* buf, size_t size)
     }
 
     const char* prompt_char = (cached_uid == 0) ? "#" : "$";
-    const char* prompt_color = (cached_uid == 0) ? "\033[1;31m" : "";
 
-    snprintf(buf, size, "\033[32m%s\033[0m@\033[36m%s\033[0m:\033[1;34m%s\033[0m %s%s\033[0m ",
-             cached_username, cached_hostname, base, prompt_color, prompt_char);
+    snprintf(buf, size, "\033[32m%s\033[0m@\033[32m%s\033[0m:\033[34m%s\033[0m %s ",
+             cached_username, cached_hostname, base, prompt_char);
 }
 
 static struct termios saved_termios;
