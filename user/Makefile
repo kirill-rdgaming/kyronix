@@ -6,6 +6,7 @@ all:
 	$(MAKE) -C init_
 	$(MAKE) -C shell
 	$(MAKE) -C login
+	$(MAKE) -C vi
 	$(MAKE) -C sbase -f Makefile.kyronix
 	$(MAKE) -C fetch
 	mkdir -p $(ROOTFS)/bin
@@ -22,6 +23,7 @@ clean:
 	$(MAKE) -C init_ clean
 	$(MAKE) -C shell clean
 	$(MAKE) -C login clean
+	$(MAKE) -C vi clean
 	-$(MAKE) -C sbase -f Makefile.kyronix clean 2>/dev/null
 	$(MAKE) -C fetch clean
 	rm -rf $(ROOTFS)/bin
