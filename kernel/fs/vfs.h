@@ -137,6 +137,8 @@ int fd_fcntl(int fd, int cmd, uint64_t arg);
 int fd_dup(int oldfd);
 int fd_dup2(int oldfd, int newfd);
 bool fd_valid(int fd);
+bool fd_pollin(int fd);
+bool fd_pollout(int fd);
 int fd_pipe(int pipefd[2]);
 
 vfs_node_t* vfs_lookup(const char* path);

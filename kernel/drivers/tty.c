@@ -6,7 +6,6 @@
 #include "kbd.h"
 #include "serial.h"
 
-#define ISIG 0000001
 #define EINTR 4
 #define TTY_BUF_SIZE 256
 
@@ -14,7 +13,22 @@ static uint8_t tty_buf[TTY_BUF_SIZE];
 static volatile int tty_buf_head;
 static volatile int tty_buf_tail;
 static int tty_fg_pgid = 1;
-static uint32_t tty_lflag = 0x8A3B;
+
+static struct termios_s tty_termios = {
+    .c_iflag = ICRNL | IXON,
+    .c_oflag = OPOST | ONLCR,
+    .c_cflag = CS8 | CREAD,
+    .c_lflag = ISIG | ICANON,
+    .c_cc = {
+        [VINTR] = 0x03,  /* Ctrl-C */
+        [VQUIT] = 0x1C,  /* Ctrl-\ */
+        [VERASE] = 0x7F, /* DEL */
+        [VKILL] = 0x15,  /* Ctrl-U */
+        [VEOF] = 0x04,   /* Ctrl-D */
+        [VMIN] = 1,
+        [VTIME] = 0,
+    },
+};
 
 static bool tty_buf_empty(void)
 {
@@ -56,47 +70,83 @@ static void tty_send_sig_pgid(int sig)
     }
 }
 
-static void tty_process_input(void)
+static void tty_input_char(uint8_t c)
 {
-    if (serial_data_ready(COM1))
+    if (tty_termios.c_lflag & ISIG)
     {
-        uint8_t c = serial_getchar(COM1);
-        if ((tty_lflag & ISIG) && (c == 0x03 || c == 0x1C))
+        int sig = 0;
+        if (c == tty_termios.c_cc[VINTR])
+            sig = SIGINT;
+        else if (c == tty_termios.c_cc[VQUIT])
+            sig = SIGQUIT;
+
+        if (sig)
         {
             tty_putchar('^');
             tty_putchar((char) ('@' + c));
             tty_putchar('\n');
-            tty_send_sig_pgid((c == 0x03) ? SIGINT : SIGQUIT);
+            tty_send_sig_pgid(sig);
+            return;
+        }
+    }
+
+    /* IGNCR: discard \r */
+    if ((tty_termios.c_iflag & IGNCR) && c == '\r')
+        return;
+
+    /* INLCR: map \n -> \r */
+    if ((tty_termios.c_iflag & INLCR) && c == '\n')
+        c = '\r';
+
+    /* ICRNL: map \r -> \n (default) */
+    if ((tty_termios.c_iflag & ICRNL) && c == '\r')
+        c = '\n';
+
+    /* ISTRIP: mask to 7 bits */
+    if (tty_termios.c_iflag & ISTRIP)
+        c &= 0x7F;
+
+    /* ECHO */
+    if (tty_termios.c_lflag & ECHO)
+    {
+        if (c == '\r')
+        {
+            tty_putchar('\r');
+            tty_putchar('\n');
+        }
+        else if (c == '\n')
+        {
+            tty_putchar('\n');
+        }
+        else if (c == 0x7F || c == '\b')
+        {
+            tty_putchar('\b');
+            tty_putchar(' ');
+            tty_putchar('\b');
         }
         else
         {
-            if (c == '\r')
-                c = '\n';
-            if (!tty_buf_full())
-                tty_enqueue(c);
+            tty_putchar((char) c);
         }
+    }
+
+    if (!tty_buf_full())
+        tty_enqueue(c);
+}
+
+void tty_process_input(void)
+{
+    if (serial_data_ready(COM1))
+    {
+        uint8_t c = serial_getchar(COM1);
+        tty_input_char(c);
     }
 
     if (kbd_data_ready())
     {
         int c = kbd_getchar();
         if (c > 0)
-        {
-            if ((tty_lflag & ISIG) && (c == 0x03 || c == 0x1C))
-            {
-                tty_putchar('^');
-                tty_putchar((char) ('@' + c));
-                tty_putchar('\n');
-                tty_send_sig_pgid((c == 0x03) ? SIGINT : SIGQUIT);
-            }
-            else
-            {
-                if (c == '\r')
-                    c = '\n';
-                if (!tty_buf_full())
-                    tty_enqueue((uint8_t) c);
-            }
-        }
+            tty_input_char((uint8_t) c);
     }
 }
 
@@ -105,7 +155,12 @@ int64_t tty_read(char* buf, uint64_t len)
     if (!len)
         return 0;
 
+    uint64_t vmin = tty_termios.c_cc[VMIN];
+    if (vmin == 0) vmin = 1;
+    if (vmin > len) vmin = len;
+
     uint64_t i = 0;
+
     for (;;)
     {
         if (i >= len)
@@ -116,7 +171,7 @@ int64_t tty_read(char* buf, uint64_t len)
         int c = tty_dequeue();
         if (c >= 0)
         {
-            if (c == 0x04)
+            if ((tty_termios.c_lflag & ICANON) && c == tty_termios.c_cc[VEOF])
             {
                 if (i == 0)
                     return 0;
@@ -126,7 +181,8 @@ int64_t tty_read(char* buf, uint64_t len)
             continue;
         }
 
-        if (i > 0)
+        /* in raw mode (VMIN=1, VTIME=0): return as soon as we have >= VMIN bytes */
+        if (i >= vmin)
             break;
 
         if (g_current_proc && (g_current_proc->pending_sigs & ~g_current_proc->sig_mask))
@@ -135,6 +191,7 @@ int64_t tty_read(char* buf, uint64_t len)
         sched_yield_blocking();
         cpu_relax();
     }
+
     return (int64_t) i;
 }
 
@@ -143,9 +200,19 @@ int64_t tty_write(const char* buf, uint64_t len)
     tty_process_input();
     for (uint64_t i = 0; i < len; i++)
     {
-        serial_putchar(COM1, buf[i]);
+        char c = buf[i];
+
+        /* ONLCR: map \n -> \r\n on output */
+        if ((tty_termios.c_oflag & ONLCR) && c == '\n')
+        {
+            serial_putchar(COM1, '\r');
+            if (g_fb.addr)
+                fb_putchar('\r');
+        }
+
+        serial_putchar(COM1, c);
         if (g_fb.addr)
-            fb_putchar(buf[i]);
+            fb_putchar(c);
     }
     return (int64_t) len;
 }
@@ -157,6 +224,12 @@ bool tty_data_ready(void)
 
 void tty_putchar(char c)
 {
+    if ((tty_termios.c_oflag & ONLCR) && c == '\n')
+    {
+        serial_putchar(COM1, '\r');
+        if (g_fb.addr)
+            fb_putchar('\r');
+    }
     serial_putchar(COM1, c);
     if (g_fb.addr)
         fb_putchar(c);
@@ -179,10 +252,20 @@ void tty_set_fg_pgid(int pgid)
 
 uint32_t tty_get_lflag(void)
 {
-    return tty_lflag;
+    return tty_termios.c_lflag;
 }
 
 void tty_set_lflag(uint32_t lflag)
 {
-    tty_lflag = lflag;
+    tty_termios.c_lflag = lflag;
+}
+
+void tty_get_termios(struct termios_s* t)
+{
+    *t = tty_termios;
+}
+
+void tty_set_termios(const struct termios_s* t)
+{
+    tty_termios = *t;
 }

@@ -807,24 +807,68 @@ struct pollfd_s
     short events;
     short revents;
 };
+
+#define POLLIN 1
+#define POLLOUT 4
+
 static int64_t sys_poll(struct pollfd_s* fds, uint64_t nfds, int timeout)
 {
-    (void) timeout;
-    if (fds)
+    uint64_t iterations = 0;
+    /* very rough: ~1ms per yield+relax */
+    uint64_t max_iterations = (timeout < 0) ? UINT64_MAX
+                            : (uint64_t) (timeout > 0 ? timeout : 0);
+
+    for (;;)
     {
+        uint64_t ready = 0;
         for (uint64_t i = 0; i < nfds; i++)
-            fds[i].revents = fds[i].events;
+        {
+            fds[i].revents = 0;
+
+            if (fds[i].events & POLLIN)
+            {
+                if (fds[i].fd < 0 || fd_pollin(fds[i].fd))
+                    fds[i].revents |= POLLIN;
+            }
+            if (fds[i].events & POLLOUT)
+            {
+                if (fds[i].fd < 0 || fd_pollout(fds[i].fd))
+                    fds[i].revents |= POLLOUT;
+            }
+
+            if (fds[i].revents)
+                ready++;
+        }
+
+        if (ready > 0)
+            return (int64_t) ready;
+
+        if (timeout == 0)
+            return 0;
+
+        iterations++;
+        if (iterations >= max_iterations)
+            return 0;
+
+        if (g_current_proc && (g_current_proc->pending_sigs & ~g_current_proc->sig_mask))
+            return -(int64_t) EINTR;
+
+        sched_yield_blocking();
+        cpu_relax();
     }
-    return (int64_t) nfds;
 }
 
 static int64_t sys_ppoll(struct pollfd_s* fds, uint64_t nfds, void* tmo, const void* sigmask,
                          uint64_t sigsetsize)
 {
-    (void) tmo;
-    (void) sigmask;
-    (void) sigsetsize;
-    return sys_poll(fds, nfds, 0);
+    int timeout = -1;
+    if (tmo)
+    {
+        /* timespec: sec + nsec -> convert to ms */
+        uint64_t* ts = (uint64_t*) tmo;
+        timeout = (int)(ts[0] * 1000 + ts[1] / 1000000);
+    }
+    return sys_poll(fds, nfds, timeout);
 }
 
 static int64_t sys_select(int nfds, void* rfds, void* wfds, void* efds, void* timeout)

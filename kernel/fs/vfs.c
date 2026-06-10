@@ -882,11 +882,6 @@ struct winsize
 {
     uint16_t ws_row, ws_col, ws_xpixel, ws_ypixel;
 };
-struct termios
-{
-    uint32_t c_iflag, c_oflag, c_cflag, c_lflag;
-    uint8_t c_cc[19];
-};
 
 int fd_ioctl(int fd, uint64_t req, uint64_t arg)
 {
@@ -911,23 +906,19 @@ int fd_ioctl(int fd, uint64_t req, uint64_t arg)
     }
     case TCGETS:
     {
-        struct termios* t = (struct termios*) (uintptr_t) arg;
+        struct termios_s* t = (struct termios_s*) (uintptr_t) arg;
         if (!t)
             return -(int) EINVAL;
-        memset(t, 0, sizeof(*t));
-        t->c_iflag = 0x500;
-        t->c_oflag = 0x5;
-        t->c_cflag = 0xBF;
-        t->c_lflag = tty_get_lflag();
+        tty_get_termios(t);
         return 0;
     }
     case TCSETS:
     case TCSETSW:
     case 0x5404: /* TCSETSF */
     {
-        struct termios* t = (struct termios*) (uintptr_t) arg;
+        struct termios_s* t = (struct termios_s*) (uintptr_t) arg;
         if (t)
-            tty_set_lflag(t->c_lflag);
+            tty_set_termios(t);
         return 0;
     }
     case 0x5405: /* TCGETA  */
@@ -952,6 +943,25 @@ int fd_ioctl(int fd, uint64_t req, uint64_t arg)
     default:
         return -(int) EINVAL;
     }
+}
+
+bool fd_pollin(int fd)
+{
+    vfs_file_t* f = fd_get(fd);
+    if (!f) return false;
+    if (f->pipe) return true;
+    if (f->node && f->node->type == VFS_TYPE_CHR) {
+        tty_process_input();
+        return tty_data_ready();
+    }
+    return true;
+}
+
+bool fd_pollout(int fd)
+{
+    vfs_file_t* f = fd_get(fd);
+    if (!f) return false;
+    return true;
 }
 
 #define F_DUPFD 0
