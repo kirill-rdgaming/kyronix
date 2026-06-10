@@ -1,6 +1,5 @@
 #include "vfs.h"
 #include "arch/x86_64/cpu.h"
-#include "drivers/fb.h"
 #include "drivers/serial.h"
 #include "drivers/tty.h"
 #include "lib/log.h"
@@ -16,6 +15,19 @@ char g_cwd[512] = "/";
 
 static vfs_file_t* g_default_fds[VFS_FD_MAX];
 static vfs_file_t** g_fds = g_default_fds;
+
+#define EEXIST    17
+#define ENOENT     2
+#define EBADF      9
+#define ENOMEM    12
+#define ENOTDIR   20
+#define EISDIR    21
+#define EINVAL    22
+#define EMFILE    24
+#define ENOTTY    25
+#define ENOSPC    28
+#define ESPIPE    29
+#define ENOTEMPTY 39
 
 static vfs_node_t* node_alloc(const char* name, uint8_t type, uint32_t mode)
 {
@@ -44,6 +56,34 @@ static vfs_node_t* dir_find(vfs_node_t* dir, const char* name)
     return NULL;
 }
 
+static void dir_remove(vfs_node_t* parent, vfs_node_t* child)
+{
+    if (parent->children == child) {
+        parent->children = child->next;
+    } else {
+        for (vfs_node_t* c = parent->children; c; c = c->next)
+            if (c->next == child) { c->next = child->next; break; }
+    }
+    child->next = NULL;
+    child->parent = NULL;
+}
+
+static void vfs_abs_path(char* out, size_t sz, const char* in)
+{
+    if (!in || in[0] == '/') {
+        strncpy(out, in ? in : "", sz - 1);
+        out[sz - 1] = '\0';
+        return;
+    }
+    const char* cwd = (g_current_proc && g_current_proc->cwd[0]) ? g_current_proc->cwd : g_cwd;
+    size_t cl = strlen(cwd);
+    if (cl >= sz) { out[0] = '\0'; return; }
+    memcpy(out, cwd, cl);
+    if (out[cl - 1] != '/') out[cl++] = '/';
+    strncpy(out + cl, in, sz - cl - 1);
+    out[sz - 1] = '\0';
+}
+
 static vfs_node_t* lookup_internal(const char* path, bool follow_last, int depth)
 {
     if (!path || path[0] == '\0')
@@ -58,11 +98,12 @@ static vfs_node_t* lookup_internal(const char* path, bool follow_last, int depth
     }
     else
     {
-        size_t cwd_len = strlen(g_cwd);
+        const char* cwd = (g_current_proc && g_current_proc->cwd[0]) ? g_current_proc->cwd : g_cwd;
+        size_t cwd_len = strlen(cwd);
         char full[512];
         if (cwd_len + 1 + strlen(path) >= sizeof(full))
             return NULL;
-        memcpy(full, g_cwd, cwd_len);
+        memcpy(full, cwd, cwd_len);
         if (full[cwd_len - 1] != '/')
             full[cwd_len++] = '/';
         strcpy(full + cwd_len, path);
@@ -268,6 +309,71 @@ vfs_node_t* vfs_create_chr(const char* path, int64_t (*rfn)(vfs_node_t*, char*, 
     return n;
 }
 
+int vfs_mkdir(const char* path, uint32_t mode)
+{
+    const char* leaf;
+    vfs_node_t* parent = parent_of(path, &leaf);
+    if (!parent || parent->type != VFS_TYPE_DIR || !leaf || !*leaf) return -(int)ENOENT;
+    if (dir_find(parent, leaf)) return -(int)EEXIST;
+    vfs_node_t* n = node_alloc(leaf, VFS_TYPE_DIR, (mode & 07777) | S_IFDIR);
+    if (!n) return -(int)ENOMEM;
+    dir_insert(parent, n);
+    return 0;
+}
+
+int vfs_unlink(const char* path)
+{
+    vfs_node_t* n = vfs_lookup_nofollow(path);
+    if (!n) return -(int)ENOENT;
+    if (n->type == VFS_TYPE_DIR) return -(int)EISDIR;
+    if (!n->parent) return -(int)EINVAL;
+    dir_remove(n->parent, n);
+    if (n->data) kfree(n->data);
+    if (n->symlink) kfree(n->symlink);
+    kfree(n);
+    return 0;
+}
+
+int vfs_rmdir(const char* path)
+{
+    vfs_node_t* n = vfs_lookup(path);
+    if (!n) return -(int)ENOENT;
+    if (n->type != VFS_TYPE_DIR) return -(int)ENOTDIR;
+    if (n->children) return -(int)ENOTEMPTY;
+    if (!n->parent) return -(int)EINVAL;
+    dir_remove(n->parent, n);
+    kfree(n);
+    return 0;
+}
+
+int vfs_rename(const char* oldpath, const char* newpath)
+{
+    vfs_node_t* n = vfs_lookup_nofollow(oldpath);
+    if (!n || !n->parent) return -(int)ENOENT;
+    const char* new_leaf;
+    vfs_node_t* new_parent = parent_of(newpath, &new_leaf);
+    if (!new_parent || new_parent->type != VFS_TYPE_DIR) return -(int)ENOENT;
+    if (!new_leaf || !*new_leaf) return -(int)EINVAL;
+    vfs_node_t* existing = dir_find(new_parent, new_leaf);
+    if (existing) {
+        if (existing->type == VFS_TYPE_DIR) {
+            if (n->type != VFS_TYPE_DIR) return -(int)EISDIR;
+            if (existing->children) return -(int)ENOTEMPTY;
+        } else if (n->type == VFS_TYPE_DIR) {
+            return -(int)ENOTDIR;
+        }
+        dir_remove(new_parent, existing);
+        if (existing->data) kfree(existing->data);
+        if (existing->symlink) kfree(existing->symlink);
+        kfree(existing);
+    }
+    dir_remove(n->parent, n);
+    strncpy(n->name, new_leaf, sizeof(n->name) - 1);
+    n->name[sizeof(n->name) - 1] = '\0';
+    dir_insert(new_parent, n);
+    return 0;
+}
+
 static int64_t dev_null_read(vfs_node_t* n, char* buf, uint64_t len, uint64_t off)
 {
     (void) n;
@@ -460,18 +566,6 @@ static void fill_stat(vfs_node_t* n, struct linux_stat* st)
     st->st_blocks = (int64_t) ((n->size + 511) / 512);
 }
 
-#define EEXIST 17
-#define ENOENT 2
-#define EBADF 9
-#define ENOMEM 12
-#define ENOTDIR 20
-#define EISDIR 21
-#define EINVAL 22
-#define EMFILE 24
-#define ENOTTY 25
-#define ENOSPC 28
-#define ESPIPE 29
-#define EMFILE 24
 
 int fd_pipe(int pipefd[2])
 {
@@ -537,7 +631,9 @@ int fd_open(const char* path, int flags, int mode)
     {
         if (!(flags & O_CREAT))
             return -(int) ENOENT;
-        n = vfs_create_file(path, mode, NULL, 0);
+        char abspath[512];
+        vfs_abs_path(abspath, sizeof(abspath), path);
+        n = vfs_create_file(abspath[0] ? abspath : path, mode, NULL, 0);
         if (!n)
             return -(int) ENOMEM;
     }
@@ -883,6 +979,11 @@ struct winsize
 {
     uint16_t ws_row, ws_col, ws_xpixel, ws_ypixel;
 };
+struct termios
+{
+    uint32_t c_iflag, c_oflag, c_cflag, c_lflag;
+    uint8_t c_cc[19];
+};
 
 int fd_ioctl(int fd, uint64_t req, uint64_t arg)
 {
@@ -899,27 +1000,31 @@ int fd_ioctl(int fd, uint64_t req, uint64_t arg)
         struct winsize* ws = (struct winsize*) (uintptr_t) arg;
         if (!ws)
             return -(int) EINVAL;
-        ws->ws_col = (uint16_t) (g_fb.width / 8);
-        ws->ws_row = (uint16_t) (g_fb.height / 16);
-        ws->ws_xpixel = (uint16_t) g_fb.width;
-        ws->ws_ypixel = (uint16_t) g_fb.height;
+        ws->ws_row = 25;
+        ws->ws_col = 80;
+        ws->ws_xpixel = 0;
+        ws->ws_ypixel = 0;
         return 0;
     }
     case TCGETS:
     {
-        struct termios_s* t = (struct termios_s*) (uintptr_t) arg;
+        struct termios* t = (struct termios*) (uintptr_t) arg;
         if (!t)
             return -(int) EINVAL;
-        tty_get_termios(t);
+        memset(t, 0, sizeof(*t));
+        t->c_iflag = 0x500;
+        t->c_oflag = 0x5;
+        t->c_cflag = 0xBF;
+        t->c_lflag = tty_get_lflag();
         return 0;
     }
     case TCSETS:
     case TCSETSW:
     case 0x5404: /* TCSETSF */
     {
-        struct termios_s* t = (struct termios_s*) (uintptr_t) arg;
+        struct termios* t = (struct termios*) (uintptr_t) arg;
         if (t)
-            tty_set_termios(t);
+            tty_set_lflag(t->c_lflag);
         return 0;
     }
     case 0x5405: /* TCGETA  */
@@ -944,25 +1049,6 @@ int fd_ioctl(int fd, uint64_t req, uint64_t arg)
     default:
         return -(int) EINVAL;
     }
-}
-
-bool fd_pollin(int fd)
-{
-    vfs_file_t* f = fd_get(fd);
-    if (!f) return false;
-    if (f->pipe) return true;
-    if (f->node && f->node->type == VFS_TYPE_CHR) {
-        tty_process_input();
-        return tty_data_ready();
-    }
-    return true;
-}
-
-bool fd_pollout(int fd)
-{
-    vfs_file_t* f = fd_get(fd);
-    if (!f) return false;
-    return true;
 }
 
 #define F_DUPFD 0

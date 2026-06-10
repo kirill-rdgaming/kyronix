@@ -1,5 +1,6 @@
 #include "syscall.h"
 #include "arch/x86_64/cpu.h"
+#include "arch/x86_64/pit.h"
 #include "arch/x86_64/syscall_setup.h"
 #include "exec/elf.h"
 #include "exec/process.h"
@@ -111,7 +112,12 @@ static int64_t sys_munmap(uint64_t addr, uint64_t len)
     if (!p)
         return -(int64_t) EINVAL;
     for (uint64_t o = 0; o < PAGE_ALIGN_UP(len); o += PAGE_SIZE)
+    {
+        uint64_t phys = vmm_virt_to_phys(p->space, addr + o);
         vmm_unmap(p->space, addr + o);
+        if (phys)
+            pmm_free((void*) phys);
+    }
     return 0;
 }
 
@@ -152,6 +158,7 @@ static int64_t sys_fork(syscall_frame_t* f)
     memcpy(child->sig_actions, parent->sig_actions, sizeof(parent->sig_actions));
     child->pending_sigs = 0;
     child->fs_base = parent->fs_base;
+    memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
 
     uint8_t* ksp = child->kstack + KSTACK_SIZE;
 
@@ -452,10 +459,12 @@ static int64_t sys_getcwd(char* buf, uint64_t size)
 {
     if (!buf || !size)
         return -(int64_t) EINVAL;
-    size_t len = strlen(g_cwd) + 1;
+    proc_t* p = cur();
+    const char* cwd = p ? p->cwd : g_cwd;
+    size_t len = strlen(cwd) + 1;
     if (len > size)
         return -(int64_t) EINVAL;
-    memcpy(buf, g_cwd, len);
+    memcpy(buf, cwd, len);
     return (int64_t) (uintptr_t) buf;
 }
 
@@ -468,7 +477,9 @@ static int64_t sys_chdir(const char* path)
         return -(int64_t) ENOENT;
     if (n->type != VFS_TYPE_DIR)
         return -(int64_t) ENOTDIR;
-    strncpy(g_cwd, path, sizeof(g_cwd) - 1);
+    proc_t* p = cur();
+    if (p)
+        strncpy(p->cwd, path, sizeof(p->cwd) - 1);
     return 0;
 }
 
@@ -721,10 +732,78 @@ static int64_t sys_pause(void)
 
 static int64_t sys_nanosleep(void* r, void* m)
 {
-    (void) r;
     (void) m;
+    if (!r) return 0;
+    uint64_t sec = ((uint64_t*) r)[0];
+    uint64_t nsec = ((uint64_t*) r)[1];
+    uint64_t ms = sec * 1000 + nsec / 1000000;
+    if (ms == 0) return 0;
+    proc_t* p = cur();
+    if (!p) return 0;
+    uint64_t deadline = g_ticks + ms;
+    p->wakeup_tick = deadline;
+    while (g_ticks < deadline) {
+        if (proc_next_ready(p))
+            sched_yield_blocking();
+        else {
+            sti();
+            hlt();
+            cli();
+        }
+    }
+    p->wakeup_tick = 0;
     return 0;
 }
+static void path_abs(char* out, const char* in)
+{
+    if (!in || in[0] == '/') {
+        strncpy(out, in ? in : "", 511);
+        out[511] = '\0';
+        return;
+    }
+    proc_t* p = cur();
+    const char* cwd = (p && p->cwd[0]) ? p->cwd : "/";
+    size_t cl = strlen(cwd);
+    if (cl >= 511) { out[0] = '/'; out[1] = '\0'; return; }
+    memcpy(out, cwd, cl);
+    if (out[cl - 1] != '/') out[cl++] = '/';
+    strncpy(out + cl, in, 511 - cl);
+    out[511] = '\0';
+}
+
+static int64_t sys_mkdir(const char* path, uint32_t mode)
+{
+    if (!path) return -(int64_t) EINVAL;
+    char abs[512];
+    path_abs(abs, path);
+    return (int64_t) vfs_mkdir(abs, mode);
+}
+
+static int64_t sys_rmdir(const char* path)
+{
+    if (!path) return -(int64_t) EINVAL;
+    char abs[512];
+    path_abs(abs, path);
+    return (int64_t) vfs_rmdir(abs);
+}
+
+static int64_t sys_unlink(const char* path)
+{
+    if (!path) return -(int64_t) EINVAL;
+    char abs[512];
+    path_abs(abs, path);
+    return (int64_t) vfs_unlink(abs);
+}
+
+static int64_t sys_rename(const char* oldpath, const char* newpath)
+{
+    if (!oldpath || !newpath) return -(int64_t) EINVAL;
+    char abs_old[512], abs_new[512];
+    path_abs(abs_old, oldpath);
+    path_abs(abs_new, newpath);
+    return (int64_t) vfs_rename(abs_old, abs_new);
+}
+
 static int64_t sys_set_tid_address(void* p)
 {
     (void) p;
@@ -807,68 +886,24 @@ struct pollfd_s
     short events;
     short revents;
 };
-
-#define POLLIN 1
-#define POLLOUT 4
-
 static int64_t sys_poll(struct pollfd_s* fds, uint64_t nfds, int timeout)
 {
-    uint64_t iterations = 0;
-    /* very rough: ~1ms per yield+relax */
-    uint64_t max_iterations = (timeout < 0) ? UINT64_MAX
-                            : (uint64_t) (timeout > 0 ? timeout : 0);
-
-    for (;;)
+    (void) timeout;
+    if (fds)
     {
-        uint64_t ready = 0;
         for (uint64_t i = 0; i < nfds; i++)
-        {
-            fds[i].revents = 0;
-
-            if (fds[i].events & POLLIN)
-            {
-                if (fds[i].fd < 0 || fd_pollin(fds[i].fd))
-                    fds[i].revents |= POLLIN;
-            }
-            if (fds[i].events & POLLOUT)
-            {
-                if (fds[i].fd < 0 || fd_pollout(fds[i].fd))
-                    fds[i].revents |= POLLOUT;
-            }
-
-            if (fds[i].revents)
-                ready++;
-        }
-
-        if (ready > 0)
-            return (int64_t) ready;
-
-        if (timeout == 0)
-            return 0;
-
-        iterations++;
-        if (iterations >= max_iterations)
-            return 0;
-
-        if (g_current_proc && (g_current_proc->pending_sigs & ~g_current_proc->sig_mask))
-            return -(int64_t) EINTR;
-
-        sched_yield_blocking();
-        cpu_relax();
+            fds[i].revents = fds[i].events;
     }
+    return (int64_t) nfds;
 }
 
 static int64_t sys_ppoll(struct pollfd_s* fds, uint64_t nfds, void* tmo, const void* sigmask,
                          uint64_t sigsetsize)
 {
-    int timeout = -1;
-    if (tmo)
-    {
-        /* timespec: sec + nsec -> convert to ms */
-        uint64_t* ts = (uint64_t*) tmo;
-        timeout = (int)(ts[0] * 1000 + ts[1] / 1000000);
-    }
-    return sys_poll(fds, nfds, timeout);
+    (void) tmo;
+    (void) sigmask;
+    (void) sigsetsize;
+    return sys_poll(fds, nfds, 0);
 }
 
 static int64_t sys_select(int nfds, void* rfds, void* wfds, void* efds, void* timeout)
@@ -957,8 +992,9 @@ static int64_t sys_clock_gettime(uint64_t c, void* t)
     (void) c;
     if (t)
     {
-        ((uint64_t*) t)[0] = 0;
-        ((uint64_t*) t)[1] = 0;
+        uint64_t ms = g_ticks;
+        ((uint64_t*) t)[0] = ms / 1000;
+        ((uint64_t*) t)[1] = (ms % 1000) * 1000000ULL;
     }
     return 0;
 }
@@ -968,8 +1004,9 @@ static int64_t sys_gettimeofday(void* tv, void* tz)
     (void) tz;
     if (tv)
     {
-        ((uint64_t*) tv)[0] = 0;
-        ((uint64_t*) tv)[1] = 0;
+        uint64_t ms = g_ticks;
+        ((uint64_t*) tv)[0] = ms / 1000;
+        ((uint64_t*) tv)[1] = (ms % 1000) * 1000ULL;
     }
     return 0;
 }
@@ -1168,6 +1205,18 @@ void syscall_dispatch(syscall_frame_t* f)
     case 80:
         ret = sys_chdir((const char*) a1);
         break;
+    case 82:
+        ret = sys_rename((const char*) a1, (const char*) a2);
+        break;
+    case 83:
+        ret = sys_mkdir((const char*) a1, (uint32_t) a2);
+        break;
+    case 84:
+        ret = sys_rmdir((const char*) a1);
+        break;
+    case 87:
+        ret = sys_unlink((const char*) a1);
+        break;
     case 89:
         ret = fd_readlink((const char*) a1, (char*) a2, a3);
         break;
@@ -1265,8 +1314,17 @@ void syscall_dispatch(syscall_frame_t* f)
     case 257:
         ret = fd_openat((int) a1, (const char*) a2, (int) a3, (int) a4);
         break;
+    case 258:
+        ret = sys_mkdir((const char*) a2, (uint32_t) a3);
+        break;
     case 262:
         ret = fd_fstatat((int) a1, (const char*) a2, (struct linux_stat*) a3, (int) a4);
+        break;
+    case 263:
+        if ((int) a3 & 0x200)
+            ret = sys_rmdir((const char*) a2);
+        else
+            ret = sys_unlink((const char*) a2);
         break;
     case 270:
         ret = sys_pselect6((int) a1, (void*) a2, (void*) a3, (void*) a4, (void*) a5, (void*) a6);
