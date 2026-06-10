@@ -159,6 +159,7 @@ static int64_t sys_fork(syscall_frame_t* f)
     child->pending_sigs = 0;
     child->fs_base = parent->fs_base;
     memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
+    memcpy(child->exe_path, parent->exe_path, sizeof(child->exe_path));
 
     uint8_t* ksp = child->kstack + KSTACK_SIZE;
 
@@ -188,6 +189,23 @@ fail_space:
     return -(int64_t) ENOMEM;
 }
 
+static void path_abs(char* out, const char* in)
+{
+    if (!in || in[0] == '/') {
+        strncpy(out, in ? in : "", 511);
+        out[511] = '\0';
+        return;
+    }
+    proc_t* p = cur();
+    const char* cwd = (p && p->cwd[0]) ? p->cwd : "/";
+    size_t cl = strlen(cwd);
+    if (cl >= 511) { out[0] = '/'; out[1] = '\0'; return; }
+    memcpy(out, cwd, cl);
+    if (out[cl - 1] != '/') out[cl++] = '/';
+    strncpy(out + cl, in, 511 - cl);
+    out[511] = '\0';
+}
+
 #define MAX_EXEC_ARGS 32
 
 static int64_t sys_execve(const char* path, const char** uargv, const char** uenvp)
@@ -195,8 +213,60 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
     if (!path)
         return -(int64_t) EFAULT;
 
-    /* Copy argv/envp strings from user space to kernel heap BEFORE switching
-     * address spaces. The old user space stays mapped until vmm_switch.     */
+    char abs[512];
+    path_abs(abs, path);
+    const char* exec_path = abs[0] ? abs : path;
+
+    vfs_node_t* node = vfs_lookup(exec_path);
+    if (!node || node->type != VFS_TYPE_REG || !node->data)
+        return -(int64_t) ENOENT;
+
+    char shebang_interp[512] = {0};
+    char shebang_arg[256] = {0};
+    char script_path[512] = {0};
+    bool is_shebang = false;
+
+    if (node->size >= 2 && node->data[0] == '#' && node->data[1] == '!')
+    {
+        char line[256];
+        size_t ll = 0;
+        while (ll < 254 && 2 + ll < node->size)
+        {
+            char ch = (char) node->data[2 + ll];
+            if (ch == '\n' || ch == '\r')
+                break;
+            line[ll++] = ch;
+        }
+        line[ll] = '\0';
+        char* p2 = line;
+        while (*p2 == ' ' || *p2 == '\t')
+            p2++;
+        if (!*p2)
+            return -(int64_t) ENOEXEC;
+        char* istart = p2;
+        while (*p2 && *p2 != ' ' && *p2 != '\t')
+            p2++;
+        size_t ilen = (size_t) (p2 - istart);
+        if (!ilen || ilen >= sizeof(shebang_interp))
+            return -(int64_t) ENOEXEC;
+        memcpy(shebang_interp, istart, ilen);
+        while (*p2 == ' ' || *p2 == '\t')
+            p2++;
+        if (*p2)
+        {
+            strncpy(shebang_arg, p2, sizeof(shebang_arg) - 1);
+            char* e = shebang_arg + strlen(shebang_arg) - 1;
+            while (e >= shebang_arg && (*e == ' ' || *e == '\t' || *e == '\r'))
+                *e-- = '\0';
+        }
+        strncpy(script_path, exec_path, sizeof(script_path) - 1);
+        node = vfs_lookup(shebang_interp);
+        if (!node || node->type != VFS_TYPE_REG || !node->data)
+            return -(int64_t) ENOENT;
+        exec_path = shebang_interp;
+        is_shebang = true;
+    }
+
     char* argv_mem[MAX_EXEC_ARGS] = {0};
     char* envp_mem[MAX_EXEC_ARGS] = {0};
     const char* kargv[MAX_EXEC_ARGS + 1];
@@ -221,34 +291,59 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
         }                                                                                          \
     } while (0)
 
-    if (uargv)
+    if (is_shebang)
     {
-        while (argc < MAX_EXEC_ARGS && uargv[argc])
+        kargv[argc++] = shebang_interp;
+        if (shebang_arg[0])
+            kargv[argc++] = shebang_arg;
+        kargv[argc++] = script_path;
+        int ui = 1;
+        while (argc < MAX_EXEC_ARGS && uargv && uargv[ui])
         {
-            size_t n = strlen(uargv[argc]) + 1;
+            size_t n = strlen(uargv[ui]) + 1;
             argv_mem[argc] = kmalloc(n);
             if (!argv_mem[argc])
             {
                 FREE_EXEC_STRS();
                 return -(int64_t) ENOMEM;
             }
-            memcpy(argv_mem[argc], uargv[argc], n);
+            memcpy(argv_mem[argc], uargv[ui], n);
             kargv[argc] = argv_mem[argc];
             argc++;
+            ui++;
         }
     }
-    if (argc == 0)
+    else
     {
-        size_t n = strlen(path) + 1;
-        argv_mem[0] = kmalloc(n);
-        if (!argv_mem[0])
+        if (uargv)
         {
-            FREE_EXEC_STRS();
-            return -(int64_t) ENOMEM;
+            while (argc < MAX_EXEC_ARGS && uargv[argc])
+            {
+                size_t n = strlen(uargv[argc]) + 1;
+                argv_mem[argc] = kmalloc(n);
+                if (!argv_mem[argc])
+                {
+                    FREE_EXEC_STRS();
+                    return -(int64_t) ENOMEM;
+                }
+                memcpy(argv_mem[argc], uargv[argc], n);
+                kargv[argc] = argv_mem[argc];
+                argc++;
+            }
         }
-        memcpy(argv_mem[0], path, n);
-        kargv[0] = argv_mem[0];
-        argc = 1;
+        if (argc == 0)
+        {
+            size_t n = strlen(exec_path) + 1;
+            argv_mem[0] = kmalloc(n);
+            if (!argv_mem[0])
+            {
+                FREE_EXEC_STRS();
+                return -(int64_t) ENOMEM;
+            }
+            memcpy(argv_mem[0], exec_path, n);
+            kargv[0] = argv_mem[0];
+            argc = 1;
+        }
     }
     kargv[argc] = NULL;
 
@@ -269,13 +364,6 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
         }
     }
     kenvp[envc] = NULL;
-
-    vfs_node_t* node = vfs_lookup(path);
-    if (!node || node->type != VFS_TYPE_REG || !node->data)
-    {
-        FREE_EXEC_STRS();
-        return -(int64_t) ENOENT;
-    }
 
     elf_load_result_t res;
     if (elf_load(node->data, node->size, &res) < 0)
@@ -301,6 +389,7 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
     p->brk = PAGE_ALIGN_UP(res.brk);
     p->brk_base = p->brk;
     p->mmap_bump = 0x0000500000000000ULL;
+    strncpy(p->exe_path, exec_path, sizeof(p->exe_path) - 1);
     g_current_space = p->space;
 
     vmm_switch(p->space);
@@ -754,22 +843,6 @@ static int64_t sys_nanosleep(void* r, void* m)
     p->wakeup_tick = 0;
     return 0;
 }
-static void path_abs(char* out, const char* in)
-{
-    if (!in || in[0] == '/') {
-        strncpy(out, in ? in : "", 511);
-        out[511] = '\0';
-        return;
-    }
-    proc_t* p = cur();
-    const char* cwd = (p && p->cwd[0]) ? p->cwd : "/";
-    size_t cl = strlen(cwd);
-    if (cl >= 511) { out[0] = '/'; out[1] = '\0'; return; }
-    memcpy(out, cwd, cl);
-    if (out[cl - 1] != '/') out[cl++] = '/';
-    strncpy(out + cl, in, 511 - cl);
-    out[511] = '\0';
-}
 
 static int64_t sys_mkdir(const char* path, uint32_t mode)
 {
@@ -841,14 +914,56 @@ static int64_t sys_futex(uint32_t* uaddr, int op, uint32_t val, void* timeout, u
     }
 }
 
+static int rdrand_supported(void)
+{
+    uint32_t ecx;
+    __asm__ volatile("cpuid" : "=c"(ecx) : "a"(1) : "ebx", "edx", "memory");
+    return (int) ((ecx >> 30) & 1);
+}
+
 static int64_t sys_getrandom(void* buf, uint64_t len, uint32_t flags)
 {
     (void) flags;
     if (!buf || !len)
         return 0;
+
+    static int rdrand_ok = -1;
+    if (rdrand_ok < 0)
+        rdrand_ok = rdrand_supported();
+
     uint8_t* p = (uint8_t*) buf;
-    for (uint64_t i = 0; i < len; i++)
-        p[i] = (uint8_t) (0x53 ^ (i * 0x6b + 0x37));
+    uint64_t i = 0;
+
+    if (rdrand_ok)
+    {
+        while (i + 8 <= len)
+        {
+            uint64_t v;
+            __asm__ volatile("1: rdrand %0; jnc 1b" : "=r"(v) :: "cc");
+            __builtin_memcpy(p + i, &v, 8);
+            i += 8;
+        }
+        if (i < len)
+        {
+            uint64_t v;
+            __asm__ volatile("1: rdrand %0; jnc 1b" : "=r"(v) :: "cc");
+            __builtin_memcpy(p + i, &v, len - i);
+        }
+    }
+    else
+    {
+        /* TSC + g_ticks xorshift64 fallback */
+        uint32_t lo, hi;
+        __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+        uint64_t seed = ((uint64_t) hi << 32 | lo) ^ g_ticks;
+        for (; i < len; i++)
+        {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            p[i] = (uint8_t) seed;
+        }
+    }
     return (int64_t) len;
 }
 

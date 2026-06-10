@@ -528,6 +528,35 @@ void vfs_free_fdtable(vfs_file_t** fds)
     kfree(fds);
 }
 
+static int64_t proc_version_read(vfs_node_t* n, char* buf, uint64_t len, uint64_t off)
+{
+    (void) n;
+    static const char ver[] = "Kyronix version 0.1 (x86_64)\n";
+    uint64_t sz = sizeof(ver) - 1;
+    if (off >= sz) return 0;
+    uint64_t r = sz - off < len ? sz - off : len;
+    memcpy(buf, ver + off, r);
+    return (int64_t) r;
+}
+
+static int64_t proc_empty_read(vfs_node_t* n, char* buf, uint64_t len, uint64_t off)
+{
+    (void) n; (void) buf; (void) len; (void) off;
+    return 0;
+}
+
+static int64_t proc_exe_read(vfs_node_t* n, char* buf, uint64_t len, uint64_t off)
+{
+    (void) n;
+    if (!g_current_proc || !g_current_proc->exe_path[0]) return 0;
+    const char* p = g_current_proc->exe_path;
+    uint64_t sz = strlen(p);
+    if (off >= sz) return 0;
+    uint64_t r = sz - off < len ? sz - off : len;
+    memcpy(buf, p + off, r);
+    return (int64_t) r;
+}
+
 void vfs_init(void)
 {
     g_root = node_alloc("/", VFS_TYPE_DIR, 0755 | S_IFDIR);
@@ -535,6 +564,8 @@ void vfs_init(void)
 
     vfs_mkdir_p("/dev", 0755);
     vfs_mkdir_p("/proc", 0555);
+    vfs_mkdir_p("/proc/self", 0555);
+    vfs_mkdir_p("/proc/self/fd", 0500);
     vfs_mkdir_p("/sys", 0555);
     vfs_mkdir_p("/tmp", 01777);
     vfs_mkdir_p("/etc", 0755);
@@ -547,6 +578,11 @@ void vfs_init(void)
     vfs_create_chr("/dev/stderr", dev_null_read, dev_tty_write);
     vfs_create_symlink("/dev/console", "/dev/tty");
     vfs_create_symlink("/dev/fd", "/proc/self/fd");
+
+    vfs_create_chr("/proc/version", proc_version_read, dev_null_write);
+    vfs_create_chr("/proc/self/exe", proc_exe_read, dev_null_write);
+    vfs_create_chr("/proc/self/maps", proc_empty_read, dev_null_write);
+    vfs_create_chr("/proc/self/cmdline", proc_empty_read, dev_null_write);
 
     wire_stdio(g_default_fds);
     log_info("VFS:  root mounted  (ramfs)");
@@ -955,6 +991,19 @@ int fd_getdents64(int fd, void* buf, uint64_t count)
 
 int fd_readlink(const char* path, char* buf, uint64_t bufsz)
 {
+    if (!path || !buf || !bufsz)
+        return -(int) EINVAL;
+    if (strcmp(path, "/proc/self/exe") == 0)
+    {
+        if (!g_current_proc || !g_current_proc->exe_path[0])
+            return -(int) ENOENT;
+        size_t n = strlen(g_current_proc->exe_path);
+        if (n >= bufsz)
+            n = bufsz - 1;
+        memcpy(buf, g_current_proc->exe_path, n);
+        buf[n] = '\0';
+        return (int) n;
+    }
     vfs_node_t* n = vfs_lookup_nofollow(path);
     if (!n)
         return -(int) ENOENT;
