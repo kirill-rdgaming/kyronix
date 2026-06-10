@@ -1,4 +1,5 @@
 #include "fb.h"
+#include <stdbool.h>
 #include "../lib/string.h"
 
 fb_t g_fb;
@@ -293,6 +294,39 @@ static const uint8_t font8x16[96][16] = {
 #define FONT_W 8
 #define FONT_H 16
 
+static bool g_cursor_enabled;
+static uint32_t g_cursor_last_col;
+static uint32_t g_cursor_last_row;
+
+void fb_cursor_enable(int enable)
+{
+    g_cursor_enabled = !!enable;
+}
+
+void fb_cursor_update(void)
+{
+    if (!g_cursor_enabled)
+        return;
+
+    uint32_t cols = (uint32_t) (g_fb.width / FONT_W);
+    uint32_t rows = (uint32_t) (g_fb.height / FONT_H);
+
+    if (g_cursor_last_col < cols && g_cursor_last_row < rows)
+    {
+        uint32_t y = g_cursor_last_row * FONT_H + (FONT_H - 1);
+        fb_fill_rect(g_cursor_last_col * FONT_W, y, FONT_W, 1, g_fb.bg);
+    }
+
+    if (g_fb.col < cols && g_fb.row < rows)
+    {
+        uint32_t y = g_fb.row * FONT_H + (FONT_H - 1);
+        fb_fill_rect(g_fb.col * FONT_W, y, FONT_W, 1, g_fb.fg);
+    }
+
+    g_cursor_last_col = g_fb.col;
+    g_cursor_last_row = g_fb.row;
+}
+
 void fb_init(struct limine_framebuffer* fb)
 {
     g_fb.addr = fb->address;
@@ -304,6 +338,9 @@ void fb_init(struct limine_framebuffer* fb)
     g_fb.row = 0;
     g_fb.fg = COLOR_WHITE;
     g_fb.bg = COLOR_BG;
+    g_cursor_enabled = true;
+    g_cursor_last_col = 0;
+    g_cursor_last_row = 0;
 }
 
 void fb_put_pixel(uint32_t x, uint32_t y, uint32_t color)
@@ -326,6 +363,13 @@ void fb_clear(uint32_t color)
     }
     g_fb.col = 0;
     g_fb.row = 0;
+    g_cursor_last_col = 0;
+    g_cursor_last_row = 0;
+    if (g_cursor_enabled)
+    {
+        uint32_t y = g_fb.row * FONT_H + (FONT_H - 1);
+        fb_fill_rect(g_fb.col * FONT_W, y, FONT_W, 1, g_fb.fg);
+    }
 }
 
 void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color)
@@ -497,21 +541,18 @@ void fb_putchar(char c)
         if (c == 'm')
         {
             fb_sgr();
-            return;
         }
-        if (c == 'K')
+        else if (c == 'K')
         {
             fb_erase_to_eol();
-            return;
         }
-        if (c == 'D')
+        else if (c == 'D')
         {
             int n = g_esc_params[0] > 0 ? g_esc_params[0] : 1;
             while (n-- > 0 && g_fb.col > 0)
                 g_fb.col--;
-            return;
         }
-        if (c == 'H')
+        else if (c == 'H')
         {
             uint32_t row = (uint32_t) (g_esc_params[0] > 0 ? g_esc_params[0] - 1 : 0);
             uint32_t col = (uint32_t) (g_esc_params[1] > 0 ? g_esc_params[1] - 1 : 0);
@@ -521,9 +562,8 @@ void fb_putchar(char c)
                 g_fb.col = col;
             if (row < rows)
                 g_fb.row = row;
-            return;
         }
-        if (c == 'J')
+        else if (c == 'J')
         {
             switch (g_esc_params[0])
             {
@@ -547,8 +587,8 @@ void fb_putchar(char c)
                 fb_clear(g_fb.bg);
                 break;
             }
-            return;
         }
+        fb_cursor_update();
         return;
     default:
         break;
@@ -596,7 +636,11 @@ void fb_putchar(char c)
     {
         scroll_up();
         g_fb.row = rows - 1;
+        if (g_cursor_last_row > 0)
+            g_cursor_last_row--;
     }
+
+    fb_cursor_update();
 }
 
 void fb_write(const char* s)

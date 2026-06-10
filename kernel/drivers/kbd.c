@@ -9,6 +9,21 @@
 static bool g_shift, g_ctrl, g_alt, g_caps;
 static bool g_ext; /* got 0xE0 prefix, next byte completes the scan code */
 
+/* Escape-sequence state machine for extended keys */
+static const char* g_ext_seq;      /* current escape sequence being emitted */
+static int g_ext_seq_idx;          /* index of next byte to return (-1 = idle) */
+
+static const char seq_up[]    = {0x1B, '[', 'A', 0};
+static const char seq_down[]  = {0x1B, '[', 'B', 0};
+static const char seq_right[] = {0x1B, '[', 'C', 0};
+static const char seq_left[]  = {0x1B, '[', 'D', 0};
+static const char seq_home[]  = {0x1B, '[', 'H', 0};
+static const char seq_end[]   = {0x1B, '[', 'F', 0};
+static const char seq_pgup[]  = {0x1B, '[', '5', '~', 0};
+static const char seq_pgdn[]  = {0x1B, '[', '6', '~', 0};
+static const char seq_ins[]   = {0x1B, '[', '2', '~', 0};
+static const char seq_del[]   = {0x1B, '[', '3', '~', 0};
+
 static const char sc_ascii[128] = {
     [0x01] = 0x1B, [0x02] = '1',  [0x03] = '2',  [0x04] = '3',  [0x05] = '4',  [0x06] = '5',
     [0x07] = '6',  [0x08] = '7',  [0x09] = '8',  [0x0A] = '9',  [0x0B] = '0',  [0x0C] = '-',
@@ -47,11 +62,28 @@ void kbd_init(void)
     while (inb(KBD_STAT) & KBS_OBF)
         inb(KBD_DATA);
 
+    g_ext_seq = NULL;
+    g_ext_seq_idx = -1;
+
     log_info("PS/2 keyboard: enabled");
 }
 
 int kbd_getchar(void)
 {
+    /* If we are mid-sequence, return the next byte */
+    if (g_ext_seq_idx >= 0)
+    {
+        char c = g_ext_seq[g_ext_seq_idx];
+        if (c == '\0')
+        {
+            g_ext_seq = NULL;
+            g_ext_seq_idx = -1;
+            return -1;
+        }
+        g_ext_seq_idx++;
+        return (int) (unsigned char) c;
+    }
+
     if (!(inb(KBD_STAT) & KBS_OBF))
         return -1;
 
@@ -112,7 +144,28 @@ int kbd_getchar(void)
     case 0x47 ... 0x53:
         if (!g_ext)
             return -1;
-        break;
+        g_ext = false;
+        switch (sc)
+        {
+        case 0x47: g_ext_seq = seq_home;  break;
+        case 0x48: g_ext_seq = seq_up;    break;
+        case 0x49: g_ext_seq = seq_pgup;  break;
+        case 0x4B: g_ext_seq = seq_left;  break;
+        case 0x4D: g_ext_seq = seq_right; break;
+        case 0x4F: g_ext_seq = seq_end;   break;
+        case 0x50: g_ext_seq = seq_down;  break;
+        case 0x51: g_ext_seq = seq_pgdn;  break;
+        case 0x52: g_ext_seq = seq_ins;   break;
+        case 0x53: g_ext_seq = seq_del;   break;
+        default:   g_ext_seq = NULL;
+        }
+        if (g_ext_seq)
+        {
+            g_ext_seq_idx = 0;
+            char c = g_ext_seq[g_ext_seq_idx++];
+            return (int) (unsigned char) c;
+        }
+        return -1;
     case 0x57 ... 0x58:
         return -1;
     }
@@ -139,5 +192,5 @@ int kbd_getchar(void)
 
 bool kbd_data_ready(void)
 {
-    return (inb(KBD_STAT) & KBS_OBF) != 0;
+    return g_ext_seq_idx >= 0 || (inb(KBD_STAT) & KBS_OBF) != 0;
 }

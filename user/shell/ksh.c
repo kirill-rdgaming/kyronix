@@ -283,11 +283,11 @@ static void redraw_line(const char* line, size_t cursor)
     fputs("\r\033[K", stdout);
     fputs(prompt, stdout);
     fputs(line, stdout);
+    fflush(stdout);
     if (cursor < strlen(line))
     {
         dprintf(STDOUT_FILENO, "\033[%zuD", strlen(line) - cursor);
     }
-    fflush(stdout);
 }
 
 static int common_prefix_len(const char* a, const char* b)

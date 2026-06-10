@@ -1,5 +1,6 @@
 #include "vfs.h"
 #include "arch/x86_64/cpu.h"
+#include "drivers/fb.h"
 #include "drivers/serial.h"
 #include "drivers/tty.h"
 #include "lib/log.h"
@@ -898,10 +899,10 @@ int fd_ioctl(int fd, uint64_t req, uint64_t arg)
         struct winsize* ws = (struct winsize*) (uintptr_t) arg;
         if (!ws)
             return -(int) EINVAL;
-        ws->ws_row = 25;
-        ws->ws_col = 80;
-        ws->ws_xpixel = 0;
-        ws->ws_ypixel = 0;
+        ws->ws_col = (uint16_t) (g_fb.width / 8);
+        ws->ws_row = (uint16_t) (g_fb.height / 16);
+        ws->ws_xpixel = (uint16_t) g_fb.width;
+        ws->ws_ypixel = (uint16_t) g_fb.height;
         return 0;
     }
     case TCGETS:
