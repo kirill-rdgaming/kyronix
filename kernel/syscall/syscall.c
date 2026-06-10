@@ -680,6 +680,45 @@ static int64_t sys_rt_sigreturn(syscall_frame_t* f)
     return (int64_t) mc->rax;
 }
 
+static int64_t sys_pause(void)
+{
+    proc_t* p = cur();
+    if (!p)
+        return 0;
+    while (!(p->pending_sigs & ~p->sig_mask))
+    {
+        proc_t* next = NULL;
+        for (int i = 0; i < PROC_MAX; i++)
+        {
+            if (&g_proctable[i] == p)
+                continue;
+            if (g_proctable[i].state == PROC_READY)
+            {
+                next = &g_proctable[i];
+                break;
+            }
+        }
+        if (!next)
+        {
+            cpu_set_kernel_stack(p->kstack_top);
+            sti();
+            hlt();
+            continue;
+        }
+        p->state = PROC_WAITING;
+        next->state = PROC_RUNNING;
+        vfs_set_fdtable(next->fds);
+        g_current_space = next->space;
+        cpu_set_kernel_stack(next->kstack_top);
+        sched_switch(next);
+        p->state = PROC_RUNNING;
+        vfs_set_fdtable(p->fds);
+        g_current_space = p->space;
+        cpu_set_kernel_stack(p->kstack_top);
+    }
+    return -(int64_t) EINTR;
+}
+
 static int64_t sys_nanosleep(void* r, void* m)
 {
     (void) r;
@@ -1036,6 +1075,9 @@ void syscall_dispatch(syscall_frame_t* f)
         break;
     case 33:
         ret = fd_dup2((int) a1, (int) a2);
+        break;
+    case 34:
+        ret = sys_pause();
         break;
     case 35:
         ret = sys_nanosleep((void*) a1, (void*) a2);
