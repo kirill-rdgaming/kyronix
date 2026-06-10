@@ -514,8 +514,9 @@ void fb_putchar(char c)
         g_esc = (c == '[') ? ESC_CSI : ESC_NONE;
         if (g_esc == ESC_CSI)
         {
+            for (int i = 0; i < 8; i++)
+                g_esc_params[i] = 0;
             g_esc_np = 0;
-            g_esc_params[0] = 0;
         }
         return;
     case ESC_CSI:

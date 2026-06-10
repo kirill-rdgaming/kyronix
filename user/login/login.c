@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/utsname.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define PROMPT_MAX 64
@@ -81,7 +82,6 @@ int main(void)
     int first = 1;
 
     uname(&uts);
-    setspent();
 
     if (!isatty(STDIN_FILENO)) {
         int fd = open("/dev/tty", O_RDWR);
@@ -97,51 +97,69 @@ int main(void)
     }
 
     for (;;) {
-        char user[PROMPT_MAX];
-        char pass[LINE_MAX];
+        putstr("\033[2J\033[H");
+        setspent();
 
-        if (first) {
-            print_issue();
-            first = 0;
+        for (;;) {
+            char user[PROMPT_MAX];
+            char pass[LINE_MAX];
+
+            if (first) {
+                print_issue();
+                first = 0;
+            }
+            putstr(uts.nodename);
+            putstr(" login: ");
+            read_line(user, sizeof(user), 1);
+            if (user[0] == '\0')
+                continue;
+
+            putstr("Password: ");
+            read_line(pass, sizeof(pass), 0);
+
+            pw = getpwnam(user);
+            if (!pw) {
+                putstr("Login incorrect\n");
+                sleep(1);
+                continue;
+            }
+
+            if (!check_password(user, pass)) {
+                putstr("Login incorrect\n");
+                sleep(1);
+                continue;
+            }
+
+            break;
         }
-        putstr(uts.nodename);
-        putstr(" login: ");
-        read_line(user, sizeof(user), 1);
-        if (user[0] == '\0')
-            continue;
 
-        putstr("Password: ");
-        read_line(pass, sizeof(pass), 0);
+        endspent();
 
-        pw = getpwnam(user);
-        if (!pw) {
-            putstr("Login incorrect\n");
-            sleep(1);
+        pid_t pid = fork();
+        if (pid < 0) {
+            putstr("login: fork failed\n");
             continue;
         }
 
-        if (!check_password(user, pass)) {
-            putstr("Login incorrect\n");
-            sleep(1);
-            continue;
+        if (pid == 0) {
+            setenv("USER", pw->pw_name, 1);
+            setenv("HOME", pw->pw_dir, 1);
+            setenv("SHELL", pw->pw_shell, 1);
+            setenv("LOGNAME", pw->pw_name, 1);
+            setenv("TERM", "vt100", 1);
+
+            if (chdir(pw->pw_dir) < 0)
+                chdir("/");
+
+            setsid();
+            execlp(pw->pw_shell, pw->pw_shell, NULL);
+            putstr("login: unable to start shell\n");
+            _exit(1);
         }
 
-        break;
+        {
+            int status;
+            waitpid(pid, &status, 0);
+        }
     }
-
-    endspent();
-
-    setenv("USER", pw->pw_name, 1);
-    setenv("HOME", pw->pw_dir, 1);
-    setenv("SHELL", pw->pw_shell, 1);
-    setenv("LOGNAME", pw->pw_name, 1);
-    setenv("TERM", "vt100", 1);
-
-    if (chdir(pw->pw_dir) < 0)
-        chdir("/");
-
-    setsid();
-    execlp(pw->pw_shell, pw->pw_shell, NULL);
-    putstr("login: unable to start shell\n");
-    return 1;
 }
