@@ -725,7 +725,7 @@ static int run_command(int argc, char** argv)
 int main(void)
 {
     signal(SIGINT, SIG_IGN);
-    puts("Kyronix shell");
+    puts("");
     puts("Type 'help' for commands.");
 
     history_load();
