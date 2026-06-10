@@ -16,7 +16,6 @@
 #define KSTACK_PAGES 8
 #define KSTACK_SIZE (KSTACK_PAGES * 4096ULL)
 
-/* field offsets used in sched.S — must stay in sync */
 typedef struct proc
 {
     int state;                       /*  0 */
@@ -41,6 +40,9 @@ typedef struct proc
     char cwd[512];
     uint64_t wakeup_tick;
     char exe_path[512];
+    uint32_t* cleartid_addr;
+    uint8_t is_thread;
+    uint32_t uid, gid;
 } proc_t;
 
 extern proc_t g_proctable[PROC_MAX];
