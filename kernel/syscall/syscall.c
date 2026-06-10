@@ -653,7 +653,7 @@ static int64_t sys_uname(struct utsname* buf)
         return -(int64_t) EFAULT;
     memset(buf, 0, sizeof(*buf));
     memcpy(buf->sysname, "Kyronix", 7);
-    memcpy(buf->nodename, "localhost", 9);
+    memcpy(buf->nodename, "kx", 2);
     memcpy(buf->release, "0.0.1", 5);
     memcpy(buf->version, "#1 SMP", 6);
     memcpy(buf->machine, "x86_64", 6);
