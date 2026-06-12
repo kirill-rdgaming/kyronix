@@ -5,6 +5,9 @@ export LANG=C
 export LC_ALL=C
 export PATH=/usr/bin:/bin:/sbin
 
+mkdir -p /var/log
+exec > /var/log/startx.log 2> /var/log/startx.log
+
 mkdir -p /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix
 

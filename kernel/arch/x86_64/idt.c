@@ -180,19 +180,6 @@ void isr_dispatch(cpu_state_t* state)
             g_ticks++;
             fb_cursor_blink_tick(g_ticks);
             pic_send_eoi(0);
-            if (g_ticks % 2000 == 0) {
-                extern volatile uint64_t g_dbg_sc_count;
-                extern volatile uint64_t g_dbg_last_sc[64];
-                kdbg("[HB t=%lu cnt=%lu]", g_ticks, g_dbg_sc_count);
-                for (int _i = 0; _i < PROC_MAX; _i++) {
-                    proc_t* _p = &g_proctable[_i];
-                    if (_p->state == PROC_UNUSED) continue;
-                    uint64_t sc = (_p->pid && _p->pid <= 64) ? g_dbg_last_sc[_p->pid - 1] : 0;
-                    /* state: 1=RUN 2=READY 3=WAIT 4=ZOMBIE */
-                    kdbg(" p%u:s%d:nr%lu", _p->pid, _p->state, sc);
-                }
-                kdbg("\n");
-            }
             for (int i = 0; i < PROC_MAX; i++) {
                 proc_t* pc = &g_proctable[i];
                 if (pc->state == PROC_UNUSED) continue;

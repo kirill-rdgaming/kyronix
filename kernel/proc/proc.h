@@ -34,6 +34,7 @@ typedef struct proc
     uint64_t mmap_bump;              /* 80 */
     uint64_t fs_base;                /* 88 */
     vfs_file_t** fds;                /* 96 */
+    uint32_t* fds_refcnt;
     uint64_t pending_sigs;
     uint64_t sig_mask;
     k_sigaction_t sig_actions[NSIG];

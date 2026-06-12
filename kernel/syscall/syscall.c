@@ -56,6 +56,21 @@ static inline proc_t* cur(void)
     return g_current_proc;
 }
 
+static void proc_release_fdtable(proc_t* p)
+{
+    if (!p || !p->fds)
+        return;
+    if (p->fds_refcnt && *p->fds_refcnt > 1) {
+        (*p->fds_refcnt)--;
+    } else {
+        vfs_free_fdtable(p->fds);
+        if (p->fds_refcnt)
+            kfree(p->fds_refcnt);
+    }
+    p->fds = NULL;
+    p->fds_refcnt = NULL;
+}
+
 void syscall_set_brk(uint64_t brk_base)
 {
     proc_t* p = cur();
@@ -188,7 +203,7 @@ static int64_t sys_mprotect(uint64_t addr, uint64_t len, uint64_t prot)
     return 0;
 }
 
-static int64_t sys_fork(syscall_frame_t* f)
+static int64_t sys_fork_at(syscall_frame_t* f, uint64_t child_stack)
 {
     proc_t* parent = cur();
     if (!parent)
@@ -206,12 +221,14 @@ static int64_t sys_fork(syscall_frame_t* f)
         goto fail_fork;
 
     vfs_copy_fdtable(child->fds, parent->fds);
+    if (child->fds_refcnt)
+        *child->fds_refcnt = 1;
 
     child->brk = parent->brk;
     child->brk_base = parent->brk_base;
     child->mmap_bump = parent->mmap_bump;
     child->pgid = parent->pgid;
-    child->user_rsp = cpu_get_user_rsp();
+    child->user_rsp = child_stack ? child_stack : cpu_get_user_rsp();
 
     child->sig_mask = parent->sig_mask;
     memcpy(child->sig_actions, parent->sig_actions, sizeof(parent->sig_actions));
@@ -252,7 +269,14 @@ fail_space:
     return -(int64_t) ENOMEM;
 }
 
+static int64_t sys_fork(syscall_frame_t* f)
+{
+    return sys_fork_at(f, 0);
+}
+
 #define CLONE_VM             0x00000100
+#define CLONE_FILES          0x00000400
+#define CLONE_THREAD         0x00010000
 #define CLONE_SETTLS         0x00080000
 #define CLONE_PARENT_SETTID  0x00100000
 #define CLONE_CHILD_CLEARTID 0x00200000
@@ -265,8 +289,8 @@ static int64_t sys_clone(uint64_t flags, uint64_t child_stack, uint32_t* ptid,
     if (!parent)
         return -(int64_t) ENOMEM;
 
-    if (!(flags & CLONE_VM))
-        return sys_fork(f);
+    if (!(flags & CLONE_THREAD))
+        return sys_fork_at(f, child_stack);
     if ((flags & CLONE_PARENT_SETTID) && (!ptid || !uptr_ok_w(ptid, sizeof(*ptid))))
         return -(int64_t)EFAULT;
     if ((flags & (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID)) && ctid && !uptr_ok_w(ctid, sizeof(*ctid)))
@@ -279,7 +303,18 @@ static int64_t sys_clone(uint64_t flags, uint64_t child_stack, uint32_t* ptid,
     child->space = parent->space; /* shared address space */
     child->is_thread = 1;
 
-    vfs_copy_fdtable(child->fds, parent->fds);
+    if (flags & CLONE_FILES) {
+        kfree(child->fds);
+        kfree(child->fds_refcnt);
+        child->fds = parent->fds;
+        child->fds_refcnt = parent->fds_refcnt;
+        if (child->fds_refcnt)
+            (*child->fds_refcnt)++;
+    } else {
+        vfs_copy_fdtable(child->fds, parent->fds);
+        if (child->fds_refcnt)
+            *child->fds_refcnt = 1;
+    }
 
     child->brk        = parent->brk;
     child->brk_base   = parent->brk_base;
@@ -574,8 +609,13 @@ __attribute__((noreturn)) void proc_do_exit(int code)
     proc_t* p = cur();
     log_info("[pid %u] exit(%d)", p->pid, code);
     shm_proc_exit(p->pid);
-    vfs_free_fdtable(p->fds);
-    p->fds = NULL;
+    proc_release_fdtable(p);
+
+    for (int i = 0; i < PROC_MAX; i++) {
+        proc_t* child = &g_proctable[i];
+        if (child->state != PROC_UNUSED && child->ppid == p->pid)
+            child->ppid = 1;
+    }
 
     if (p->is_thread)
     {
@@ -602,14 +642,17 @@ __attribute__((noreturn)) void proc_do_exit(int code)
     p->state = PROC_ZOMBIE;
 
     proc_t* parent = proc_find(p->ppid);
-    if (parent && parent->state != PROC_UNUSED && parent->state != PROC_RUNNING)
+    if (parent && parent->state != PROC_UNUSED)
     {
         proc_send_signal(parent, SIGCHLD);
-        parent->state = PROC_READY;
-        vfs_set_fdtable(parent->fds);
-        g_current_space = parent->space;
-        cpu_set_kernel_stack(parent->kstack_top);
-        sched_switch(parent);
+        if (parent->state != PROC_RUNNING)
+        {
+            parent->state = PROC_READY;
+            vfs_set_fdtable(parent->fds);
+            g_current_space = parent->space;
+            cpu_set_kernel_stack(parent->kstack_top);
+            sched_switch(parent);
+        }
     }
     /* no parent to switch to: find any ready process */
     proc_t* any = proc_next_ready(p);
@@ -650,8 +693,7 @@ static int64_t sys_wait4(int pid, int* wstatus, int options, void* rusage)
                 if (wstatus)
                     *wstatus = (c->exit_code & 0xFF) << 8;
                 uint32_t cpid = c->pid;
-                if (c->fds)
-                    vfs_free_fdtable(c->fds);
+                proc_release_fdtable(c);
                 vmm_space_free(c->space);
                 proc_kstack_free(c);
                 memset(c, 0, sizeof(*c));
@@ -1484,6 +1526,7 @@ static int poll_check(struct pollfd_s* fds, uint64_t nfds)
 static int64_t sys_poll(struct pollfd_s* fds, uint64_t nfds, int timeout)
 {
     if (!fds && nfds) return -(int64_t) EFAULT;
+    if (nfds && !uptr_ok_w(fds, nfds * sizeof(*fds))) return -(int64_t)EFAULT;
     int ready = nfds ? poll_check(fds, nfds) : 0;
     if (ready > 0 || timeout == 0) return ready;
     proc_t* p = cur();
@@ -1959,19 +2002,21 @@ static int64_t sys_rt_sigtimedwait(const uint64_t* set, void* info, const void* 
 #define EPOLL_CTL_ADD 1
 #define EPOLL_CTL_DEL 2
 #define EPOLL_CTL_MOD 3
-#define EPOLL_SLOTS 32
-#define EPOLL_MAXW  64
+#define EPOLL_SLOTS 64
+#define EPOLL_MAXW  256
 
 struct epoll_event { uint32_t events; uint64_t data; } __attribute__((packed));
 struct epoll_watch { int fd; uint32_t events; uint64_t data; };
-typedef struct { int epfd; struct epoll_watch w[EPOLL_MAXW]; int nw; } epoll_t;
+typedef struct { int epfd; vmm_space_t* owner_space; struct epoll_watch w[EPOLL_MAXW]; int nw; } epoll_t;
 static epoll_t g_epolls[EPOLL_SLOTS];
 static int g_epoll_init;
 
 static epoll_t* epoll_find(int epfd)
 {
+    proc_t* p = cur();
     for (int i = 0; i < EPOLL_SLOTS; i++)
-        if (g_epolls[i].epfd == epfd) return &g_epolls[i];
+        if (g_epolls[i].epfd == epfd && g_epolls[i].owner_space == (p ? p->space : NULL))
+            return &g_epolls[i];
     return NULL;
 }
 
@@ -1979,20 +2024,28 @@ static int64_t sys_epoll_create1(int flags)
 {
     (void)flags;
     if (!g_epoll_init) {
-        for (int i = 0; i < EPOLL_SLOTS; i++) g_epolls[i].epfd = -1;
+        for (int i = 0; i < EPOLL_SLOTS; i++) {
+            g_epolls[i].epfd = -1;
+            g_epolls[i].owner_space = NULL;
+        }
         g_epoll_init = 1;
     }
     /* reclaim slots whose fd was closed */
     for (int i = 0; i < EPOLL_SLOTS; i++)
-        if (g_epolls[i].epfd >= 0 && !fd_valid(g_epolls[i].epfd))
+        if (g_epolls[i].epfd >= 0 && g_epolls[i].owner_space == cur()->space && !fd_valid(g_epolls[i].epfd)) {
             g_epolls[i].epfd = -1;
+            g_epolls[i].owner_space = NULL;
+            g_epolls[i].nw = 0;
+        }
     int epfd = fd_open("/dev/null", O_RDONLY, 0);
     if (epfd < 0) return -(int64_t)EMFILE;
     epoll_t* ep = NULL;
     for (int i = 0; i < EPOLL_SLOTS; i++)
         if (g_epolls[i].epfd == -1) { ep = &g_epolls[i]; break; }
     if (!ep) { fd_close(epfd); return -(int64_t)ENOMEM; }
-    ep->epfd = epfd; ep->nw = 0;
+    ep->epfd = epfd;
+    ep->owner_space = cur()->space;
+    ep->nw = 0;
     return epfd;
 }
 
@@ -2000,6 +2053,8 @@ static int64_t sys_epoll_ctl(int epfd, int op, int fd, struct epoll_event* ev)
 {
     epoll_t* ep = epoll_find(epfd);
     if (!ep) return -(int64_t)EBADF;
+    if (op != EPOLL_CTL_DEL && ev && !uptr_ok(ev, sizeof(*ev))) return -(int64_t)EFAULT;
+    if (op != EPOLL_CTL_DEL && !fd_valid(fd)) return -(int64_t)EBADF;
     switch (op) {
     case EPOLL_CTL_ADD:
         if (ep->nw >= EPOLL_MAXW) return -(int64_t)ENOMEM;
@@ -2023,6 +2078,7 @@ static int64_t sys_epoll_wait(int epfd, struct epoll_event* events, int maxevent
 {
     epoll_t* ep = epoll_find(epfd);
     if (!ep || !events || maxevents <= 0) return -(int64_t)EINVAL;
+    if (!uptr_ok_w(events, (uint64_t)maxevents * sizeof(*events))) return -(int64_t)EFAULT;
     proc_t* p = cur();
     uint64_t deadline = timeout >= 0 ? g_ticks + (uint64_t)timeout : (uint64_t)-1ULL;
     for (;;) {
@@ -2263,17 +2319,11 @@ static int64_t sys_recvmsg(int fd, void* mhdr, int flags)
     return total;
 }
 
-volatile uint64_t g_dbg_sc_count = 0;
-volatile uint64_t g_dbg_last_sc[64] = {0}; /* per-pid: syscall currently executing */
-
 void syscall_dispatch(syscall_frame_t* f)
 {
     uint64_t nr = f->rax;
     uint64_t a1 = f->rdi, a2 = f->rsi, a3 = f->rdx;
     uint64_t a4 = f->r10, a5 = f->r8, a6 = f->r9;
-    g_dbg_sc_count++;
-    if (g_current_proc && g_current_proc->pid && g_current_proc->pid <= 64)
-        g_dbg_last_sc[g_current_proc->pid - 1] = nr;
 
     int64_t ret;
     switch (nr)
