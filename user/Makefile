@@ -10,7 +10,7 @@ all:
 	$(MAKE) -C kyrobox
 	$(MAKE) -C fetch
 	mkdir -p ../build/bin
-	musl-gcc -std=c11 -Wall -Wextra -Werror -O2 -march=x86-64 -mtune=generic -fno-pie -fno-link-libatomic -static -no-pie -o ../build/bin/pipetest pipetest.c
+	musl-gcc -std=c11 -Wall -Wextra -Werror -O2 -march=x86-64 -mtune=generic -fno-pie -L../build -static -no-pie -o ../build/bin/pipetest pipetest.c
 	rm -rf $(ROOTFS)/bin
 	mkdir -p $(ROOTFS)/bin
 	cp ../build/bin/kyronix-init $(ROOTFS)/bin/init

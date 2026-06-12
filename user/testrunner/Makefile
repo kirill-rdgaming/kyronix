@@ -1,15 +1,15 @@
 CC := musl-gcc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2 -march=x86-64 -mtune=generic -fno-pie -L../../build
 LDFLAGS ?= -static -no-pie
-OUT := ../../build/bin/kyronix-init
+OUT := ../../build/bin
 
 .PHONY: all clean
 
-all: $(OUT)
+all: $(OUT)/testrunner
 
-$(OUT): init.c
-	mkdir -p ../../build/bin
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ init.c
+$(OUT)/testrunner: testrunner.c
+	mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 clean:
-	rm -f $(OUT)
+	rm -f $(OUT)/testrunner

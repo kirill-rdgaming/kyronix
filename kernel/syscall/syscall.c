@@ -2748,6 +2748,9 @@ void syscall_dispatch(syscall_frame_t* f)
         break;
     case 169:
         if (!is_root()) { ret = -(int64_t)EPERM; break; }
+        /* QEMU ACPI shutdown (tried before cpu_halt so -no-reboot exits QEMU) */
+        outw(0xB004, 0x2000);
+        outw(0x604,  0x2000);
         cpu_halt();
         ret = 0;
         break;
