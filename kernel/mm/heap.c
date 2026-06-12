@@ -1,5 +1,6 @@
 #include "heap.h"
 #include "lib/log.h"
+#include "lib/printf.h"
 #include "lib/string.h"
 #include "pmm.h"
 #include "vmm.h"
@@ -122,6 +123,12 @@ void kfree(void* ptr)
         return;
 
     block_hdr_t* blk = (block_hdr_t*) ((uint8_t*) ptr - HDR_SIZE);
+    if (blk->free) /* double free: refuse it, free-list would corrupt otherwise */
+    {
+        kdbg("[DBG double-free ptr=%lx size=%lu]\n",
+             (uint64_t) (uintptr_t) ptr, blk->size);
+        return;
+    }
     blk->free = 1;
 
     if (blk->next && blk->next->free)

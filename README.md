@@ -25,7 +25,7 @@ Includes:
 * ksh
 * vi
 * login
-* sbase utilities
+* Kyronix coreutils
 * custom Kyronix tools
 
 ## Build

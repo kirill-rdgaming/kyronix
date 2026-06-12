@@ -149,6 +149,7 @@ int main(void)
         setenv("SHELL", pw->pw_shell, 1);
         setenv("LOGNAME", pw->pw_name, 1);
         setenv("TERM", "vt100", 1);
+        setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin", 1);
 
         if (chdir(pw->pw_dir) < 0)
             chdir("/");

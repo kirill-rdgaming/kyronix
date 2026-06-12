@@ -5,6 +5,7 @@
 #include "../lib/string.h"
 #include "../lib/printf.h"
 #include "../proc/proc.h"
+#include "../syscall/syscall.h"
 #include <stdbool.h>
 
 #define EINVAL 22
@@ -102,14 +103,17 @@ static int64_t evdev_ioctl(vfs_node_t* n, uint64_t req64, uint64_t arg)
         const char* name = dev == INPUT_DEV_KBD ? "Kyronix Keyboard" : "Kyronix Mouse";
         uint32_t n2 = (uint32_t)strlen(name) + 1;
         if (n2 > len) n2 = len;
+        if (n2 && !uptr_ok_w((void*)(uintptr_t)arg, n2)) return -14;
         __builtin_memcpy((void*)(uintptr_t)arg, name, n2);
         return (int64_t)n2;
     }
 
     if (evio_req(req, 0x09) || evio_req(req, 0x18)) {
         uint32_t len = (uint32_t)((req >> 16) & 0x3FFF);
-        if (arg && len)
+        if (arg && len) {
+            if (!uptr_ok_w((void*)(uintptr_t)arg, len)) return -14;
             __builtin_memset((void*)(uintptr_t)arg, 0, len);
+        }
         return 0;
     }
 
@@ -120,6 +124,7 @@ static int64_t evdev_ioctl(vfs_node_t* n, uint64_t req64, uint64_t arg)
         uint32_t len = (uint32_t)((req >> 16) & 0x3FFF);
         uint8_t* bits = (uint8_t*)(uintptr_t)arg;
         if (!bits || !len) return 0;
+        if (!uptr_ok_w(bits, len)) return -14;
         __builtin_memset(bits, 0, len);
         if (ev_type == 0) { /* supported event types */
             if (dev == INPUT_DEV_KBD) {
@@ -143,8 +148,12 @@ static int64_t evdev_ioctl(vfs_node_t* n, uint64_t req64, uint64_t arg)
     }
 
     switch (req) {
-    case EVIOCGVERSION: *(uint32_t*)(uintptr_t)arg = 0x010001; return 0;
+    case EVIOCGVERSION:
+        if (!arg || !uptr_ok_w((void*)(uintptr_t)arg, sizeof(uint32_t))) return -14;
+        *(uint32_t*)(uintptr_t)arg = 0x010001;
+        return 0;
     case EVIOCGID:
+        if (!arg || !uptr_ok_w((void*)(uintptr_t)arg, 4 * sizeof(uint16_t))) return -14;
         ((uint16_t*)(uintptr_t)arg)[0] = 0x11; /* BUS_I8042 */
         ((uint16_t*)(uintptr_t)arg)[1] = 1;
         ((uint16_t*)(uintptr_t)arg)[2] = dev == INPUT_DEV_KBD ? 1 : 2;

@@ -2,7 +2,7 @@
 
 TARGET     := kernel.elf
 ISO        := kyronix.iso
-LIMINE_DIR := limine-binary
+LIMINE_DIR := limine
 BUILD_DIR  := build
 
 ifneq (, $(shell which x86_64-elf-gcc 2>/dev/null))

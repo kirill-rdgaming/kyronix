@@ -85,6 +85,7 @@ proc_t* proc_alloc(uint32_t ppid)
         }
 
         p->mmap_bump = 0x0000500000000000ULL;
+        p->umask = 0022;
         p->cwd[0] = '/';
         p->cwd[1] = '\0';
 

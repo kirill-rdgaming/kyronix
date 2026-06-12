@@ -19,6 +19,8 @@ char g_cwd[512] = "/";
 static vfs_file_t* g_default_fds[VFS_FD_MAX];
 static vfs_file_t** g_fds = g_default_fds;
 
+#define VFS_FILE_MAGIC 0x4b59464d41474943ULL /* "KYFMAGIC" */
+
 #define EACCES    13
 #define EFAULT    14
 #define EEXIST    17
@@ -150,6 +152,11 @@ static bool may_create_in(vfs_node_t* dir)
 static uint32_t mode_without_priv_bits(uint32_t mode)
 {
     return cred_is_root() ? (mode & 07777U) : (mode & 01777U);
+}
+
+static uint32_t apply_umask(uint32_t mode)
+{
+    return g_current_proc ? (mode & ~g_current_proc->umask) : mode;
 }
 
 static bool may_change_owner(vfs_node_t* n)
@@ -414,7 +421,7 @@ vfs_node_t* vfs_create_file(const char* path, uint32_t mode, const void* data, u
         return existing;
     }
 
-    vfs_node_t* n = node_alloc(leaf, VFS_TYPE_REG, (mode & 07777) | S_IFREG);
+    vfs_node_t* n = node_alloc(leaf, VFS_TYPE_REG, apply_umask(mode & 07777) | S_IFREG);
     if (!n)
         return NULL;
     if (size > 0)
@@ -478,7 +485,7 @@ int vfs_mkdir(const char* path, uint32_t mode)
     if (!parent || parent->type != VFS_TYPE_DIR || !leaf || !*leaf) return -(int)ENOENT;
     if (!may_create_in(parent)) return -(int)EACCES;
     if (dir_find(parent, leaf)) return -(int)EEXIST;
-    vfs_node_t* n = node_alloc(leaf, VFS_TYPE_DIR, (mode & 07777) | S_IFDIR);
+    vfs_node_t* n = node_alloc(leaf, VFS_TYPE_DIR, apply_umask(mode & 07777) | S_IFDIR);
     if (!n) return -(int)ENOMEM;
     dir_insert(parent, n);
     return 0;
@@ -653,11 +660,13 @@ static int64_t pty_master_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
     (void)n;
     switch (req) {
     case 0x80045430: /* TIOCGPTN */
+        if (arg && !uptr_ok_w((void*)(uintptr_t)arg, sizeof(int))) return -EFAULT;
         if (arg) *(int*)(uintptr_t)arg = 0;
         return 0;
     case 0x40045431: /* TIOCSPTLCK */
     case 0x80045439: /* TIOCGPTLCK */
     case 0x80045432: /* TIOCGDEV */
+        if (arg && req != 0x40045431 && !uptr_ok_w((void*)(uintptr_t)arg, sizeof(int))) return -EFAULT;
         if (arg && req != 0x40045431) *(int*)(uintptr_t)arg = 0;
         return 0;
     }
@@ -672,11 +681,30 @@ static int fd_alloc_from(int start)
     return -1;
 }
 
+static vfs_file_t* file_alloc(void)
+{
+    vfs_file_t* f = (vfs_file_t*) kcalloc(1, sizeof(vfs_file_t));
+    if (f)
+        f->magic = VFS_FILE_MAGIC;
+    return f;
+}
+
+static bool file_valid(vfs_file_t* f)
+{
+    uintptr_t addr = (uintptr_t)f;
+    if (!f || addr < HEAP_START || addr >= HEAP_MAX || (addr & 7))
+        return false;
+    return f->magic == VFS_FILE_MAGIC;
+}
+
 static vfs_file_t* fd_get(int fd)
 {
     if (fd < 0 || fd >= VFS_FD_MAX)
         return NULL;
-    return g_fds[fd];
+    vfs_file_t* f = g_fds[fd];
+    if (!file_valid(f))
+        return NULL;
+    return f;
 }
 
 bool fd_valid(int fd)
@@ -780,12 +808,12 @@ static void pipe_drop_write(pipe_t* p)
 static void pipe_maybe_free(pipe_t* p)
 {
     if (p && p->read_refs == 0 && p->write_refs == 0)
-        kfree(p);
+        pipe_free(p);
 }
 
 static void file_close(vfs_file_t* f)
 {
-    if (!f)
+    if (!file_valid(f))
         return;
     /* listening/bound socket: free unix_sock_t and remove VFS bind node */
     if (!f->pipe && !f->wpipe && f->node && f->node->type == VFS_TYPE_SOCK) {
@@ -814,6 +842,7 @@ static void file_close(vfs_file_t* f)
             kfree(s);
         }
         kfree(f->node);
+        f->magic = 0;
         kfree(f);
         return;
     }
@@ -838,6 +867,7 @@ static void file_close(vfs_file_t* f)
         }
         pipe_maybe_free(f->pipe);
     }
+    f->magic = 0;
     kfree(f);
 }
 
@@ -876,7 +906,7 @@ static void wire_stdio(vfs_file_t** fds)
         vfs_node_t* n = vfs_lookup(paths[i]);
         if (!n)
             continue;
-        vfs_file_t* f = (vfs_file_t*) kcalloc(1, sizeof(vfs_file_t));
+        vfs_file_t* f = file_alloc();
         if (!f)
             continue;
         f->node = n;
@@ -894,10 +924,16 @@ void vfs_copy_fdtable(vfs_file_t** dst, vfs_file_t** src)
             dst[i] = NULL;
             continue;
         }
-        vfs_file_t* f = (vfs_file_t*) kcalloc(1, sizeof(vfs_file_t));
+        if (!file_valid(src[i]))
+        {
+            dst[i] = NULL;
+            continue;
+        }
+        vfs_file_t* f = file_alloc();
         if (f)
         {
             *f = *src[i];
+            f->magic = VFS_FILE_MAGIC;
             file_addref(f); /* bump pipe ref-counts */
             /* child doesn't own a listening socket's lifecycle */
             if (f->node && f->node->type == VFS_TYPE_SOCK)
@@ -915,11 +951,20 @@ void vfs_free_fdtable(vfs_file_t** fds)
     {
         if (fds[i])
         {
-            file_close(fds[i]);
+            if (file_valid(fds[i]))
+                file_close(fds[i]);
             fds[i] = NULL;
         }
     }
     kfree(fds);
+}
+
+/* close every FD_CLOEXEC fd in the current table; called on a successful execve */
+void vfs_cloexec_flush(void)
+{
+    for (int i = 0; i < VFS_FD_MAX; i++)
+        if (g_fds[i] && file_valid(g_fds[i]) && g_fds[i]->cloexec)
+            fd_close(i);
 }
 
 static int64_t proc_version_read(vfs_node_t* n, char* buf, uint64_t len, uint64_t off)
@@ -1068,7 +1113,7 @@ int fd_pipe(int pipefd[2])
         return -(int) EMFILE;
     }
 
-    vfs_file_t* rf = (vfs_file_t*) kcalloc(1, sizeof(vfs_file_t));
+    vfs_file_t* rf = file_alloc();
     if (!rf)
     {
         pipe_free(p);
@@ -1082,16 +1127,16 @@ int fd_pipe(int pipefd[2])
     int wfd = fd_alloc_from(0);
     if (wfd < 0)
     {
-        kfree(rf);
+        file_close(rf);
         g_fds[rfd] = NULL;
         pipe_free(p);
         return -(int) EMFILE;
     }
 
-    vfs_file_t* wf = (vfs_file_t*) kcalloc(1, sizeof(vfs_file_t));
+    vfs_file_t* wf = file_alloc();
     if (!wf)
     {
-        kfree(rf);
+        file_close(rf);
         g_fds[rfd] = NULL;
         pipe_free(p);
         return -(int) ENOMEM;
@@ -1111,28 +1156,36 @@ int fd_socketpair(int sv[2])
     /* two cross-connected pipes: sv[0] reads pipe_a, writes pipe_b; sv[1] vice versa */
     pipe_t* pa = pipe_alloc();
     pipe_t* pb = pipe_alloc();
-    if (!pa || !pb) { kfree(pa); kfree(pb); return -(int) ENOMEM; }
+    if (!pa || !pb) { pipe_free(pa); pipe_free(pb); return -(int) ENOMEM; }
 
     pa->read_refs = 1; pa->write_refs = 1;
     pb->read_refs = 1; pb->write_refs = 1;
 
     int fd0 = fd_alloc_from(0);
-    int fd1 = (fd0 >= 0) ? fd_alloc_from(0) : -1;
-    if (fd0 < 0 || fd1 < 0)
-    {
-        if (fd0 >= 0) g_fds[fd0] = NULL;
-        kfree(pa); kfree(pb);
-        return -(int) EMFILE;
-    }
+    if (fd0 < 0) { pipe_free(pa); pipe_free(pb); return -(int) EMFILE; }
 
-    vfs_file_t* f0 = (vfs_file_t*) kcalloc(1, sizeof(vfs_file_t));
-    vfs_file_t* f1 = (vfs_file_t*) kcalloc(1, sizeof(vfs_file_t));
-    if (!f0 || !f1) { kfree(f0); kfree(f1); kfree(pa); kfree(pb); return -(int) ENOMEM; }
+    vfs_file_t* f0 = file_alloc();
+    vfs_file_t* f1 = file_alloc();
+    if (!f0 || !f1) {
+        if (f0) { f0->magic = 0; kfree(f0); }
+        if (f1) { f1->magic = 0; kfree(f1); }
+        pipe_free(pa);
+        pipe_free(pb);
+        return -(int) ENOMEM;
+    }
 
     f0->pipe = pa; f0->wpipe = pb; f0->pipe_end = PIPE_END_READ; f0->flags = O_RDWR;
     f1->pipe = pb; f1->wpipe = pa; f1->pipe_end = PIPE_END_READ; f1->flags = O_RDWR;
 
     g_fds[fd0] = f0;
+    int fd1 = fd_alloc_from(0);
+    if (fd1 < 0)
+    {
+        g_fds[fd0] = NULL;
+        file_close(f0);
+        file_close(f1);
+        return -(int) EMFILE;
+    }
     g_fds[fd1] = f1;
     sv[0] = fd0;
     sv[1] = fd1;
@@ -1153,9 +1206,10 @@ int fd_socket(int domain, int type, int proto)
     n->data = (uint8_t*)s;
     int fd = fd_alloc_from(0);
     if (fd < 0) { kfree(s); kfree(n); return -(int)EMFILE; }
-    vfs_file_t* f = (vfs_file_t*)kcalloc(1, sizeof(vfs_file_t));
+    vfs_file_t* f = file_alloc();
     if (!f) { kfree(s); kfree(n); return -(int)ENOMEM; }
     f->node = n; f->flags = O_RDWR | (type & O_NONBLOCK);
+    f->cloexec = (type & O_CLOEXEC) ? 1 : 0; /* SOCK_CLOEXEC */
     g_fds[fd] = f;
     return fd;
 }
@@ -1246,7 +1300,7 @@ int fd_accept_unix(int fd, char* path_out, int path_max, int flags)
         pipe_maybe_free(cli_rx);
         return -(int)EMFILE;
     }
-    vfs_file_t* nf = (vfs_file_t*)kcalloc(1, sizeof(vfs_file_t));
+    vfs_file_t* nf = file_alloc();
     if (!nf) {
         if (srv_rx->read_refs) srv_rx->read_refs--;
         pipe_maybe_free(srv_rx);
@@ -1256,6 +1310,7 @@ int fd_accept_unix(int fd, char* path_out, int path_max, int flags)
     }
     nf->pipe = srv_rx; nf->wpipe = cli_rx;
     nf->pipe_end = PIPE_END_READ; nf->flags = O_RDWR | (flags & O_NONBLOCK);
+    nf->cloexec = (flags & O_CLOEXEC) ? 1 : 0; /* accept4 SOCK_CLOEXEC */
     nf->peer_pid = peer_pid;
     nf->peer_uid = peer_uid;
     nf->peer_gid = peer_gid;
@@ -1377,13 +1432,14 @@ int fd_open(const char* path, int flags, int mode)
     if (fd < 0)
         return -(int) EMFILE;
 
-    vfs_file_t* f = (vfs_file_t*) kcalloc(1, sizeof(vfs_file_t));
+    vfs_file_t* f = file_alloc();
     if (!f)
         return -(int) ENOMEM;
 
     f->node = n;
     f->flags = flags;
     f->pos = 0;
+    f->cloexec = (flags & O_CLOEXEC) ? 1 : 0;
     if ((flags & O_TRUNC) && n->type == VFS_TYPE_REG)
         n->size = 0;
     if (flags & O_APPEND)
@@ -1555,6 +1611,16 @@ int64_t fd_write(int fd, const void* buf, uint64_t len)
         return 0;
     if (!uptr_ok(buf, len))
         return -(int64_t) EFAULT;
+    /* non-blocking socket: never block in pipe_write — return EAGAIN when the send
+       buffer is full, else clamp to the free space so the write completes at once.
+       lets XCB drain incoming events instead of deadlocking on a full buffer. */
+    if (f->wpipe && (f->flags & O_NONBLOCK) && f->wpipe->read_refs > 0) {
+        uint64_t space = PIPE_BUFSZ - f->wpipe->count;
+        if (space == 0)
+            return -(int64_t) EAGAIN;
+        if (len > space)
+            len = space;
+    }
     return fd_write_dispatch(f, buf, len);
 }
 
@@ -1607,6 +1673,8 @@ int fd_fstat(int fd, struct linux_stat* st)
         return -(int) EBADF;
     if (!st)
         return -(int) EINVAL;
+    if (!uptr_ok_w(st, sizeof(*st)))
+        return -(int) EFAULT;
     if (f->wpipe) { /* connected socket */
         memset(st, 0, sizeof(*st));
         st->st_mode = S_IFSOCK | 0666;
@@ -1628,6 +1696,8 @@ int fd_fstatat(int dirfd, const char* path, struct linux_stat* st, int flags)
 {
     if (!path || !st)
         return -(int) EINVAL;
+    if (!uptr_ok_w(st, sizeof(*st)))
+        return -(int) EFAULT;
     if (path[0] == '\0' && (flags & AT_EMPTY_PATH))
         return fd_fstat(dirfd, st);
     if (path[0] == '/' || dirfd == AT_FDCWD)
@@ -1653,6 +1723,8 @@ int fd_stat(const char* path, struct linux_stat* st)
 {
     if (!path || !st)
         return -(int) EINVAL;
+    if (!uptr_ok_w(st, sizeof(*st)))
+        return -(int) EFAULT;
     vfs_node_t* n = vfs_lookup(path);
     if (!n)
         return -(int) ENOENT;
@@ -1664,6 +1736,8 @@ int fd_lstat(const char* path, struct linux_stat* st)
 {
     if (!path || !st)
         return -(int) EINVAL;
+    if (!uptr_ok_w(st, sizeof(*st)))
+        return -(int) EFAULT;
     vfs_node_t* n = vfs_lookup_nofollow(path);
     if (!n)
         return -(int) ENOENT;
@@ -1673,6 +1747,10 @@ int fd_lstat(const char* path, struct linux_stat* st)
 
 int fd_getdents64(int fd, void* buf, uint64_t count)
 {
+    if (!buf || !count)
+        return -(int) EINVAL;
+    if (!uptr_ok_w(buf, count))
+        return -(int) EFAULT;
     vfs_file_t* f = fd_get(fd);
     if (!f)
         return -(int) EBADF;
@@ -1756,6 +1834,8 @@ int fd_readlink(const char* path, char* buf, uint64_t bufsz)
 {
     if (!path || !buf || !bufsz)
         return -(int) EINVAL;
+    if (!uptr_ok_w(buf, bufsz))
+        return -(int) EFAULT;
     if (strcmp(path, "/proc/self/exe") == 0)
     {
         if (!g_current_proc || !g_current_proc->exe_path[0])
@@ -1817,6 +1897,8 @@ int fd_ioctl(int fd, uint64_t req, uint64_t arg)
         struct winsize* ws = (struct winsize*) (uintptr_t) arg;
         if (!ws)
             return -(int) EINVAL;
+        if (!uptr_ok_w(ws, sizeof(*ws)))
+            return -(int) EFAULT;
         ws->ws_row = 25;
         ws->ws_col = 80;
         ws->ws_xpixel = 0;
@@ -1828,6 +1910,8 @@ int fd_ioctl(int fd, uint64_t req, uint64_t arg)
         struct termios* t = (struct termios*) (uintptr_t) arg;
         if (!t)
             return -(int) EINVAL;
+        if (!uptr_ok_w(t, sizeof(*t)))
+            return -(int) EFAULT;
         memset(t, 0, sizeof(*t));
         t->c_iflag = 0x500;
         t->c_oflag = 0x5;
@@ -1840,8 +1924,11 @@ int fd_ioctl(int fd, uint64_t req, uint64_t arg)
     case 0x5404: /* TCSETSF */
     {
         struct termios* t = (struct termios*) (uintptr_t) arg;
-        if (t)
+        if (t) {
+            if (!uptr_ok(t, sizeof(*t)))
+                return -(int) EFAULT;
             tty_set_lflag(t->c_lflag);
+        }
         return 0;
     }
     case 0x5405: /* TCGETA  */
@@ -1851,7 +1938,8 @@ int fd_ioctl(int fd, uint64_t req, uint64_t arg)
     case 0x541B: /* FIONREAD */ {
         int* n = (int*)(uintptr_t)arg;
         if (!n) return -(int)EINVAL;
-        *n = (int)(f->wpipe ? f->pipe->count : f->pipe ? f->pipe->count : 0);
+        if (!uptr_ok_w(n, sizeof(*n))) return -(int)EFAULT;
+        *n = (int)(f->pipe ? f->pipe->count : 0);
         return 0;
     }
     case FIONBIO:
@@ -1860,15 +1948,19 @@ int fd_ioctl(int fd, uint64_t req, uint64_t arg)
     case TIOCGPGRP:
     {
         int* pgid = (int*) (uintptr_t) arg;
-        if (pgid)
+        if (pgid) {
+            if (!uptr_ok_w(pgid, sizeof(*pgid))) return -(int)EFAULT;
             *pgid = tty_get_fg_pgid();
+        }
         return 0;
     }
     case TIOCSPGRP:
     {
         int* pgid = (int*) (uintptr_t) arg;
-        if (pgid)
+        if (pgid) {
+            if (!uptr_ok(pgid, sizeof(*pgid))) return -(int)EFAULT;
             tty_set_fg_pgid(*pgid);
+        }
         return 0;
     }
     default:
@@ -1895,8 +1987,9 @@ int fd_fcntl(int fd, int cmd, uint64_t arg)
     switch (cmd)
     {
     case F_GETFD:
-        return 0;
+        return f->cloexec ? FD_CLOEXEC : 0;
     case F_SETFD:
+        f->cloexec = (arg & FD_CLOEXEC) ? 1 : 0;
         return 0;
     case F_GETFL:
         return f->flags;
@@ -1909,10 +2002,12 @@ int fd_fcntl(int fd, int cmd, uint64_t arg)
         int newfd = fd_alloc_from((int) arg);
         if (newfd < 0)
             return -(int) EMFILE;
-        vfs_file_t* nf = (vfs_file_t*) kcalloc(1, sizeof(vfs_file_t));
+        vfs_file_t* nf = file_alloc();
         if (!nf)
             return -(int) ENOMEM;
         *nf = *f;
+        nf->magic = VFS_FILE_MAGIC;
+        nf->cloexec = (cmd == F_DUPFD_CLOEXEC) ? 1 : 0; /* dup'd fd: cloexec per cmd */
         file_addref(nf);
         g_fds[newfd] = nf;
         return newfd;
@@ -1946,10 +2041,12 @@ int fd_dup2(int oldfd, int newfd)
         file_close(g_fds[newfd]);
         g_fds[newfd] = NULL;
     }
-    vfs_file_t* nf = (vfs_file_t*) kcalloc(1, sizeof(vfs_file_t));
+    vfs_file_t* nf = file_alloc();
     if (!nf)
         return -(int) ENOMEM;
     *nf = *f;
+    nf->magic = VFS_FILE_MAGIC;
+    nf->cloexec = 0; /* dup2 always clears FD_CLOEXEC on the new fd */
     file_addref(nf);
     g_fds[newfd] = nf;
     return newfd;
@@ -1959,7 +2056,10 @@ int fd_dup3(int oldfd, int newfd, int flags)
 {
     if (oldfd == newfd) return -(int)EINVAL;
     int r = fd_dup2(oldfd, newfd);
-    if (r >= 0 && (flags & O_CLOEXEC)) { /* cloexec not enforced yet, accepted */ }
+    if (r >= 0) {
+        vfs_file_t* nf = fd_get(r);
+        if (nf) nf->cloexec = (flags & O_CLOEXEC) ? 1 : 0;
+    }
     return r;
 }
 
@@ -2081,6 +2181,7 @@ int vfs_access(const char* path, int mode)
     vfs_node_t* n = vfs_lookup(path);
     if (!n) return -(int)ENOENT;
     if (mode == 0) return 0;
+    if ((mode & 1) && !(n->mode & 0111U)) return -(int)EACCES;
     return may_access(n, (uint32_t)mode) ? 0 : -(int)EACCES;
 }
 
@@ -2094,8 +2195,10 @@ int vfs_mknod(const char* path, uint32_t mode, uint64_t dev)
     if (!cred_is_root()) return -(int)EPERM;
     if (!may_create_in(parent)) return -(int)EACCES;
     if (dir_find(parent, leaf)) return -(int)EEXIST;
-    uint8_t type = ((mode & S_IFMT) == S_IFDIR) ? VFS_TYPE_DIR : VFS_TYPE_REG;
-    vfs_node_t* n = node_alloc(leaf, type, mode);
+    uint32_t ftype = mode & S_IFMT;
+    if (!ftype) ftype = S_IFREG;
+    uint8_t type = (ftype == S_IFDIR) ? VFS_TYPE_DIR : VFS_TYPE_REG;
+    vfs_node_t* n = node_alloc(leaf, type, apply_umask(mode & 07777U) | ftype);
     if (!n) return -(int)ENOMEM;
     dir_insert(parent, n);
     return 0;

@@ -220,6 +220,7 @@ static int64_t sys_fork(syscall_frame_t* f)
     child->uid = parent->uid; child->euid = parent->euid; child->suid = parent->suid;
     child->gid = parent->gid; child->egid = parent->egid; child->sgid = parent->sgid;
     child->fsuid = parent->fsuid; child->fsgid = parent->fsgid;
+    child->umask = parent->umask;
     memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     memcpy(child->exe_path, parent->exe_path, sizeof(child->exe_path));
 
@@ -266,6 +267,10 @@ static int64_t sys_clone(uint64_t flags, uint64_t child_stack, uint32_t* ptid,
 
     if (!(flags & CLONE_VM))
         return sys_fork(f);
+    if ((flags & CLONE_PARENT_SETTID) && (!ptid || !uptr_ok_w(ptid, sizeof(*ptid))))
+        return -(int64_t)EFAULT;
+    if ((flags & (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID)) && ctid && !uptr_ok_w(ctid, sizeof(*ctid)))
+        return -(int64_t)EFAULT;
 
     proc_t* child = proc_alloc(parent->pid);
     if (!child)
@@ -287,6 +292,7 @@ static int64_t sys_clone(uint64_t flags, uint64_t child_stack, uint32_t* ptid,
     child->uid  = parent->uid;  child->euid = parent->euid; child->suid = parent->suid;
     child->gid  = parent->gid;  child->egid = parent->egid; child->sgid = parent->sgid;
     child->fsuid = parent->fsuid; child->fsgid = parent->fsgid;
+    child->umask = parent->umask;
     memcpy(child->cwd,      parent->cwd,      sizeof(child->cwd));
     memcpy(child->exe_path, parent->exe_path, sizeof(child->exe_path));
 
@@ -344,6 +350,9 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
     vfs_node_t* node = vfs_lookup(exec_path);
     if (!node || node->type != VFS_TYPE_REG || !node->data)
         return -(int64_t) ENOENT;
+    int exec_perm = vfs_access(exec_path, 1);
+    if (exec_perm < 0)
+        return (int64_t)exec_perm;
 
     char shebang_interp[512] = {0};
     char shebang_arg[256] = {0};
@@ -387,6 +396,9 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
         node = vfs_lookup(shebang_interp);
         if (!node || node->type != VFS_TYPE_REG || !node->data)
             return -(int64_t) ENOENT;
+        exec_perm = vfs_access(shebang_interp, 1);
+        if (exec_perm < 0)
+            return (int64_t)exec_perm;
         exec_path = shebang_interp;
         is_shebang = true;
     }
@@ -540,6 +552,8 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
     vmm_switch(p->space);
     vmm_space_free(old);
 
+    vfs_cloexec_flush(); /* close FD_CLOEXEC fds now that exec has committed */
+
     for (int i = 0; i < NSIG; i++)
     {
         if (p->sig_actions[i].sa_handler != SIG_IGN)
@@ -611,7 +625,10 @@ __attribute__((noreturn)) void proc_do_exit(int code)
 
 static int64_t sys_wait4(int pid, int* wstatus, int options, void* rusage)
 {
-    (void) rusage;
+    if (wstatus && !uptr_ok_w(wstatus, sizeof(*wstatus)))
+        return -(int64_t)EFAULT;
+    if (rusage && !uptr_ok_w(rusage, 144))
+        return -(int64_t)EFAULT;
     proc_t* parent = cur();
 
     while (1)
@@ -683,16 +700,22 @@ static int64_t sys_arch_prctl(int code, uint64_t addr)
     switch (code)
     {
     case ARCH_SET_FS:
+        if (addr >= USER_LIMIT) return -(int64_t)EPERM;
         wrmsr(0xC0000100, addr);
         cur()->fs_base = addr;
         return 0;
     case ARCH_SET_GS:
+        if (addr >= USER_LIMIT) return -(int64_t)EPERM;
         wrmsr(0xC0000101, addr);
         return 0;
     case ARCH_GET_FS:
-        return (int64_t) cur()->fs_base;
+        if (!uptr_ok_w((void*)addr, sizeof(uint64_t))) return -(int64_t)EFAULT;
+        *(uint64_t*)addr = cur()->fs_base;
+        return 0;
     case ARCH_GET_GS:
-        return (int64_t) rdmsr(0xC0000101);
+        if (!uptr_ok_w((void*)addr, sizeof(uint64_t))) return -(int64_t)EFAULT;
+        *(uint64_t*)addr = rdmsr(0xC0000101);
+        return 0;
     }
     return -(int64_t) EINVAL;
 }
@@ -705,6 +728,8 @@ struct utsname
 static int64_t sys_uname(struct utsname* buf)
 {
     if (!buf)
+        return -(int64_t) EFAULT;
+    if (!uptr_ok_w(buf, sizeof(*buf)))
         return -(int64_t) EFAULT;
     memset(buf, 0, sizeof(*buf));
     memcpy(buf->sysname, "Kyronix", 7);
@@ -719,6 +744,8 @@ static int64_t sys_getcwd(char* buf, uint64_t size)
 {
     if (!buf || !size)
         return -(int64_t) EINVAL;
+    if (!uptr_ok_w(buf, size))
+        return -(int64_t) EFAULT;
     proc_t* p = cur();
     const char* cwd = p ? p->cwd : g_cwd;
     size_t len = strlen(cwd) + 1;
@@ -1027,6 +1054,11 @@ static int64_t sys_rt_sigaction(int sig, const k_sigaction_t* act, k_sigaction_t
         return -(int64_t) EINVAL;
 
     proc_t* p = cur();
+    if (!p) return -(int64_t) EFAULT;
+    if (oldact && !uptr_ok_w(oldact, sizeof(k_sigaction_t)))
+        return -(int64_t) EFAULT;
+    if (act && !uptr_ok(act, sizeof(k_sigaction_t)))
+        return -(int64_t) EFAULT;
     if (oldact)
         memcpy(oldact, &p->sig_actions[sig - 1], sizeof(k_sigaction_t));
     if (act)
@@ -1039,11 +1071,15 @@ static int64_t sys_rt_sigprocmask(int how, const uint64_t* set, uint64_t* oldset
 {
     (void) sigsetsize;
     proc_t* p = cur();
+    if (!p) return -(int64_t) EFAULT;
 
-    if (oldset)
+    if (oldset) {
+        if (!uptr_ok_w(oldset, 8)) return -(int64_t) EFAULT;
         *oldset = p->sig_mask;
+    }
     if (!set)
         return 0;
+    if (!uptr_ok(set, 8)) return -(int64_t) EFAULT;
 
     uint64_t bits = *set & ~((1ULL << (SIGKILL - 1)) | (1ULL << (SIGSTOP - 1)));
     switch (how)
@@ -1066,6 +1102,8 @@ static int64_t sys_rt_sigprocmask(int how, const uint64_t* set, uint64_t* oldset
 static int64_t sys_rt_sigreturn(syscall_frame_t* f)
 {
     rt_sigframe_t* frame = (rt_sigframe_t*) (cpu_get_user_rsp() - 8);
+    if (!uptr_ok(frame, sizeof(*frame)))
+        return -(int64_t)EFAULT;
     mcontext_t* mc = &frame->uc.uc_mcontext;
 
     f->r8 = mc->r8;
@@ -1138,6 +1176,7 @@ static int64_t sys_rt_sigsuspend(const uint64_t* mask, uint64_t sigsetsize)
     uint64_t saved = p->sig_mask;
     if (mask)
     {
+        if (!uptr_ok(mask, 8)) return -(int64_t)EFAULT;
         p->sig_mask = *mask & ~((1ULL << (SIGKILL - 1)) | (1ULL << (SIGSTOP - 1)));
     }
     while (!(p->pending_sigs & ~p->sig_mask))
@@ -1173,6 +1212,7 @@ static int64_t sys_nanosleep(void* r, void* m)
 {
     (void) m;
     if (!r) return 0;
+    if (!uptr_ok(r, 16)) return -(int64_t)EFAULT;
     uint64_t sec = ((uint64_t*) r)[0];
     uint64_t nsec = ((uint64_t*) r)[1];
     uint64_t ms = sec * 1000 + nsec / 1000000;
@@ -1229,6 +1269,8 @@ static int64_t sys_rename(const char* oldpath, const char* newpath)
 
 static int64_t sys_set_tid_address(void* p)
 {
+    if (p && !uptr_ok_w(p, sizeof(uint32_t)))
+        return -(int64_t)EFAULT;
     proc_t* proc = cur();
     if (proc) proc->cleartid_addr = (uint32_t*) p;
     return (int64_t) sys_getpid();
@@ -1481,9 +1523,15 @@ static inline void fds_set(uint8_t* set, int fd)
     if (set) set[fd >> 3] |= (uint8_t) (1 << (fd & 7));
 }
 
-static int64_t sys_select(int nfds, void* rfds, void* wfds, void* efds, void* timeout)
+static int64_t sys_select_common(int nfds, void* rfds, void* wfds, void* efds, void* timeout,
+                                 bool timeout_is_user)
 {
-    (void) efds;
+    if (nfds < 0 || nfds > VFS_FD_MAX) return -(int64_t)EINVAL;
+    uint64_t set_bytes = ((uint64_t)nfds + 7) / 8;
+    if (rfds && (!uptr_ok(rfds, set_bytes) || !uptr_ok_w(rfds, set_bytes))) return -(int64_t)EFAULT;
+    if (wfds && (!uptr_ok(wfds, set_bytes) || !uptr_ok_w(wfds, set_bytes))) return -(int64_t)EFAULT;
+    if (efds && (!uptr_ok(efds, set_bytes) || !uptr_ok_w(efds, set_bytes))) return -(int64_t)EFAULT;
+    if (timeout && timeout_is_user && !uptr_ok(timeout, 16)) return -(int64_t)EFAULT;
     uint64_t deadline = (uint64_t) -1ULL;
     if (timeout) {
         uint64_t ms = ((uint64_t*) timeout)[0] * 1000 + ((uint64_t*) timeout)[1] / 1000;
@@ -1500,8 +1548,9 @@ static int64_t sys_select(int nfds, void* rfds, void* wfds, void* efds, void* ti
             if (fds_test((uint8_t*) wfds, fd) && fd_pollout(fd)) { fds_set(wout, fd); ready++; }
         }
         if (ready > 0 || g_ticks >= deadline) {
-            if (rfds) memcpy(rfds, rout, sizeof(rout));
-            if (wfds) memcpy(wfds, wout, sizeof(wout));
+            if (rfds) memcpy(rfds, rout, set_bytes);
+            if (wfds) memcpy(wfds, wout, set_bytes);
+            if (efds) memset(efds, 0, set_bytes);
             return (int64_t) ready;
         }
         if (p && (p->pending_sigs & ~p->sig_mask)) return -(int64_t) EINTR;
@@ -1513,6 +1562,11 @@ static int64_t sys_select(int nfds, void* rfds, void* wfds, void* efds, void* ti
     }
 }
 
+static int64_t sys_select(int nfds, void* rfds, void* wfds, void* efds, void* timeout)
+{
+    return sys_select_common(nfds, rfds, wfds, efds, timeout, true);
+}
+
 static int64_t sys_pselect6(int nfds, void* rfds, void* wfds, void* efds, void* timeout,
                             void* sigmask)
 {
@@ -1520,16 +1574,20 @@ static int64_t sys_pselect6(int nfds, void* rfds, void* wfds, void* efds, void* 
     /* pselect uses timespec (nsec), convert to timeval-style (usec) for sys_select */
     uint64_t tv[2] = {0, 0};
     if (timeout) {
+        if (!uptr_ok(timeout, 16)) return -(int64_t)EFAULT;
         tv[0] = ((uint64_t*) timeout)[0];
         tv[1] = ((uint64_t*) timeout)[1] / 1000;
     }
-    return sys_select(nfds, rfds, wfds, efds, timeout ? tv : NULL);
+    return sys_select_common(nfds, rfds, wfds, efds, timeout ? tv : NULL, false);
 }
 
 static int64_t sys_umask(uint64_t mask)
 {
-    (void) mask;
-    return 0022;
+    proc_t* p = cur();
+    if (!p) return 0022;
+    uint32_t old = p->umask;
+    p->umask = (uint32_t)mask & 0777U;
+    return (int64_t)old;
 }
 
 static int64_t sys_ftruncate(int fd, uint64_t len)
@@ -1573,15 +1631,18 @@ static int64_t sys_statfs(const char* path, void* buf)
 
 static int64_t sys_getgroups(int size, uint32_t* list)
 {
-    (void) size;
-    (void) list;
+    if (size < 0) return -(int64_t)EINVAL;
+    if (size > 0 && (!list || !uptr_ok_w(list, (uint64_t)size * sizeof(*list))))
+        return -(int64_t)EFAULT;
     return 0;
 }
 
 static int64_t sys_setgroups(int size, const uint32_t* list)
 {
-    (void) size;
-    (void) list;
+    if (!is_root()) return -(int64_t)EPERM;
+    if (size < 0) return -(int64_t)EINVAL;
+    if (size > 0 && (!list || !uptr_ok(list, (uint64_t)size * sizeof(*list))))
+        return -(int64_t)EFAULT;
     return 0;
 }
 
@@ -1598,6 +1659,7 @@ static int64_t sys_getitimer(int w, void* v)
     (void) w;
     proc_t* p = cur();
     if (!v || !p) return 0;
+    if (!uptr_ok_w(v, 32)) return -(int64_t)EFAULT;
     uint64_t* out = (uint64_t*) v;
     out[0] = p->itimer_interval_ms / 1000;
     out[1] = (p->itimer_interval_ms % 1000) * 1000;
@@ -1611,8 +1673,10 @@ static int64_t sys_setitimer(int w, const void* n, void* o)
     (void) w;
     proc_t* p = cur();
     if (!p) return 0;
+    if (o && !uptr_ok_w(o, 32)) return -(int64_t)EFAULT;
     sys_getitimer(w, o); /* snapshot old value */
     if (n) {
+        if (!uptr_ok(n, 32)) return -(int64_t)EFAULT;
         const uint64_t* nv = (const uint64_t*) n; /* itimerval: interval(sec,usec), value(sec,usec) */
         p->itimer_interval_ms = nv[0] * 1000 + nv[1] / 1000;
         uint64_t val_ms       = nv[2] * 1000 + nv[3] / 1000;
@@ -1627,6 +1691,7 @@ static int64_t sys_clock_gettime(uint64_t c, void* t)
     (void) c;
     if (t)
     {
+        if (!uptr_ok_w(t, 16)) return -(int64_t)EFAULT;
         uint64_t ms = g_epoch_base * 1000 + g_ticks;
         ((uint64_t*) t)[0] = ms / 1000;
         ((uint64_t*) t)[1] = (ms % 1000) * 1000000ULL;
@@ -1639,6 +1704,7 @@ static int64_t sys_gettimeofday(void* tv, void* tz)
     (void) tz;
     if (tv)
     {
+        if (!uptr_ok_w(tv, 16)) return -(int64_t)EFAULT;
         uint64_t ms = g_epoch_base * 1000 + g_ticks;
         ((uint64_t*) tv)[0] = ms / 1000;
         ((uint64_t*) tv)[1] = (ms % 1000) * 1000ULL;
@@ -1648,8 +1714,10 @@ static int64_t sys_gettimeofday(void* tv, void* tz)
 
 static int64_t sys_times(void* b)
 {
-    if (b)
+    if (b) {
+        if (!uptr_ok_w(b, 32)) return -(int64_t)EFAULT;
         memset(b, 0, 32);
+    }
     return 0;
 }
 
@@ -1661,6 +1729,8 @@ struct iovec
 
 static int64_t sys_readv(int fd, const struct iovec* iov, int n)
 {
+    if (n < 0 || n > 1024) return -(int64_t)EINVAL;
+    if (n && (!iov || !uptr_ok(iov, (uint64_t)n * sizeof(*iov)))) return -(int64_t)EFAULT;
     int64_t total = 0;
     for (int i = 0; i < n; i++)
     {
@@ -1680,6 +1750,8 @@ static int64_t sys_readv(int fd, const struct iovec* iov, int n)
 
 static int64_t sys_writev(int fd, const void* iov_ptr, int n)
 {
+    if (n < 0 || n > 1024) return -(int64_t)EINVAL;
+    if (n && (!iov_ptr || !uptr_ok(iov_ptr, (uint64_t)n * sizeof(struct iovec)))) return -(int64_t)EFAULT;
     const struct iovec* iov = (const struct iovec*) iov_ptr;
     int64_t total = 0;
     for (int i = 0; i < n; i++)
@@ -1692,6 +1764,8 @@ static int64_t sys_writev(int fd, const void* iov_ptr, int n)
             break;
         }
         total += r;
+        if ((uint64_t) r < iov[i].iov_len)
+            break; /* short write (non-blocking socket): stop, don't skip the tail */
     }
     return total;
 }
@@ -1744,6 +1818,7 @@ static int64_t sys_mremap(uint64_t old_addr, uint64_t old_sz, uint64_t new_sz,
 }
 static int64_t sys_sendfile(int outfd, int infd, uint64_t* offp, uint64_t count)
 {
+    if (offp && !uptr_ok_w(offp, sizeof(*offp))) return -(int64_t)EFAULT;
     vfs_file_t* inf = fd_get_file(infd);
     if (!inf || !inf->node || inf->node->type != VFS_TYPE_REG) return -(int64_t)EINVAL;
     vfs_node_t* src = inf->node;
@@ -1791,6 +1866,8 @@ static int64_t sys_copy_file_range(int infd, uint64_t* off_in, int outfd, uint64
                                    uint64_t len, uint32_t flags)
 {
     (void)flags;
+    if (off_in && !uptr_ok_w(off_in, sizeof(*off_in))) return -(int64_t)EFAULT;
+    if (off_out && !uptr_ok_w(off_out, sizeof(*off_out))) return -(int64_t)EFAULT;
     vfs_file_t* inf = fd_get_file(infd);
     if (!inf || !inf->node || inf->node->type != VFS_TYPE_REG) return -(int64_t)EINVAL;
     vfs_node_t* src = inf->node;
@@ -2134,6 +2211,8 @@ static int64_t sys_sendmsg(int fd, const void* mhdr, int flags)
         int64_t r = fd_write(fd, (const void*)iov[i].iov_base, iov[i].iov_len);
         if (r < 0) return total ? total : r;
         total += r;
+        if ((uint64_t) r < iov[i].iov_len)
+            break; /* short write (non-blocking socket): stop, don't skip the tail */
     }
     return total;
 }
@@ -2184,11 +2263,17 @@ static int64_t sys_recvmsg(int fd, void* mhdr, int flags)
     return total;
 }
 
+volatile uint64_t g_dbg_sc_count = 0;
+volatile uint64_t g_dbg_last_sc[64] = {0}; /* per-pid: syscall currently executing */
+
 void syscall_dispatch(syscall_frame_t* f)
 {
     uint64_t nr = f->rax;
     uint64_t a1 = f->rdi, a2 = f->rsi, a3 = f->rdx;
     uint64_t a4 = f->r10, a5 = f->r8, a6 = f->r9;
+    g_dbg_sc_count++;
+    if (g_current_proc && g_current_proc->pid && g_current_proc->pid <= 64)
+        g_dbg_last_sc[g_current_proc->pid - 1] = nr;
 
     int64_t ret;
     switch (nr)
@@ -2274,6 +2359,7 @@ void syscall_dispatch(syscall_frame_t* f)
         ret = sys_access((const char*) a1, (int) a2);
         break;
     case 22:
+        if (!a1 || !uptr_ok_w((void*)a1, 2 * sizeof(int))) { ret = -(int64_t)EFAULT; break; }
         ret = fd_pipe((int*) a1);
         break;
     case 24:
@@ -2281,6 +2367,7 @@ void syscall_dispatch(syscall_frame_t* f)
         ret = 0;
         break;
     case 53:
+        if (!a4 || !uptr_ok_w((void*)a4, 2 * sizeof(int))) { ret = -(int64_t)EFAULT; break; }
         ret = fd_socketpair((int*) a4);
         break;
     case 23:
@@ -2616,8 +2703,8 @@ void syscall_dispatch(syscall_frame_t* f)
     case 135: ret = 0; break; /* personality */
     case 139: ret = -(int64_t)ENOSYS; break; /* sysfs */
     case 140: ret = 0; break; /* getpriority */
-    case 141: ret = 0; break; /* setpriority */
-    case 142: ret = 0; break; /* sched_setparam */
+    case 141: ret = is_root() ? 0 : -(int64_t)EPERM; break; /* setpriority */
+    case 142: ret = is_root() ? 0 : -(int64_t)EPERM; break; /* sched_setparam */
     case 143:
         if (a2) {
             if (!uptr_ok_w((void*)a2, 4)) { ret = -(int64_t)EFAULT; break; }
@@ -2625,7 +2712,7 @@ void syscall_dispatch(syscall_frame_t* f)
         }
         ret = 0;
         break; /* sched_getparam */
-    case 144: ret = 0; break; /* sched_setscheduler */
+    case 144: ret = is_root() ? 0 : -(int64_t)EPERM; break; /* sched_setscheduler */
     case 145: ret = 0; break; /* sched_getscheduler: SCHED_OTHER */
     case 146: ret = 0; break; /* sched_get_priority_max */
     case 147: ret = 0; break; /* sched_get_priority_min */
@@ -2637,8 +2724,8 @@ void syscall_dispatch(syscall_frame_t* f)
         }
         ret = 0;
         break; /* sched_rr_get_interval */
-    case 149: case 150: case 151: case 152: ret = 0; break; /* mlock/munlock */
-    case 153: ret = 0; break; /* vhangup */
+    case 149: case 150: case 151: case 152: ret = -(int64_t)ENOSYS; break; /* mlock/munlock */
+    case 153: ret = is_root() ? 0 : -(int64_t)EPERM; break; /* vhangup */
     case 137:
         ret = sys_statfs((const char*)a1, (void*)a2);
         break;
@@ -2651,7 +2738,7 @@ void syscall_dispatch(syscall_frame_t* f)
     case 158:
         ret = sys_arch_prctl((int)a1, a2);
         break;
-    case 159: ret = 0; break; /* adjtimex */
+    case 159: ret = is_root() ? 0 : -(int64_t)EPERM; break; /* adjtimex */
     case 160:
         ret = sys_getrlimit(a1, (void*)a2); /* setrlimit: accept silently */
         break;
@@ -2700,7 +2787,7 @@ void syscall_dispatch(syscall_frame_t* f)
         ret = (int64_t)t;
         break;
     }
-    case 203: ret = 0; break; /* sched_setaffinity */
+    case 203: ret = is_root() ? 0 : -(int64_t)EPERM; break; /* sched_setaffinity */
     case 204: {
         uint64_t sz = a2;
         if (a3 && sz > 0) {
@@ -2716,7 +2803,7 @@ void syscall_dispatch(syscall_frame_t* f)
     case 222: case 224: case 226: ret = 0; break; /* timer_create/gettime/delete stubs */
     case 223: ret = 0; break; /* timer_settime */
     case 225: ret = 0; break; /* timer_getoverrun */
-    case 227: ret = 0; break; /* clock_settime */
+    case 227: ret = is_root() ? 0 : -(int64_t)EPERM; break; /* clock_settime */
     case 232: ret = sys_epoll_wait((int)a1, (struct epoll_event*)a2, (int)a3, (int)a4); break;
     case 233: ret = sys_epoll_ctl((int)a1, (int)a2, (int)a3, (struct epoll_event*)a4); break;
     case 200:
@@ -2753,7 +2840,8 @@ void syscall_dispatch(syscall_frame_t* f)
     case 236: ret = -(int64_t)ENOSYS; break; /* vserver */
     case 240: case 241: case 242: case 243: case 244: case 245:
         ret = -(int64_t)ENOSYS; break; /* mqueue */
-    case 251: case 252: ret = 0; break; /* ioprio_set/get */
+    case 251: ret = is_root() ? 0 : -(int64_t)EPERM; break; /* ioprio_set */
+    case 252: ret = 0; break; /* ioprio_get */
     case 253: case 254: case 255: ret = -(int64_t)ENOSYS; break; /* inotify */
     case 247: /* waitid */
         ret = sys_wait4((int)a2, NULL, (int)a4, NULL);
@@ -2780,7 +2868,7 @@ void syscall_dispatch(syscall_frame_t* f)
     case 271:
         ret = sys_ppoll((struct pollfd_s*) a1, a2, (void*) a3, (const void*) a4, a5);
         break;
-    case 272: ret = 0; break; /* unshare */
+    case 272: ret = -(int64_t)ENOSYS; break; /* unshare */
     case 273:
         ret = sys_set_robust_list((void*)a1, a2);
         break;
@@ -2810,7 +2898,19 @@ void syscall_dispatch(syscall_frame_t* f)
     case 283: case 284: ret = -(int64_t)ENOSYS; break; /* signalfd4, eventfd2 */
     case 285: ret = 0; break; /* fallocate: no-op */
     case 286: ret = -(int64_t)ENOSYS; break; /* inotify_init1 */
-    case 287: ret = fd_pipe((int*)a1); break; /* pipe2: ignore O_CLOEXEC/O_NONBLOCK */
+    case 287:
+        if (!a1 || !uptr_ok_w((void*)a1, 2 * sizeof(int))) { ret = -(int64_t)EFAULT; break; }
+        ret = fd_pipe((int*)a1);
+        if (ret == 0 && (a2 & (O_CLOEXEC | O_NONBLOCK))) { /* pipe2 flags */
+            int* pf = (int*)a1;
+            for (int _e = 0; _e < 2; _e++) {
+                vfs_file_t* pe = fd_get_file(pf[_e]);
+                if (!pe) continue;
+                if (a2 & O_CLOEXEC)  pe->cloexec = 1;
+                if (a2 & O_NONBLOCK) pe->flags |= O_NONBLOCK;
+            }
+        }
+        break;
     case 288: ret = -(int64_t)ENOSYS; break; /* inotify_init1 (duplicate) */
     case 289: ret = sys_preadv((int)a1, (const struct iovec*)a2, (int)a3, a4); break;
     case 290: ret = sys_pwritev((int)a1, (const struct iovec*)a2, (int)a3, a4); break;
@@ -2819,16 +2919,17 @@ void syscall_dispatch(syscall_frame_t* f)
         ret = fd_dup3((int)a1, (int)a2, (int)a3);
         break;
     case 293:
+        if (!a1 || !uptr_ok_w((void*)a1, 2 * sizeof(int))) { ret = -(int64_t)EFAULT; break; }
         ret = fd_pipe((int*)a1);
         break;
     case 295: case 296: ret = -(int64_t)ENOSYS; break; /* fanotify */
-    case 300: ret = 0; break; /* clock_adjtime */
+    case 300: ret = is_root() ? 0 : -(int64_t)EPERM; break; /* clock_adjtime */
     case 301: ret = 0; break; /* syncfs: no-op */
     case 302:
         ret = sys_prlimit64(a1, a2, (void*) a3, (void*) a4);
         break;
-    case 303: ret = 0; break; /* finit_module */
-    case 304: ret = 0; break; /* sched_setattr */
+    case 303: ret = -(int64_t)ENOSYS; break; /* finit_module */
+    case 304: ret = is_root() ? 0 : -(int64_t)EPERM; break; /* sched_setattr */
     case 305:
         if (a2) {
             if (!uptr_ok_w((void*)a2, 56)) { ret = -(int64_t)EFAULT; break; }
@@ -2843,7 +2944,7 @@ void syscall_dispatch(syscall_frame_t* f)
         break;
     case 319: ret = sys_memfd_create((const char*)a1, (uint32_t)a2); break;
     case 324: ret = 0; break; /* membarrier: no-op on single-CPU */
-    case 325: ret = 0; break; /* mlock2 */
+    case 325: ret = -(int64_t)ENOSYS; break; /* mlock2 */
     case 326: ret = sys_copy_file_range((int)a1,(uint64_t*)a2,(int)a3,(uint64_t*)a4,a5,(uint32_t)a6); break;
     case 327: ret = sys_preadv((int)a1,(const struct iovec*)a2,(int)a3,a4); break; /* preadv2 */
     case 328: ret = sys_pwritev((int)a1,(const struct iovec*)a2,(int)a3,a4); break; /* pwritev2 */
