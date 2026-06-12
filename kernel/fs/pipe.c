@@ -4,22 +4,40 @@
 #include "mm/heap.h"
 #include "proc/proc.h"
 #include "arch/x86_64/pit.h"
+#include <stdbool.h>
 
+#define PIPE_MAGIC 0x4b59504950454d47ULL /* "KYPipeMG" */
 #define EPIPE 32
 #define EAGAIN 11
+#define EIO 5
 
 pipe_t* pipe_alloc(void)
 {
-    return (pipe_t*) kcalloc(1, sizeof(pipe_t));
+    pipe_t* p = (pipe_t*) kcalloc(1, sizeof(pipe_t));
+    if (p)
+        p->magic = PIPE_MAGIC;
+    return p;
 }
 
 void pipe_free(pipe_t* p)
 {
+    if (p)
+        p->magic = 0;
     kfree(p);
+}
+
+static bool pipe_valid(pipe_t* p)
+{
+    uintptr_t addr = (uintptr_t)p;
+    if (!p || addr < HEAP_START || addr >= HEAP_MAX || (addr & 7))
+        return false;
+    return p->magic == PIPE_MAGIC;
 }
 
 int64_t pipe_read(pipe_t* p, void* buf, uint64_t len)
 {
+    if (!pipe_valid(p))
+        return -(int64_t)EIO;
     uint8_t* out = (uint8_t*) buf;
     uint64_t done = 0;
 
@@ -56,6 +74,8 @@ int64_t pipe_read(pipe_t* p, void* buf, uint64_t len)
 
 int64_t pipe_peek(pipe_t* p, void* buf, uint64_t len, uint64_t skip)
 {
+    if (!pipe_valid(p))
+        return -(int64_t)EIO;
     uint8_t* out = (uint8_t*) buf;
     uint64_t done = 0;
 
@@ -85,6 +105,8 @@ int64_t pipe_peek(pipe_t* p, void* buf, uint64_t len, uint64_t skip)
 
 int64_t pipe_write(pipe_t* p, const void* buf, uint64_t len)
 {
+    if (!pipe_valid(p))
+        return -(int64_t)EIO;
     if (p->read_refs == 0) {
         proc_send_signal(g_current_proc, SIGPIPE);
         return -(int64_t) EPIPE;

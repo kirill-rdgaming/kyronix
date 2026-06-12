@@ -114,6 +114,7 @@ typedef struct vfs_node
 
 typedef struct
 {
+    uint64_t magic;
     vfs_node_t* node; /* NULL for pipe fds */
     uint64_t pos;
     int flags;
@@ -122,12 +123,14 @@ typedef struct
     pipe_t* wpipe; /* non-NULL for socket fds: separate write-direction pipe */
     uint32_t peer_pid, peer_uid, peer_gid;
     int passcred;
+    uint8_t cloexec; /* FD_CLOEXEC: close this fd on execve */
 } vfs_file_t;
 
 #define VFS_FD_MAX 1024
 
 void vfs_init(void);
 
+void vfs_cloexec_flush(void); /* close all FD_CLOEXEC fds (called on execve) */
 void vfs_set_fdtable(vfs_file_t** fds);
 vfs_file_t** vfs_get_fdtable(void);
 void vfs_copy_fdtable(vfs_file_t** dst, vfs_file_t** src);

@@ -1229,6 +1229,10 @@ int main(int argc, char** argv)
 {
     signal(SIGINT, SIG_IGN);
 
+    const char* path_env = getenv("PATH");
+    if (!path_env || !*path_env || !strstr(path_env, "/usr/bin"))
+        setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin", 1);
+
     if (getcwd(shell_pwd, sizeof(shell_pwd)) == NULL)
     {
         const char* env = getenv("PWD");

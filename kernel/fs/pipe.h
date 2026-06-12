@@ -6,6 +6,7 @@
 
 typedef struct
 {
+    uint64_t magic;
     uint8_t buf[PIPE_BUFSZ];
     uint32_t rpos;
     uint32_t count;

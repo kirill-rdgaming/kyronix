@@ -47,6 +47,7 @@ typedef struct proc
     uint32_t euid, egid; /* effective */
     uint32_t suid, sgid; /* saved-set */
     uint32_t fsuid, fsgid; /* filesystem credentials */
+    uint32_t umask;
     uint64_t kstack_guard; /* VA of the unmapped guard page below kstack */
     uint64_t itimer_value_ms;    /* setitimer: initial value (ms) */
     uint64_t itimer_interval_ms; /* setitimer: repeat interval (ms), 0=one-shot */

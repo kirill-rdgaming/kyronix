@@ -1,5 +1,6 @@
 #include "printf.h"
 #include "string.h"
+#include "../drivers/serial.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -211,6 +212,22 @@ int kprintf(const char* fmt, ...)
     va_list ap;
     va_start(ap, fmt);
     int n = vprintf_cb(g_putchar, g_putchar_ctx, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+static void serial_putchar_cb(char c, void* ctx)
+{
+    (void) ctx;
+    serial_putchar(COM1, c);
+}
+
+/* debug output: serial port only, never the framebuffer */
+int kdbg(const char* fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vprintf_cb(serial_putchar_cb, NULL, fmt, ap);
     va_end(ap);
     return n;
 }

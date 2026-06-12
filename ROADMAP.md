@@ -51,7 +51,9 @@ Target: Linux-compatible x86-64 OS способная запускать реа�
 - [x] musl libc как dynamic linker (/lib/ld-musl-x86_64.so.1)
 - [x] /bin/sh → ksh, /usr/bin/env → /bin/env
 - [x] ksh: pipes, redirects, history, tilde expansion
-- [x] sbase: 50+ POSIX утилит (cat, ls, grep, find, sed, awk, vi, …)
+- [x] Kyronix coreutils: собственные отдельные бинарники для базовых POSIX-команд
+- [x] Kyronix coreutils: find/sed/sort/uniq/tr/dd/du/cksum и базовые текстовые фильтры
+- [ ] Kyronix coreutils: awk/tar/md5sum/sha*sum и расширенные флаги
 - [x] tcc 0.9.28 (C compiler), NASM (assembler)
 
 ---

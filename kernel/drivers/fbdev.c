@@ -5,6 +5,7 @@
 #include "../mm/pmm.h"
 #include "../proc/proc.h"
 #include "../lib/string.h"
+#include "../syscall/syscall.h"
 
 typedef struct { uint32_t offset, length, msb_right; } fb_bitfield_t;
 
@@ -53,6 +54,7 @@ static int64_t fb0_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
     case FBIOGET_VSCREENINFO: {
         fb_var_t* v = (fb_var_t*)(uintptr_t)arg;
         if (!v) return -22;
+        if (!uptr_ok_w(v, sizeof(*v))) return -14;
         memset(v, 0, sizeof(*v));
         v->xres = v->xres_virtual = (uint32_t)g_fb.width;
         v->yres = v->yres_virtual = (uint32_t)g_fb.height;
@@ -76,6 +78,7 @@ static int64_t fb0_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
     case FBIOGET_FSCREENINFO: {
         fb_fix_t* f = (fb_fix_t*)(uintptr_t)arg;
         if (!f) return -22;
+        if (!uptr_ok_w(f, sizeof(*f))) return -14;
         memset(f, 0, sizeof(*f));
         memcpy(f->id, "kyronixfb", 9);
         f->smem_start   = g_fb.phys_addr;
