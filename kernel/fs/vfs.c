@@ -606,8 +606,15 @@ static int64_t dev_tty_write(vfs_node_t* n, const char* buf, uint64_t len)
     return tty_write(buf, len);
 }
 
+struct winsize
+{
+    uint16_t ws_row, ws_col, ws_xpixel, ws_ypixel;
+};
+
 static pipe_t* g_pty_m2s;
 static pipe_t* g_pty_s2m;
+static struct winsize g_pty_winsize = {25, 80, 0, 0};
+static int g_pty_slave_pgid = 0;
 
 static int64_t pty_master_read(vfs_node_t* n, char* buf, uint64_t len, uint64_t off)
 {
@@ -669,6 +676,22 @@ static int64_t pty_master_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
         if (arg && req != 0x40045431 && !uptr_ok_w((void*)(uintptr_t)arg, sizeof(int))) return -EFAULT;
         if (arg && req != 0x40045431) *(int*)(uintptr_t)arg = 0;
         return 0;
+    case 0x5413: { /* TIOCGWINSZ */
+        struct winsize* ws = (struct winsize*)(uintptr_t)arg;
+        if (!ws || !uptr_ok_w(ws, sizeof(*ws))) return -EFAULT;
+        *ws = g_pty_winsize;
+        return 0;
+    }
+    case 0x5414: { /* TIOCSWINSZ */
+        struct winsize* ws = (struct winsize*)(uintptr_t)arg;
+        if (!ws || !uptr_ok(ws, sizeof(*ws))) return -EFAULT;
+        g_pty_winsize = *ws;
+        /* send SIGWINCH to slave's foreground process group */
+        for (int i = 0; i < PROC_MAX; i++)
+            if (g_proctable[i].state != PROC_UNUSED && g_proctable[i].pgid == g_pty_slave_pgid)
+                proc_send_signal(&g_proctable[i], SIGWINCH);
+        return 0;
+    }
     }
     return 0;
 }
@@ -1869,10 +1892,6 @@ int fd_readlink(const char* path, char* buf, uint64_t bufsz)
 #define FIONBIO 0x5421
 #define FIOCLEX 0x5451
 
-struct winsize
-{
-    uint16_t ws_row, ws_col, ws_xpixel, ws_ypixel;
-};
 struct termios
 {
     uint32_t c_iflag, c_oflag, c_cflag, c_lflag;
@@ -1899,10 +1918,15 @@ int fd_ioctl(int fd, uint64_t req, uint64_t arg)
             return -(int) EINVAL;
         if (!uptr_ok_w(ws, sizeof(*ws)))
             return -(int) EFAULT;
-        ws->ws_row = 25;
-        ws->ws_col = 80;
-        ws->ws_xpixel = 0;
-        ws->ws_ypixel = 0;
+        *ws = g_pty_winsize;
+        return 0;
+    }
+    case TIOCSWINSZ:
+    {
+        struct winsize* ws = (struct winsize*) (uintptr_t) arg;
+        if (!ws || !uptr_ok(ws, sizeof(*ws)))
+            return -(int) EFAULT;
+        g_pty_winsize = *ws;
         return 0;
     }
     case TCGETS:
