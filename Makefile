@@ -112,7 +112,7 @@ $(BUILD_DIR)/%.o: %.S
 -include $(DEPS)
 
 $(LIMINE_DIR)/limine: $(LIMINE_DIR)/limine.c
-	$(MAKE) -C $(LIMINE_DIR)
+	gcc -o $@ $<
 
 iso: $(TARGET) $(INITRD) $(LIMINE_DIR)/limine
 	rm -rf iso_root
