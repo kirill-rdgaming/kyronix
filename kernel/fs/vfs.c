@@ -11,6 +11,9 @@
 #include "proc/proc.h"
 #include "syscall/syscall.h"
 
+static int procfs_getdents64(vfs_node_t* dir, uint64_t* pos, void* buf, uint64_t count, int* ret);
+static int procfs_readlink(const char* path, char* buf, uint64_t bufsz, int* ret);
+
 static vfs_node_t* g_root = NULL;
 static uint32_t g_next_ino = 1;
 
@@ -1158,9 +1161,6 @@ void vfs_init(void)
 
     vfs_mkdir_p("/dev", 0755);
     vfs_mkdir_p("/dev/input", 0755);
-    vfs_mkdir_p("/proc", 0555);
-    vfs_mkdir_p("/proc/self", 0555);
-    vfs_mkdir_p("/proc/self/fd", 0500);
     vfs_mkdir_p("/sys", 0555);
     vfs_mkdir_p("/tmp", 01777);
     vfs_mkdir_p("/tmp/.X11-unix", 01777);
@@ -1168,8 +1168,6 @@ void vfs_init(void)
     vfs_mkdir_p("/var/log", 0755);
     vfs_mkdir_p("/var/lib/xkb", 0755);
     vfs_mkdir_p("/run", 0755);
-    vfs_mkdir_p("/proc/bus/pci", 0555);
-    vfs_mkdir_p("/proc/bus/input", 0555);
     vfs_mkdir_p("/sys/class/graphics/fb0/device", 0555);
     vfs_mkdir_p("/sys/bus/platform", 0555);
     vfs_create_symlink("/sys/class/graphics/fb0/device/subsystem", "/sys/bus/platform");
@@ -1742,7 +1740,10 @@ int64_t fd_read(int fd, void* buf, uint64_t len)
             return 0;
         if ((f->flags & O_NONBLOCK) && n->chr_pollin && !n->chr_pollin(n))
             return -(int64_t) EAGAIN;
-        return n->chr_read(n, (char*) buf, len, f->pos);
+        int64_t r = n->chr_read(n, (char*) buf, len, f->pos);
+        if (r > 0)
+            f->pos += (uint64_t) r;
+        return r;
     }
     if (n->type == VFS_TYPE_DIR)
         return -(int64_t) EISDIR;
@@ -2000,6 +2001,10 @@ int fd_getdents64(int fd, void* buf, uint64_t count)
     if (dir->type != VFS_TYPE_DIR)
         return -(int) ENOTDIR;
 
+    int proc_ret = 0;
+    if (procfs_getdents64(dir, &f->pos, buf, count, &proc_ret))
+        return proc_ret;
+
     uint8_t* out = (uint8_t*) buf;
     uint64_t done = 0;
     uint64_t idx = 0;
@@ -2076,17 +2081,9 @@ int fd_readlink(const char* path, char* buf, uint64_t bufsz)
         return -(int) EINVAL;
     if (!uptr_ok_w(buf, bufsz))
         return -(int) EFAULT;
-    if (strcmp(path, "/proc/self/exe") == 0)
-    {
-        if (!g_current_proc || !g_current_proc->exe_path[0])
-            return -(int) ENOENT;
-        size_t n = strlen(g_current_proc->exe_path);
-        if (n >= bufsz)
-            n = bufsz - 1;
-        memcpy(buf, g_current_proc->exe_path, n);
-        buf[n] = '\0';
-        return (int) n;
-    }
+    int proc_ret = 0;
+    if (procfs_readlink(path, buf, bufsz, &proc_ret))
+        return proc_ret;
     vfs_node_t* n = vfs_lookup_nofollow(path);
     if (!n)
         return -(int) ENOENT;
@@ -2379,6 +2376,19 @@ int vfs_link(const char* oldpath, const char* newpath)
     ln->data = src->data; /* shared reference (no refcount — simple impl) */
     ln->size = src->size;
     ln->capacity = src->capacity;
+    if (src->type == VFS_TYPE_REG && src->data && src->size > 0) {
+        ln->data = (uint8_t*)kmalloc(src->size);
+        if (!ln->data) { kfree(ln); return -(int)ENOMEM; }
+        memcpy(ln->data, src->data, src->size);
+        ln->capacity = src->size;
+    } else if (src->type == VFS_TYPE_SYM && src->symlink) {
+        size_t len = strlen(src->symlink) + 1;
+        ln->symlink = (char*)kmalloc(len);
+        if (!ln->symlink) { kfree(ln); return -(int)ENOMEM; }
+        memcpy(ln->symlink, src->symlink, len);
+        ln->size = len - 1;
+        ln->capacity = 0;
+    }
     dir_insert(parent, ln);
     return 0;
 }

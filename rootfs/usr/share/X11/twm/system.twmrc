@@ -80,9 +80,9 @@ menu "defops"
 "Show Iconmgr"	f.showiconmgr
 "Hide Iconmgr"	f.hideiconmgr
 ""		f.nop
-"Xterm"		f.exec "exec xterm &"
-"Xcalc"		f.exec "exec xcalc &"
-"Xeyes"		f.exec "exec xeyes &"
+"Xterm"		f.exec "xterm &"
+"Xcalc"		f.exec "xcalc &"
+"Xeyes"		f.exec "xeyes &"
 ""		f.nop
 "Kill"		f.destroy
 "Delete"	f.delete

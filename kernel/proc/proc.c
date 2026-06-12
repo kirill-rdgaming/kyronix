@@ -81,10 +81,20 @@ proc_t* proc_alloc(uint32_t ppid)
         p->fds = (vfs_file_t**) kcalloc(VFS_FD_MAX, sizeof(vfs_file_t*));
         if (!p->fds)
         {
-            kfree(p->kstack);
+            proc_kstack_free(p);
             p->state = PROC_UNUSED;
             return NULL;
         }
+        p->fds_refcnt = (uint32_t*) kmalloc(sizeof(uint32_t));
+        if (!p->fds_refcnt)
+        {
+            kfree(p->fds);
+            p->fds = NULL;
+            proc_kstack_free(p);
+            p->state = PROC_UNUSED;
+            return NULL;
+        }
+        *p->fds_refcnt = 1;
 
         p->mmap_bump = 0x0000500000000000ULL;
         p->umask = 0022;

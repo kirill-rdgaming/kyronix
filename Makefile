@@ -53,6 +53,7 @@ SRCS := \
     kernel/proc/proc.c                 \
     kernel/proc/signal.c               \
     kernel/fs/vfs.c                    \
+    kernel/fs/procfs.c                 \
     kernel/fs/pipe.c                   \
     kernel/fs/cpio.c                   \
     kernel/drivers/serial.c           \

@@ -1068,6 +1068,81 @@ static void argv_to_cmd(char** argv, int argc, char* buf, size_t sz)
     buf[pos] = '\0';
 }
 
+static int apply_builtin_redirs(char** argv, int* argc, int start)
+{
+    int out_fd = -1, err_fd = -1;
+    int new_argc = start;
+
+    for (int i = start; i < *argc; i++)
+    {
+        int target = -1;
+        int append = 0;
+        const char* path = NULL;
+
+        if (strcmp(argv[i], ">") == 0 || strcmp(argv[i], ">>") == 0 ||
+            strcmp(argv[i], "1>") == 0 || strcmp(argv[i], "1>>") == 0) {
+            target = STDOUT_FILENO;
+            append = strstr(argv[i], ">>") != NULL;
+            if (i + 1 >= *argc) { errno = EINVAL; goto fail; }
+            path = argv[++i];
+        } else if (strcmp(argv[i], "2>") == 0 || strcmp(argv[i], "2>>") == 0) {
+            target = STDERR_FILENO;
+            append = strcmp(argv[i], "2>>") == 0;
+            if (i + 1 >= *argc) { errno = EINVAL; goto fail; }
+            path = argv[++i];
+        } else if (strcmp(argv[i], "2>&1") == 0) {
+            if (err_fd >= 0) close(err_fd);
+            err_fd = dup(STDOUT_FILENO);
+            if (err_fd < 0) goto fail;
+            continue;
+        } else if (argv[i][0] == '>' && argv[i][1]) {
+            target = STDOUT_FILENO;
+            path = argv[i] + 1;
+        } else if (strncmp(argv[i], "2>", 2) == 0 && argv[i][2]) {
+            if (strcmp(argv[i] + 2, "&1") == 0) {
+                if (err_fd >= 0) close(err_fd);
+                err_fd = dup(STDOUT_FILENO);
+                if (err_fd < 0) goto fail;
+                continue;
+            }
+            target = STDERR_FILENO;
+            path = argv[i] + 2;
+        } else {
+            argv[new_argc++] = argv[i];
+            continue;
+        }
+
+        int flags = O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC);
+        int fd = open(path, flags, 0666);
+        if (fd < 0) goto fail;
+        if (target == STDOUT_FILENO) {
+            if (out_fd >= 0) close(out_fd);
+            out_fd = fd;
+        } else {
+            if (err_fd >= 0) close(err_fd);
+            err_fd = fd;
+        }
+    }
+
+    argv[new_argc] = NULL;
+    *argc = new_argc;
+
+    if (out_fd >= 0) {
+        if (dup2(out_fd, STDOUT_FILENO) < 0) goto fail;
+        close(out_fd);
+    }
+    if (err_fd >= 0) {
+        if (dup2(err_fd, STDERR_FILENO) < 0) goto fail;
+        close(err_fd);
+    }
+    return 0;
+
+fail:
+    if (out_fd >= 0) close(out_fd);
+    if (err_fd >= 0) close(err_fd);
+    return -1;
+}
+
 static int run_command(int argc, char** argv)
 {
     if (argc == 0)
@@ -1121,6 +1196,10 @@ static int run_command(int argc, char** argv)
 
     if (strcmp(argv[0], "exec") == 0)
     {
+        if (apply_builtin_redirs(argv, &argc, 1) < 0) {
+            perror("exec");
+            return 1;
+        }
         if (argc == 1)
             return 0;
         execvp(argv[1], argv + 1);
