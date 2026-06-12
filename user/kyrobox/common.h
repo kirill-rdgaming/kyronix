@@ -1,5 +1,5 @@
-#ifndef KYRONIX_COREUTILS_COMMON_H
-#define KYRONIX_COREUTILS_COMMON_H
+#ifndef KYROBOX_COMMON_H
+#define KYROBOX_COMMON_H
 
 #define _POSIX_C_SOURCE 200809L
 #include <ctype.h>

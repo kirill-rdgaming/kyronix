@@ -7,7 +7,7 @@ all:
 	$(MAKE) -C shell
 	$(MAKE) -C login
 	$(MAKE) -C vi
-	$(MAKE) -C coreutils
+	$(MAKE) -C kyrobox
 	$(MAKE) -C fetch
 	rm -rf $(ROOTFS)/bin
 	mkdir -p $(ROOTFS)/bin
@@ -28,6 +28,6 @@ clean:
 	$(MAKE) -C shell clean
 	$(MAKE) -C login clean
 	$(MAKE) -C vi clean
-	$(MAKE) -C coreutils clean
+	$(MAKE) -C kyrobox clean
 	$(MAKE) -C fetch clean
 	rm -rf $(ROOTFS)/bin
