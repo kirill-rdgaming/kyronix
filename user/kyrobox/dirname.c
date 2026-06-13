@@ -11,8 +11,7 @@ int main(int argc, char** argv)
         puts(".");
     else if (p == tmp)
         puts("/");
-    else
-    {
+    else {
         *p = 0;
         puts(tmp);
     }

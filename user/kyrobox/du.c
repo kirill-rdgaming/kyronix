@@ -3,8 +3,7 @@
 static long total_blocks(const char* path)
 {
     struct stat st;
-    if (lstat(path, &st) < 0)
-    {
+    if (lstat(path, &st) < 0) {
         kx_warn(path);
         return 0;
     }
@@ -15,8 +14,7 @@ static long total_blocks(const char* path)
     if (!d)
         return total;
     struct dirent* de;
-    while ((de = readdir(d)))
-    {
+    while ((de = readdir(d))) {
         if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
             continue;
         char child[PATH_MAX];

@@ -16,11 +16,9 @@ void fflush_all(void)
 ssize_t full_read(int fd, void* buf, size_t len)
 {
     ssize_t total = 0;
-    while (len > 0)
-    {
+    while (len > 0) {
         ssize_t n = read(fd, (char*) buf + total, len);
-        if (n < 0)
-        {
+        if (n < 0) {
             if (errno == EINTR)
                 continue;
             return total ? total : -1;
@@ -36,11 +34,9 @@ ssize_t full_read(int fd, void* buf, size_t len)
 ssize_t full_write(int fd, const void* buf, size_t len)
 {
     ssize_t total = 0;
-    while (len > 0)
-    {
+    while (len > 0) {
         ssize_t n = write(fd, (const char*) buf + total, len);
-        if (n < 0)
-        {
+        if (n < 0) {
             if (errno == EINTR)
                 continue;
             return total ? total : -1;
@@ -54,8 +50,7 @@ ssize_t full_write(int fd, const void* buf, size_t len)
 int safe_poll(struct pollfd* fds, nfds_t nfds, int timeout)
 {
     int n;
-    do
-    {
+    do {
         n = poll(fds, nfds, timeout);
     } while (n < 0 && errno == EINTR);
     return n;
@@ -64,8 +59,7 @@ int safe_poll(struct pollfd* fds, nfds_t nfds, int timeout)
 int get_terminal_width_height(int fd, unsigned* cols, unsigned* rows)
 {
     struct winsize win;
-    if (ioctl(fd, TIOCGWINSZ, &win) == 0)
-    {
+    if (ioctl(fd, TIOCGWINSZ, &win) == 0) {
         *cols = win.ws_col;
         *rows = win.ws_row;
         return 0;
@@ -78,8 +72,7 @@ int32_t read_key(int fd, char* buf UNUSED_PARAM, int timeout)
     unsigned char c;
     ssize_t n;
 
-    if (timeout >= 0)
-    {
+    if (timeout >= 0) {
         struct pollfd pfd = {.fd = fd, .events = POLLIN};
         if (safe_poll(&pfd, 1, timeout) <= 0)
             return -1;
@@ -89,13 +82,11 @@ int32_t read_key(int fd, char* buf UNUSED_PARAM, int timeout)
     if (n <= 0)
         return -1;
 
-    if (c == 0x1b)
-    {
+    if (c == 0x1b) {
         unsigned char seq[8];
         int i;
 
-        for (i = 0; i < 6; i++)
-        {
+        for (i = 0; i < 6; i++) {
             struct pollfd pfd = {.fd = fd, .events = POLLIN};
             if (poll(&pfd, 1, 20) <= 0)
                 break;
@@ -106,12 +97,9 @@ int32_t read_key(int fd, char* buf UNUSED_PARAM, int timeout)
         if (i == 0)
             return 0x1b;
 
-        if (seq[0] == '[')
-        {
-            if (i >= 2)
-            {
-                switch (seq[1])
-                {
+        if (seq[0] == '[') {
+            if (i >= 2) {
+                switch (seq[1]) {
                 case 'A':
                     return KEYCODE_UP;
                 case 'B':
@@ -125,8 +113,7 @@ int32_t read_key(int fd, char* buf UNUSED_PARAM, int timeout)
                 case 'F':
                     return KEYCODE_END;
                 case '~':
-                    switch (seq[2])
-                    {
+                    switch (seq[2]) {
                     case '1':
                     case '7':
                         return KEYCODE_HOME;
@@ -165,13 +152,9 @@ int32_t read_key(int fd, char* buf UNUSED_PARAM, int timeout)
                     break;
                 }
             }
-        }
-        else if (seq[0] == 'O')
-        {
-            if (i >= 1)
-            {
-                switch (seq[1])
-                {
+        } else if (seq[0] == 'O') {
+            if (i >= 1) {
+                switch (seq[1]) {
                 case 'H':
                     return KEYCODE_HOME;
                 case 'F':

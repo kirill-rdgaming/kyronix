@@ -5,8 +5,7 @@ int main(int argc, char** argv)
     (void) argv;
     char cwd[PATH_MAX];
     kx_prog = "pwd";
-    if (!getcwd(cwd, sizeof(cwd)))
-    {
+    if (!getcwd(cwd, sizeof(cwd))) {
         kx_warn(".");
         return 1;
     }

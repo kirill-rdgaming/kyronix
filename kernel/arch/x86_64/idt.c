@@ -1,18 +1,18 @@
 #include "idt.h"
 #include "arch/x86_64/syscall_setup.h"
 #include "drivers/fb.h"
+#include "exec/process.h"
 #include "fs/vfs.h"
 #include "gdt.h"
 #include "lib/printf.h"
 #include "mm/pmm.h"
+#include "mm/vma.h"
 #include "mm/vmm.h"
 #include "pic.h"
 #include "pit.h"
 #include "proc/proc.h"
+#include "proc/signal.h"
 #include "syscall/syscall.h"
-
-volatile uint64_t g_dbg_sc_count = 0;
-volatile uint64_t g_dbg_last_sc[64] = {0};
 
 #define IDT_INT_GATE 0x8E
 #define IDT_TRAP_GATE 0x8F
@@ -20,8 +20,7 @@ volatile uint64_t g_dbg_last_sc[64] = {0};
 
 static idt_entry_t g_idt[256] __attribute__((aligned(16)));
 
-typedef struct
-{
+typedef struct {
     void (*fn)(int, void*);
     void* arg;
 } irq_handler_t;
@@ -29,8 +28,7 @@ static irq_handler_t g_irq_handlers[16];
 
 void request_irq(uint8_t irq, void (*fn)(int, void*), void* arg)
 {
-    if (irq < 16)
-    {
+    if (irq < 16) {
         g_irq_handlers[irq].fn = fn;
         g_irq_handlers[irq].arg = arg;
         pic_unmask_irq(irq);
@@ -67,8 +65,7 @@ void idt_init(void)
 
     idt_set_gate(0x80, isr_stub_table[48], IDT_USER_GATE);
 
-    struct
-    {
+    struct {
         uint16_t limit;
         uint64_t base;
     } __attribute__((packed)) idtr = {
@@ -113,39 +110,87 @@ static const char* const exc_name[] = {
     "(reserved 31)",
 };
 
+typedef enum {
+    PF_UNHANDLED = 0,
+    PF_HANDLED,
+    PF_SIGSEGV,
+    PF_SIGBUS,
+} page_fault_result_t;
+
+static bool page_fault_stack_growth_ok(cpu_state_t* state, uint64_t page, bool exec)
+{
+    if (exec)
+        return false;
+    if (page < USER_STACK_GROW_BASE || page >= USER_STACK_TOP)
+        return false;
+    return page + USER_STACK_GROW_SLOP_PAGES * PAGE_SIZE >= state->rsp;
+}
+
+static page_fault_result_t handle_user_page_fault(cpu_state_t* state)
+{
+    if (!g_current_proc || !g_current_proc->space)
+        return PF_SIGSEGV;
+
+    if (state->error_code & 0x1)
+        return PF_SIGSEGV; /* protection violation */
+
+    uint64_t cr2 = read_cr2();
+    uint64_t page = cr2 & ~0xFFFULL;
+    bool write = (state->error_code & 0x2) != 0;
+    bool exec = (state->error_code & 0x10) != 0;
+
+    if (page_fault_stack_growth_ok(state, page, exec)) {
+        void* phys = pmm_alloc_zeroed();
+        if (!phys)
+            return PF_SIGBUS;
+        if (vmm_map(g_current_proc->space, page, (uint64_t) phys, VMM_UDATA) == 0)
+            return PF_HANDLED;
+        pmm_free(phys);
+        return PF_SIGBUS;
+    }
+
+    if (vma_page_fault_allowed(g_current_proc->space, page, write, exec)) {
+        void* phys = pmm_alloc_zeroed();
+        if (!phys)
+            return PF_SIGBUS;
+        uint64_t flags = vma_page_flags(g_current_proc->space, page);
+        if (vmm_map(g_current_proc->space, page, (uint64_t) phys, flags) == 0)
+            return PF_HANDLED;
+        pmm_free(phys);
+        return PF_SIGBUS;
+    }
+
+    return PF_SIGSEGV;
+}
+
+static int exception_signal(uint64_t n)
+{
+    static const int exc_sig[] = {
+        SIGFPE,  SIGFPE, SIGILL,  SIGTRAP, SIGILL, SIGFPE, SIGILL, SIGFPE,  SIGFPE, SIGFPE, SIGFPE,
+        SIGTRAP, SIGILL, SIGSEGV, SIGSEGV, SIGFPE, SIGBUS, SIGFPE, SIGTRAP, SIGFPE, SIGFPE, SIGFPE,
+        SIGFPE,  SIGFPE, SIGFPE,  SIGFPE,  SIGFPE, SIGFPE, SIGFPE, SIGFPE,  SIGFPE, SIGFPE,
+    };
+    return (n < 32) ? exc_sig[n] : SIGSEGV;
+}
+
 void isr_dispatch(cpu_state_t* state)
 {
     uint64_t n = state->int_no;
 
-    if (n < 32)
-    {
-        /* demand paging: allocate a page for non-present user-space access */
-        if (n == 14 && g_current_proc && (state->cs & 3) == 3 && !(state->error_code & 0x1))
-        {
-            uint64_t cr2 = read_cr2();
-            uint64_t page = cr2 & ~0xFFFULL;
-            if (page >= 0x400000ULL)
-            {
-                void* phys = pmm_alloc_zeroed();
-                if (phys && vmm_map(g_current_proc->space, page, (uint64_t) phys, VMM_UDATA) == 0)
+    if (n < 32) {
+        /* user-mode exception: kill the process, dont halt the kernel */
+        if ((state->cs & 3) == 3 && g_current_proc) {
+            int sig = exception_signal(n);
+            if (n == 14) {
+                page_fault_result_t pf = handle_user_page_fault(state);
+                if (pf == PF_HANDLED)
                     return;
-                if (phys)
-                    pmm_free(phys);
+                sig = (pf == PF_SIGBUS) ? SIGBUS : SIGSEGV;
             }
-        }
-
-        /* user-mode exception: kill the process, don't halt the kernel */
-        if ((state->cs & 3) == 3 && g_current_proc)
-        {
-            static const int exc_sig[] = {8, 8, 4, 5, 4, 8, 4, 8, 8, 8, 8, 5, 4, 11, 8, 8,
-                                          7, 8, 5, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,  8, 8};
-            int sig = (n < 32) ? exc_sig[n] : 11;
-            kprintf("\n[exc#%lu pid=%u RIP=%lx] → sig %d\n", n, g_current_proc->pid, state->rip,
-                    sig);
-            if (n == 14)
-            {
+            kdbg("\n[exc#%lu pid=%u RIP=%lx] -> sig %d\n", n, g_current_proc->pid, state->rip, sig);
+            if (n == 14) {
                 uint64_t cr2 = read_cr2();
-                kprintf("  CR2=%lx err=%lx\n", cr2, state->error_code);
+                kdbg("  CR2=%lx err=%lx\n", cr2, state->error_code);
             }
             proc_do_exit(-sig);
         }
@@ -164,8 +209,7 @@ void isr_dispatch(cpu_state_t* state)
         kprintf("  R14   = 0x%016lx   R15    = 0x%016lx\n", state->r14, state->r15);
         kprintf("  RBP   = 0x%016lx\n", state->rbp);
 
-        if (n == 14)
-        {
+        if (n == 14) {
             uint64_t cr2 = read_cr2();
             kprintf("  CR2   = 0x%016lx  (fault address)\n", cr2);
             kprintf("  PF flags: %s%s%s%s%s\n", state->error_code & 1 ? "present " : "non-present ",
@@ -179,51 +223,28 @@ void isr_dispatch(cpu_state_t* state)
             kprintf("  RSP   = 0x%016lx   SS     = 0x%04lx  (ring-3)\n", state->rsp, state->ss);
 
         cpu_halt();
-    }
-    else if (n < 48)
-    {
+    } else if (n < 48) {
         uint8_t irq = (uint8_t) (n - 32);
-        if (irq == 0)
-        {
+        if (irq == 0) {
             g_ticks++;
             fb_cursor_blink_tick(g_ticks);
             pic_send_eoi(0);
-            if (g_ticks % 2000 == 0)
-            {
-                extern volatile uint64_t g_dbg_sc_count;
-                extern volatile uint64_t g_dbg_last_sc[64];
-                kdbg("[HB t=%lu cnt=%lu]", g_ticks, g_dbg_sc_count);
-                for (int _i = 0; _i < PROC_MAX; _i++)
-                {
-                    proc_t* _p = &g_proctable[_i];
-                    if (_p->state == PROC_UNUSED)
-                        continue;
-                    uint64_t sc = (_p->pid && _p->pid <= 64) ? g_dbg_last_sc[_p->pid - 1] : 0;
-                    /* state: 1=RUN 2=READY 3=WAIT 4=ZOMBIE */
-                    kdbg(" p%u:s%d:nr%lu", _p->pid, _p->state, sc);
-                }
-                kdbg("\n");
-            }
-            for (int i = 0; i < PROC_MAX; i++)
-            {
+            for (int i = 0; i < PROC_MAX; i++) {
                 proc_t* pc = &g_proctable[i];
                 if (pc->state == PROC_UNUSED)
                     continue;
-                if (pc->wakeup_tick && g_ticks >= pc->wakeup_tick)
-                {
+                if (pc->wakeup_tick && g_ticks >= pc->wakeup_tick) {
                     pc->wakeup_tick = 0;
                     if (pc->state == PROC_WAITING)
                         pc->state = PROC_READY;
                 }
-                if (pc->alarm_tick && g_ticks >= pc->alarm_tick)
-                {
+                if (pc->alarm_tick && g_ticks >= pc->alarm_tick) {
                     pc->alarm_tick = 0;
                     proc_send_signal(pc, SIGALRM);
                     if (pc->state == PROC_WAITING)
                         pc->state = PROC_READY;
                 }
-                if (pc->itimer_next_tick && g_ticks >= pc->itimer_next_tick)
-                {
+                if (pc->itimer_next_tick && g_ticks >= pc->itimer_next_tick) {
                     pc->itimer_next_tick =
                         pc->itimer_interval_ms ? pc->itimer_next_tick + pc->itimer_interval_ms : 0;
                     proc_send_signal(pc, SIGALRM);
@@ -231,12 +252,10 @@ void isr_dispatch(cpu_state_t* state)
                         pc->state = PROC_READY;
                 }
             }
-            if ((state->cs & 3) == 3 && g_current_proc)
-            {
+            if ((state->cs & 3) == 3 && g_current_proc) {
                 proc_t* p = g_current_proc;
                 proc_t* next = proc_next_ready(p);
-                if (next)
-                {
+                if (next) {
                     p->state = PROC_READY;
                     next->state = PROC_RUNNING;
                     vfs_set_fdtable(next->fds);
@@ -249,9 +268,7 @@ void isr_dispatch(cpu_state_t* state)
                     cpu_set_kernel_stack(p->kstack_top);
                 }
             }
-        }
-        else
-        {
+        } else {
             irq_handler_t* h = &g_irq_handlers[irq];
             if (h->fn)
                 h->fn((int) irq, h->arg);

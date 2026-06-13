@@ -9,10 +9,8 @@ int main(int argc, char** argv)
     if (!end || *end)
         kx_die("bad mode");
     int rc = 0;
-    for (int i = 2; i < argc; i++)
-    {
-        if (chmod(argv[i], (mode_t) mode) < 0)
-        {
+    for (int i = 2; i < argc; i++) {
+        if (chmod(argv[i], (mode_t) mode) < 0) {
             kx_warn(argv[i]);
             rc = 1;
         }

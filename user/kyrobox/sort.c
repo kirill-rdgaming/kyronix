@@ -12,21 +12,17 @@ int main(int argc, char** argv)
     char** lines = NULL;
     size_t nlines = 0, caplines = 0;
     int rc = 0;
-    for (int a = 1; a < argc; a++)
-    {
+    for (int a = 1; a < argc; a++) {
         FILE* f = argv[a] ? fopen(argv[a], "r") : stdin;
-        if (!f)
-        {
+        if (!f) {
             kx_warn(argv[a]);
             rc = 1;
             continue;
         }
         char* line = NULL;
         size_t cap = 0;
-        while (getline(&line, &cap, f) >= 0)
-        {
-            if (nlines == caplines)
-            {
+        while (getline(&line, &cap, f) >= 0) {
+            if (nlines == caplines) {
                 caplines = caplines ? caplines * 2 : 64;
                 lines = realloc(lines, caplines * sizeof(*lines));
             }
@@ -37,8 +33,7 @@ int main(int argc, char** argv)
             fclose(f);
     }
     qsort(lines, nlines, sizeof(*lines), cmp_lines);
-    for (size_t i = 0; i < nlines; i++)
-    {
+    for (size_t i = 0; i < nlines; i++) {
         fputs(lines[i], stdout);
         free(lines[i]);
     }

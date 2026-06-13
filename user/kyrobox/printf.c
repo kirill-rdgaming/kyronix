@@ -5,15 +5,12 @@ int main(int argc, char** argv)
         return 0;
     const char* fmt = argv[1];
     int arg = 2;
-    for (const char* p = fmt; *p; p++)
-    {
-        if (*p != '\\' && *p != '%')
-        {
+    for (const char* p = fmt; *p; p++) {
+        if (*p != '\\' && *p != '%') {
             putchar(*p);
             continue;
         }
-        if (*p == '\\')
-        {
+        if (*p == '\\') {
             p++;
             if (*p == 'n')
                 putchar('\n');
@@ -34,8 +31,7 @@ int main(int argc, char** argv)
             fputs(arg < argc ? argv[arg++] : "", stdout);
         else if (*p == 'd' || *p == 'i')
             printf("%ld", arg < argc ? strtol(argv[arg++], NULL, 10) : 0L);
-        else
-        {
+        else {
             putchar('%');
             if (*p)
                 putchar(*p);

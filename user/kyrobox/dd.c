@@ -5,8 +5,7 @@ int main(int argc, char** argv)
     const char *ifile = NULL, *ofile = NULL;
     size_t bs = 512;
     long count = -1;
-    for (int i = 1; i < argc; i++)
-    {
+    for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "if=", 3) == 0)
             ifile = argv[i] + 3;
         else if (strncmp(argv[i], "of=", 3) == 0)
@@ -18,13 +17,11 @@ int main(int argc, char** argv)
     }
     FILE* in = ifile ? fopen(ifile, "rb") : stdin;
     FILE* out = ofile ? fopen(ofile, "wb") : stdout;
-    if (!in)
-    {
+    if (!in) {
         kx_warn(ifile);
         return 1;
     }
-    if (!out)
-    {
+    if (!out) {
         kx_warn(ofile);
         if (ifile)
             fclose(in);
@@ -35,10 +32,8 @@ int main(int argc, char** argv)
         return 1;
     long blocks = 0;
     size_t n;
-    while ((count < 0 || blocks < count) && (n = fread(buf, 1, bs, in)) > 0)
-    {
-        if (fwrite(buf, 1, n, out) != n)
-        {
+    while ((count < 0 || blocks < count) && (n = fread(buf, 1, bs, in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) {
             free(buf);
             return 1;
         }

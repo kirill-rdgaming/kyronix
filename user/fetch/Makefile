@@ -1,5 +1,5 @@
 CC := musl-gcc
-CFLAGS := -std=c99 -O2 -Wall -Wextra -fno-pie -L../../build
+CFLAGS := -std=c99 -O2 -Wall -Wextra -fno-pie -fno-link-libatomic
 LDFLAGS := -static -no-pie
 OUT := ../../build/bin
 

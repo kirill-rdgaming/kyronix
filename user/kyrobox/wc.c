@@ -8,26 +8,22 @@ int main(int argc, char** argv)
     if (first == argc)
         argv[argc++] = NULL;
     int rc = 0;
-    for (int a = first; a < argc; a++)
-    {
+    for (int a = first; a < argc; a++) {
         FILE* f = argv[a] ? fopen(argv[a], "r") : stdin;
-        if (!f)
-        {
+        if (!f) {
             kx_warn(argv[a]);
             rc = 1;
             continue;
         }
         long lines = 0, words = 0, bytes = 0;
         int inword = 0, c;
-        while ((c = fgetc(f)) != EOF)
-        {
+        while ((c = fgetc(f)) != EOF) {
             bytes++;
             if (c == '\n')
                 lines++;
             if (isspace(c))
                 inword = 0;
-            else if (!inword)
-            {
+            else if (!inword) {
                 words++;
                 inword = 1;
             }

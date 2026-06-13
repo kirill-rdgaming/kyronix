@@ -4,8 +4,7 @@
 #define PCI_CFG_ADDR 0xCF8
 #define PCI_CFG_DATA 0xCFC
 
-typedef struct
-{
+typedef struct {
     uint8_t bus, dev, fn;
     uint16_t vendor, device;
     uint8_t class, subclass, prog_if;

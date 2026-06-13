@@ -4,6 +4,8 @@
 
 Kyronix is a hobby x86-64 operating system focused on POSIX/Linux compatibility.
 
+![Kyronix preview](meta/screenshots/preview.png)
+
 ## Features
 
 * Limine bootloader
@@ -25,7 +27,8 @@ Includes:
 * ksh
 * vi
 * login
-* Kyrobox
+* Kyronix coreutils
+* custom Kyronix tools
 
 ## Build
 

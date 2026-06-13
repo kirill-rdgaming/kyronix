@@ -1,5 +1,5 @@
 CC := musl-gcc
-CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2 -march=x86-64 -mtune=generic -fno-pie -L../../build
+CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2 -march=x86-64 -mtune=generic -fno-pie -fno-link-libatomic
 LDFLAGS ?= -static -no-pie
 OUT := ../../build/bin/ksh
 

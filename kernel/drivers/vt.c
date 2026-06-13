@@ -56,24 +56,19 @@
 #define VT_AUTO 0
 #define VT_PROCESS 1
 
-typedef struct
-{
+typedef struct {
     char mode, waitv;
     short relsig, acqsig, frsig;
 } vt_mode_t;
-typedef struct
-{
+typedef struct {
     unsigned short v_active, v_signal, v_state;
 } vt_stat_t;
-typedef struct
-{
+typedef struct {
     unsigned short ws_row, ws_col, ws_xpixel, ws_ypixel;
 } winsize_t;
 
-/* termios matching the layout in vfs.c / musl */
 #define NCCS_VT 19
-typedef struct
-{
+typedef struct {
     uint32_t c_iflag, c_oflag, c_cflag, c_lflag;
     uint8_t c_cc[NCCS_VT];
 } vt_termios_t;
@@ -84,8 +79,7 @@ static int g_kb_mode = K_XLATE;
 static int64_t vt_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
 {
     (void) n;
-    switch (req)
-    {
+    switch (req) {
     case KDGETMODE:
         if (arg && !uptr_ok_w((void*) (uintptr_t) arg, sizeof(int)))
             return -14;
@@ -124,8 +118,7 @@ static int64_t vt_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
         if (arg)
             *(int*) (uintptr_t) arg = 1; /* VT 1 is free */
         return 0;
-    case VT_GETSTATE:
-    {
+    case VT_GETSTATE: {
         vt_stat_t* s = (vt_stat_t*) (uintptr_t) arg;
         if (!s)
             return -22;
@@ -136,8 +129,7 @@ static int64_t vt_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
         s->v_state = 0x0002; /* bit 1 = VT1 open */
         return 0;
     }
-    case VT_GETMODE:
-    {
+    case VT_GETMODE: {
         vt_mode_t* m = (vt_mode_t*) (uintptr_t) arg;
         if (!m)
             return -22;
@@ -156,15 +148,14 @@ static int64_t vt_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
     case VT_SETSCRNMAP:
         return 0;
 
-    case TIOCGWINSZ:
-    {
+    case TIOCGWINSZ: {
         winsize_t* ws = (winsize_t*) (uintptr_t) arg;
         if (!ws)
             return -22;
         if (!uptr_ok_w(ws, sizeof(*ws)))
             return -14;
-        ws->ws_row = (unsigned short) (g_fb.height / 16);
-        ws->ws_col = (unsigned short) (g_fb.width / 8);
+        ws->ws_row = 25;
+        ws->ws_col = 80;
         ws->ws_xpixel = (unsigned short) g_fb.width;
         ws->ws_ypixel = (unsigned short) g_fb.height;
         return 0;
@@ -172,8 +163,7 @@ static int64_t vt_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
     case TIOCSWINSZ:
         return 0;
 
-    case TCGETS:
-    {
+    case TCGETS: {
         vt_termios_t* t = (vt_termios_t*) (uintptr_t) arg;
         if (!t)
             return -22;
@@ -190,8 +180,7 @@ static int64_t vt_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
     }
     case TCSETS:
     case TCSETSW:
-    case TCSETSF:
-    {
+    case TCSETSF: {
         vt_termios_t* t = (vt_termios_t*) (uintptr_t) arg;
         if (!t)
             return 0;
@@ -259,15 +248,14 @@ static int64_t vt_write(vfs_node_t* n, const char* buf, uint64_t len)
 void vt_init(void)
 {
     char path[16];
-    for (int i = 0; i <= 7; i++)
-    {
+    for (int i = 0; i <= 7; i++) {
         snprintf(path, sizeof(path), "/dev/tty%d", i);
         vfs_node_t* n = vfs_create_chr(path, vt_read, vt_write);
         if (n)
             n->chr_ioctl = vt_ioctl;
     }
 
-    /* replace /dev/console symlink with proper vt chr-dev */
+    /* replace /dev/console symlink with proper vt chr dev */
     vfs_unlink("/dev/console");
     vfs_node_t* nc = vfs_create_chr("/dev/console", vt_read, vt_write);
     if (nc)

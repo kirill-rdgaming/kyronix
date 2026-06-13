@@ -2,18 +2,15 @@
 extern char** environ;
 int main(int argc, char** argv)
 {
-    if (argc == 1)
-    {
+    if (argc == 1) {
         for (char** e = environ; *e; e++)
             puts(*e);
         return 0;
     }
     int rc = 1;
-    for (int i = 1; i < argc; i++)
-    {
+    for (int i = 1; i < argc; i++) {
         char* v = getenv(argv[i]);
-        if (v)
-        {
+        if (v) {
             puts(v);
             rc = 0;
         }

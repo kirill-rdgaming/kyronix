@@ -4,8 +4,7 @@ static uint32_t table[256];
 
 static void init_crc(void)
 {
-    for (uint32_t i = 0; i < 256; i++)
-    {
+    for (uint32_t i = 0; i < 256; i++) {
         uint32_t c = i << 24;
         for (int j = 0; j < 8; j++)
             c = (c & 0x80000000U) ? ((c << 1) ^ 0x04C11DB7U) : (c << 1);
@@ -16,16 +15,14 @@ static void init_crc(void)
 static int sum_file(const char* path)
 {
     FILE* f = path ? fopen(path, "rb") : stdin;
-    if (!f)
-    {
+    if (!f) {
         kx_warn(path);
         return 1;
     }
     uint32_t crc = 0;
     unsigned long len = 0;
     int c;
-    while ((c = fgetc(f)) != EOF)
-    {
+    while ((c = fgetc(f)) != EOF) {
         crc = (crc << 8) ^ table[((crc >> 24) ^ (uint8_t) c) & 0xff];
         len++;
     }

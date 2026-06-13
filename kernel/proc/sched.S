@@ -22,10 +22,10 @@ sched_switch:
 
     movq    g_current_proc(%rip), %r15
 
-    /* save FPU/SSE state of outgoing process */
+    /* save fpe/sse state of outgoing process */
     fxsave64 PROC_FPU_STATE(%r15)
 
-    /* save FS base of outgoing process */
+    /* save fs base of outgoing process */
     movl    $0xC0000100, %ecx
     rdmsr
     shlq    $32, %rdx
@@ -45,7 +45,7 @@ sched_switch:
     movq    PROC_KSTACK_TOP(%rdi),  %rcx
     movq    %rcx,                   %gs:CPU_KERNEL_RSP
 
-    /* restore FS base of incoming process */
+    /* restore fs base of incoming process */
     pushq   %rcx
     pushq   %rdx
     movq    PROC_FS_BASE(%rdi),  %rax
@@ -63,7 +63,7 @@ sched_switch:
     movq    g_current_proc(%rip),   %rax
     movq    PROC_KSTACK_RSP(%rax),  %rsp
 
-    /* restore FPU/SSE state of incoming process */
+    /* restore fpu sse state of incoming process */
     fxrstor64 PROC_FPU_STATE(%rax)
 
     popq    %r15
@@ -79,7 +79,7 @@ sched_switch:
 proc_resume_frame:
     popq    %rax
     popq    %rbx
-    popq    %rcx        /* user RIP */
+    popq    %rcx        /* user rip */
     popq    %rdx
     popq    %rsi
     popq    %rdi

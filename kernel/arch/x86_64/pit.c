@@ -4,7 +4,7 @@
 
 #define PIT_CHANNEL0 0x40
 #define PIT_CMD 0x43
-#define PIT_DIVISOR 1193 /* 1193182 Hz / 1193 ≈ 1000 Hz */
+#define PIT_DIVISOR 1193
 
 volatile uint64_t g_ticks = 0;
 uint64_t g_epoch_base = 0;
@@ -24,7 +24,7 @@ static uint8_t bcd2bin(uint8_t v)
 static uint64_t rtc_read_unix(void)
 {
     while (cmos_read(0x0A) & 0x80)
-        ; /* wait: update-in-progress */
+        ;
 
     uint8_t sec = cmos_read(0x00);
     uint8_t min = cmos_read(0x02);
@@ -35,8 +35,7 @@ static uint64_t rtc_read_unix(void)
     uint8_t cen = cmos_read(0x32);
     uint8_t sb = cmos_read(0x0B);
 
-    if (!(sb & 0x04))
-    { /* BCD mode */
+    if (!(sb & 0x04)) { /* BCD mode */
         sec = bcd2bin(sec);
         min = bcd2bin(min);
         hr = bcd2bin(hr & 0x7f) | (hr & 0x80);

@@ -18,8 +18,7 @@
 #define MAX_SERVICES 32
 #define MAX_ARGS 8
 
-struct service
-{
+struct service {
     char name[64];
     char* argv[MAX_ARGS];
 };
@@ -52,8 +51,7 @@ static void info(const char* msg)
 static void spawn(struct service* svc)
 {
     pid_t pid = fork();
-    if (pid == 0)
-    {
+    if (pid == 0) {
         signal(SIGCHLD, SIG_DFL);
         signal(SIGINT, SIG_DFL);
         setsid();
@@ -66,8 +64,7 @@ static void spawn(struct service* svc)
 static void read_rc_conf(void)
 {
     FILE* f = fopen("/etc/rc.conf", "r");
-    if (!f)
-    {
+    if (!f) {
         status("Reading /etc/rc.conf", 0);
         return;
     }
@@ -75,13 +72,11 @@ static void read_rc_conf(void)
     char line[MAX_LINE];
     int in_services = 0;
 
-    while (fgets(line, sizeof(line), f))
-    {
+    while (fgets(line, sizeof(line), f)) {
         char* p = trim(line);
         if (!*p || *p == '#' || *p == ';')
             continue;
-        if (*p == '[')
-        {
+        if (*p == '[') {
             char* end = strchr(p + 1, ']');
             if (!end)
                 continue;
@@ -106,8 +101,7 @@ static void read_rc_conf(void)
 
         char* token = strtok(cmd, " ");
         int argc = 0;
-        while (token && argc < MAX_ARGS - 1)
-        {
+        while (token && argc < MAX_ARGS - 1) {
             services[nservices].argv[argc++] = strdup(token);
             token = strtok(NULL, " ");
         }
@@ -122,8 +116,7 @@ static void read_rc_conf(void)
 int main(void)
 {
     int fd = open("/dev/tty", O_RDWR);
-    if (fd >= 0)
-    {
+    if (fd >= 0) {
         dup2(fd, STDIN_FILENO);
         dup2(fd, STDOUT_FILENO);
         dup2(fd, STDERR_FILENO);
@@ -145,8 +138,7 @@ int main(void)
 
     info("INIT: Entering runlevel: 2");
 
-    for (int i = 0; i < nservices; i++)
-    {
+    for (int i = 0; i < nservices; i++) {
         char buf[128];
         snprintf(buf, sizeof(buf), "Starting %s", services[i].name);
         spawn(&services[i]);

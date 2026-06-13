@@ -16,19 +16,16 @@ int main(int argc, char** argv)
     if (first == argc)
         argv[argc++] = NULL;
     int rc = 0;
-    for (int a = first; a < argc; a++)
-    {
+    for (int a = first; a < argc; a++) {
         FILE* f = argv[a] ? fopen(argv[a], "r") : stdin;
-        if (!f)
-        {
+        if (!f) {
             kx_warn(argv[a]);
             rc = 1;
             continue;
         }
         char* line = NULL;
         size_t cap = 0;
-        while (getline(&line, &cap, f) >= 0)
-        {
+        while (getline(&line, &cap, f) >= 0) {
             long col = 1;
             for (char* p = line; *p && *p != '\n'; p++, col++)
                 if (col >= from && col <= to)

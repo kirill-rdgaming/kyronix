@@ -47,8 +47,7 @@ static bool tty_buf_full(void)
 static void tty_enqueue(uint8_t c)
 {
     int next = (tty_buf_head + 1) % TTY_BUF_SIZE;
-    if (next != tty_buf_tail)
-    {
+    if (next != tty_buf_tail) {
         tty_buf[tty_buf_head] = c;
         tty_buf_head = next;
     }
@@ -68,8 +67,7 @@ static int tty_dequeue(void)
 
 static void tty_send_sig_pgid(int sig)
 {
-    for (int i = 0; i < PROC_MAX; i++)
-    {
+    for (int i = 0; i < PROC_MAX; i++) {
         if (g_proctable[i].state == PROC_UNUSED)
             continue;
         if (g_proctable[i].pgid == tty_fg_pgid)
@@ -79,16 +77,14 @@ static void tty_send_sig_pgid(int sig)
 
 static void tty_input_char(uint8_t c)
 {
-    if (tty_termios.c_lflag & ISIG)
-    {
+    if (tty_termios.c_lflag & ISIG) {
         int sig = 0;
         if (c == tty_termios.c_cc[VINTR])
             sig = SIGINT;
         else if (c == tty_termios.c_cc[VQUIT])
             sig = SIGQUIT;
 
-        if (sig)
-        {
+        if (sig) {
             tty_putchar('^');
             tty_putchar((char) ('@' + c));
             tty_putchar('\n');
@@ -114,25 +110,17 @@ static void tty_input_char(uint8_t c)
         c &= 0x7F;
 
     /* ECHO */
-    if (tty_termios.c_lflag & ECHO)
-    {
-        if (c == '\r')
-        {
+    if (tty_termios.c_lflag & ECHO) {
+        if (c == '\r') {
             tty_putchar('\r');
             tty_putchar('\n');
-        }
-        else if (c == '\n')
-        {
+        } else if (c == '\n') {
             tty_putchar('\n');
-        }
-        else if (c == 0x7F || c == '\b')
-        {
+        } else if (c == 0x7F || c == '\b') {
             tty_putchar('\b');
             tty_putchar(' ');
             tty_putchar('\b');
-        }
-        else
-        {
+        } else {
             tty_putchar((char) c);
         }
     }
@@ -143,14 +131,12 @@ static void tty_input_char(uint8_t c)
 
 void tty_process_input(void)
 {
-    if (serial_data_ready(COM1))
-    {
+    if (serial_data_ready(COM1)) {
         uint8_t c = serial_getchar(COM1);
         tty_input_char(c);
     }
 
-    if (kbd_data_ready())
-    {
+    if (kbd_data_ready()) {
         int c = kbd_getchar(); /* always drain PS/2 buffer; evdev hook fires inside */
         if (c > 0 && !g_evdev_kbd_open)
             tty_input_char((uint8_t) c);
@@ -170,18 +156,15 @@ int64_t tty_read(char* buf, uint64_t len)
 
     uint64_t i = 0;
 
-    for (;;)
-    {
+    for (;;) {
         if (i >= len)
             break;
 
         tty_process_input();
 
         int c = tty_dequeue();
-        if (c >= 0)
-        {
-            if ((tty_termios.c_lflag & ICANON) && c == tty_termios.c_cc[VEOF])
-            {
+        if (c >= 0) {
+            if ((tty_termios.c_lflag & ICANON) && c == tty_termios.c_cc[VEOF]) {
                 if (i == 0)
                     return 0;
                 break;
@@ -194,16 +177,14 @@ int64_t tty_read(char* buf, uint64_t len)
         if (i >= vmin)
             break;
 
-        if (g_current_proc)
-        {
+        if (g_current_proc) {
             uint64_t actionable = g_current_proc->pending_sigs & ~g_current_proc->sig_mask;
-            while (actionable)
-            {
+            while (actionable) {
                 int idx = __builtin_ctzll(actionable);
                 actionable &= ~(1ULL << idx);
                 if (g_current_proc->sig_actions[idx].sa_handler != SIG_IGN)
                     return -(int64_t) EINTR;
-                /* signal is ignored — consume it and keep reading */
+                /* signal is ignored - consume it and keep reading */
                 g_current_proc->pending_sigs &= ~(1ULL << idx);
             }
         }
@@ -225,13 +206,11 @@ int64_t tty_read(char* buf, uint64_t len)
 int64_t tty_write(const char* buf, uint64_t len)
 {
     tty_process_input();
-    for (uint64_t i = 0; i < len; i++)
-    {
+    for (uint64_t i = 0; i < len; i++) {
         char c = buf[i];
 
         /* ONLCR: map \n -> \r\n on output */
-        if ((tty_termios.c_oflag & ONLCR) && c == '\n')
-        {
+        if ((tty_termios.c_oflag & ONLCR) && c == '\n') {
             serial_putchar(COM1, '\r');
             if (g_fb.addr)
                 fb_putchar('\r');
@@ -251,8 +230,7 @@ bool tty_data_ready(void)
 
 void tty_putchar(char c)
 {
-    if ((tty_termios.c_oflag & ONLCR) && c == '\n')
-    {
+    if ((tty_termios.c_oflag & ONLCR) && c == '\n') {
         serial_putchar(COM1, '\r');
         if (g_fb.addr)
             fb_putchar('\r');

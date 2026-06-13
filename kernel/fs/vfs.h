@@ -6,8 +6,7 @@
 
 extern char g_cwd[512];
 
-struct linux_stat
-{
+struct linux_stat {
     uint64_t st_dev;
     uint64_t st_ino;
     uint64_t st_nlink;
@@ -28,8 +27,7 @@ struct linux_stat
     int64_t _unused[3];
 };
 
-struct linux_dirent64
-{
+struct linux_dirent64 {
     uint64_t d_ino;
     int64_t d_off;
     uint16_t d_reclen;
@@ -78,59 +76,66 @@ struct linux_dirent64
 
 #define S_IFSOCK 0140000U
 
-typedef struct vfs_node
-{
+typedef struct vfs_node {
     char name[256];
     uint8_t type;
     uint32_t mode;
     uint32_t uid, gid;
     uint32_t ino;
-
+    uint32_t refcnt;
+    uint8_t deleted;
     uint64_t size;
-
-    /* REG: heap buffer, capacity >= size */
     uint8_t* data;
     uint64_t capacity;
-
-    /* DIR: linked list of children */
     struct vfs_node* children;
-    struct vfs_node* next; /* next sibling */
+    struct vfs_node* next;
     struct vfs_node* parent;
-
-    /* SYM: target path */
     char* symlink;
-
-    /* CHR: device callbacks */
     int64_t (*chr_read)(struct vfs_node*, char*, uint64_t, uint64_t);
     int64_t (*chr_write)(struct vfs_node*, const char*, uint64_t);
     int64_t (*chr_ioctl)(struct vfs_node*, uint64_t req, uint64_t arg);
-    bool (*chr_pollin)(struct vfs_node*); /* NULL → always readable */
-    /* optional: called by sys_mmap for chr-devs instead of normal file mapping */
+    bool (*chr_pollin)(struct vfs_node*);
+    int (*chr_open)(struct vfs_node*, int flags);
+    void (*chr_close)(struct vfs_node*);
     int64_t (*chr_mmap)(struct vfs_node*, uint64_t off, uint64_t len, uint64_t va, uint64_t vflags);
 
-    /* SOCK: pending connection count (for poll/select on listening socket) */
     volatile int sock_backlog;
 } vfs_node_t;
 
-typedef struct
-{
+typedef struct {
+    volatile uint64_t counter;
+    uint32_t semaphore;
+    void* waiter;
+} eventfd_state_t;
+
+typedef struct {
+    int clockid;
+    uint64_t interval_ms;
+    uint64_t next_tick;
+    uint64_t overruns;
+} timerfd_state_t;
+
+typedef struct {
     uint64_t magic;
-    vfs_node_t* node; /* NULL for pipe fds */
+    vfs_node_t* node;
     uint64_t pos;
     int flags;
     pipe_t* pipe;
-    int pipe_end;  /* PIPE_END_READ or PIPE_END_WRITE */
-    pipe_t* wpipe; /* non-NULL for socket fds: separate write-direction pipe */
+    int pipe_end;
+    pipe_t* wpipe;
     uint32_t peer_pid, peer_uid, peer_gid;
     int passcred;
-    uint8_t cloexec; /* FD_CLOEXEC: close this fd on execve */
+    uint8_t cloexec;
+    eventfd_state_t* efd;
+    timerfd_state_t* tfd;
+
 } vfs_file_t;
 
 #define VFS_FD_MAX 1024
 
 void vfs_init(void);
 
-void vfs_cloexec_flush(void); /* close all FD_CLOEXEC fds (called on execve) */
+void vfs_cloexec_flush(void);
 void vfs_set_fdtable(vfs_file_t** fds);
 vfs_file_t** vfs_get_fdtable(void);
 void vfs_copy_fdtable(vfs_file_t** dst, vfs_file_t** src);
@@ -163,6 +168,20 @@ bool fd_pollin(int fd);
 bool fd_pollout(int fd);
 int fd_pipe(int pipefd[2]);
 int fd_socketpair(int sv[2]);
+int fd_eventfd(uint32_t initval, int eflags);
+int64_t eventfd_read(vfs_file_t* f, char* buf, uint64_t len);
+int64_t eventfd_write(vfs_file_t* f, const char* buf, uint64_t len);
+int fd_timerfd_create(int clockid, int tflags);
+typedef struct {
+    uint64_t sec;
+    uint64_t nsec;
+} ktimespec_t;
+typedef struct {
+    ktimespec_t interval;
+    ktimespec_t value;
+} kitimerspec_t;
+int fd_timerfd_settime(int fd, int flags, const kitimerspec_t* new_val, kitimerspec_t* old_val);
+int fd_timerfd_gettime(int fd, kitimerspec_t* cur_val);
 
 int fd_socket(int domain, int type, int proto);
 int fd_bind_unix(int fd, const char* path);
@@ -194,3 +213,4 @@ int vfs_mknod(const char* path, uint32_t mode, uint64_t dev);
 char* vfs_node_abspath(vfs_node_t* n, char* buf, size_t sz);
 int at_resolve(int dirfd, const char* path, char* out, size_t sz);
 int fd_dup3(int oldfd, int newfd, int flags);
+int fd_open_node(vfs_node_t* n, int flags);

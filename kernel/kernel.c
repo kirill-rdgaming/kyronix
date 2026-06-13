@@ -9,6 +9,7 @@
 #include "arch/x86_64/syscall_setup.h"
 #include "boot/limine.h"
 #include "drivers/fb.h"
+
 #include "drivers/fbdev.h"
 #include "drivers/input.h"
 #include "drivers/kbd.h"
@@ -28,7 +29,6 @@
 #include "mm/pmm.h"
 #include "mm/vmm.h"
 #include "proc/proc.h"
-#include "fs/procfs.h"
 
 #define STATUS_COL 72
 #define COL_GRN "\033[0;32m"
@@ -81,8 +81,7 @@ static void kstatus(const char* msg, bool ok)
 
 static const char* memmap_type_name(uint64_t type)
 {
-    switch (type)
-    {
+    switch (type) {
     case LIMINE_MEMMAP_USABLE:
         return "Usable";
     case LIMINE_MEMMAP_RESERVED:
@@ -106,8 +105,7 @@ static const char* memmap_type_name(uint64_t type)
 
 static void print_memmap(void)
 {
-    if (!mmap_req.response)
-    {
+    if (!mmap_req.response) {
         log_warn("no memory map");
         return;
     }
@@ -116,8 +114,7 @@ static void print_memmap(void)
 
     log_info("Memory map (%lu entries):", resp->entry_count);
 
-    for (uint64_t i = 0; i < resp->entry_count; i++)
-    {
+    for (uint64_t i = 0; i < resp->entry_count; i++) {
         struct limine_memmap_entry* e = resp->entries[i];
         log_info("  %016lx-%016lx  %s", e->base, e->base + e->length, memmap_type_name(e->type));
         if (e->type == LIMINE_MEMMAP_USABLE)
@@ -135,8 +132,7 @@ void kmain(void)
     idt_init();
     kbd_init();
 
-    if (!mmap_req.response || !hhdm_req.response)
-    {
+    if (!mmap_req.response || !hhdm_req.response) {
         kprintf("FATAL: no memory map or HHDM from bootloader\n");
         cpu_halt();
     }
@@ -174,7 +170,6 @@ void kmain(void)
     proc_init();
     kstatus("Initialising scheduler", true);
     vfs_init();
-    procfs_init();
     kstatus("Mounting /proc", vfs_lookup("/proc") != NULL);
     kstatus("Mounting /sys", vfs_lookup("/sys") != NULL);
     kstatus("Mounting /dev/pts", vfs_lookup("/dev/pts") != NULL);
@@ -184,6 +179,7 @@ void kmain(void)
     kstatus("Initialising UIO", true);
     fbdev_init();
     kstatus("Registering framebuffer", vfs_lookup("/dev/fb0") != NULL);
+
     input_init();
     kstatus("Initialising evdev",
             vfs_lookup("/dev/input/event0") != NULL && vfs_lookup("/dev/input/event1") != NULL);
@@ -199,26 +195,22 @@ void kmain(void)
     {
         void* p[4];
         bool pmm_ok = true;
-        for (int i = 0; i < 4; i++)
-        {
+        for (int i = 0; i < 4; i++) {
             p[i] = pmm_alloc();
-            if (!p[i])
-            {
+            if (!p[i]) {
                 pmm_ok = false;
                 break;
             }
             volatile uint64_t* v = phys_to_virt((uint64_t) p[i]);
             *v = 0xDEADBEEFCAFEBABEULL;
-            if (*v != 0xDEADBEEFCAFEBABEULL)
-            {
+            if (*v != 0xDEADBEEFCAFEBABEULL) {
                 pmm_ok = false;
                 break;
             }
         }
         for (int i = 0; i < 4 && pmm_ok; i++)
             for (int j = i + 1; j < 4; j++)
-                if (p[i] == p[j])
-                {
+                if (p[i] == p[j]) {
                     pmm_ok = false;
                     break;
                 }
@@ -235,11 +227,9 @@ void kmain(void)
         uint64_t test_phys = (uint64_t) pmm_alloc();
         bool vmm_ok = false;
 
-        if (test_phys)
-        {
+        if (test_phys) {
             int r = vmm_map(&g_kernel_space, test_virt, test_phys, VMM_KDATA);
-            if (r == 0)
-            {
+            if (r == 0) {
                 volatile uint64_t* p = (volatile uint64_t*) test_virt;
                 *p = 0xC0FFEE00DEADC0DEULL;
                 vmm_ok = (*p == 0xC0FFEE00DEADC0DEULL);
@@ -260,8 +250,7 @@ void kmain(void)
 
         heap_ok = a && b && c && (a != b) && (b != c) && (a != c);
 
-        if (heap_ok)
-        {
+        if (heap_ok) {
             memset(a, 0xAA, 64);
             memset(b, 0xBB, 128);
             memset(c, 0xCC, 256);
@@ -284,15 +273,12 @@ void kmain(void)
 
         uint8_t* a2 = krealloc(a, 512);
         heap_ok = heap_ok && (a2 != NULL);
-        if (a2)
-        {
+        if (a2) {
             for (int i = 0; i < 64 && heap_ok; i++)
                 if (a2[i] != 0xAA)
                     heap_ok = false;
             kfree(a2);
-        }
-        else
-        {
+        } else {
             kfree(a);
         }
         kfree(c);
@@ -309,22 +295,16 @@ void kmain(void)
 
     print_memmap();
 
-    if (mod_req.response && mod_req.response->module_count > 0)
-    {
+    if (mod_req.response && mod_req.response->module_count > 0) {
         struct limine_file* initrd = mod_req.response->modules[0];
         log_info("initrd: %s  (%lu bytes)", initrd->path, initrd->size);
-        if (cpio_load(initrd->address, initrd->size) < 0)
-        {
+        if (cpio_load(initrd->address, initrd->size) < 0) {
             kstatus("Loading initrd", false);
             log_warn("initrd parse failed");
-        }
-        else
-        {
+        } else {
             kstatus("Loading initrd", true);
         }
-    }
-    else
-    {
+    } else {
         kstatus("Loading initrd", false);
         log_warn("no initrd module");
     }
@@ -336,13 +316,10 @@ void kmain(void)
         if (!init_node)
             init_node = vfs_lookup("/bin/init");
 
-        if (init_node && init_node->type == VFS_TYPE_REG && init_node->data)
-        {
+        if (init_node && init_node->type == VFS_TYPE_REG && init_node->data) {
             if (process_exec(init_node->data, init_node->size, "/init") < 0)
                 kprintf("  FATAL: process_exec failed\n");
-        }
-        else
-        {
+        } else {
             kprintf("  FATAL: /init not found in initrd\n");
         }
     }

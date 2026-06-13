@@ -116,8 +116,7 @@ typedef signed char smallint;
 struct globals;
 extern struct globals* ptr_to_globals;
 #define SET_PTR_TO_GLOBALS(p)                                                                      \
-    do                                                                                             \
-    {                                                                                              \
+    do {                                                                                           \
         ptr_to_globals = (p);                                                                      \
     } while (0)
 #define MAIN_EXTERNALLY_VISIBLE
@@ -146,8 +145,7 @@ static inline void bb_show_usage(void)
 static inline void* xmalloc(size_t size)
 {
     void* p = malloc(size);
-    if (!p)
-    {
+    if (!p) {
         fprintf(stderr, "Out of memory\n");
         exit(1);
     }
@@ -157,8 +155,7 @@ static inline void* xmalloc(size_t size)
 static inline void* xzalloc(size_t size)
 {
     void* p = calloc(1, size);
-    if (!p)
-    {
+    if (!p) {
         fprintf(stderr, "Out of memory\n");
         exit(1);
     }
@@ -168,8 +165,7 @@ static inline void* xzalloc(size_t size)
 static inline void* xrealloc(void* p, size_t size)
 {
     void* q = realloc(p, size);
-    if (!q)
-    {
+    if (!q) {
         fprintf(stderr, "Out of memory\n");
         exit(1);
     }
@@ -179,8 +175,7 @@ static inline void* xrealloc(void* p, size_t size)
 static inline char* xstrdup(const char* s)
 {
     char* p = strdup(s);
-    if (!p)
-    {
+    if (!p) {
         fprintf(stderr, "Out of memory\n");
         exit(1);
     }
@@ -190,8 +185,7 @@ static inline char* xstrdup(const char* s)
 static inline char* xstrndup(const char* s, size_t n)
 {
     char* p = strndup(s, n);
-    if (!p)
-    {
+    if (!p) {
         fprintf(stderr, "Out of memory\n");
         exit(1);
     }

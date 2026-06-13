@@ -8,3 +8,4 @@ kyronix.iso
 kyronix-test.iso
 test_rootfs/
 build/*
+iso_root/*

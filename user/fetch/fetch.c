@@ -50,15 +50,13 @@ int main(void)
         int n = (int) (sizeof(labels) / sizeof(labels[0]));
         int maxw = 0;
 
-        for (i = 0; i < n; i++)
-        {
+        for (i = 0; i < n; i++) {
             int w = (int) strlen(labels[i]);
             if (w > maxw)
                 maxw = w;
         }
 
-        for (i = 0; i < n; i++)
-        {
+        for (i = 0; i < n; i++) {
             const char* l = (i + 2 < LOGO_LEN) ? logo[i + 2] : "";
             printf("%s\033[90m%-*s:\033[0m %s\n", l, maxw, labels[i], values[i]);
         }

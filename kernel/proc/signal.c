@@ -13,8 +13,7 @@ _Static_assert(sizeof(rt_sigframe_t) == 440, "rt_sigframe_t must be 440 bytes");
 
 static int sig_default_fatal(int sig)
 {
-    switch (sig)
-    {
+    switch (sig) {
     case SIGCHLD:
     case SIGCONT:
     case SIGWINCH:
@@ -42,7 +41,6 @@ static void setup_sigframe(proc_t* p, int sig, syscall_frame_t* f)
 {
     uint64_t user_rsp = cpu_get_user_rsp();
 
-    /* below red zone, sp ≡ 8 (mod 16) per x86-64 ABI */
     uint64_t sp = user_rsp - 128 - sizeof(rt_sigframe_t);
     sp = ((sp - 8) & ~(uint64_t) 0xF) + 8;
 
@@ -98,15 +96,13 @@ static void deliver_signal(proc_t* p, int sig, syscall_frame_t* f)
     if (handler == SIG_IGN)
         return;
 
-    if (handler == SIG_DFL)
-    {
+    if (handler == SIG_DFL) {
         if (!sig_default_fatal(sig))
             return;
         proc_do_exit(-sig);
     }
 
-    if (!p->sig_actions[sig - 1].sa_restorer)
-    {
+    if (!p->sig_actions[sig - 1].sa_restorer) {
         log_warn("signal: sig %d has no restorer", sig);
         proc_do_exit(-sig);
     }

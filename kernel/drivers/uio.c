@@ -50,7 +50,7 @@ static int64_t uio_write(vfs_node_t* n, const char* buf, uint64_t len)
     uio_dev_t* uio = (uio_dev_t*) n->data;
     if (!uio)
         return -(int64_t) EINVAL;
-    pic_unmask_irq(uio->pdev->irq_line); /* re-arm the IRQ line */
+    pic_unmask_irq(uio->pdev->irq_line); /* re-arm the irq line */
     return (int64_t) len;
 }
 
@@ -60,7 +60,7 @@ static int64_t uio_mmap(vfs_node_t* n, uint64_t off, uint64_t len, uint64_t va, 
     if (!uio)
         return -(int64_t) EINVAL;
 
-    int bar_idx = (int) (off >> 12); /* offset N*PAGE_SIZE → BAR[N] */
+    int bar_idx = (int) (off >> 12); /* offset N*PAGE_SIZE -> BAR[N] */
     if (bar_idx >= 6)
         return -(int64_t) EINVAL;
     uint64_t phys = uio->pdev->bars[bar_idx];
@@ -89,8 +89,7 @@ void uio_init(void)
 {
     g_uio_ndevs = 0;
     char path[32];
-    for (int i = 0; i < g_pci_ndevs; i++)
-    {
+    for (int i = 0; i < g_pci_ndevs; i++) {
         uio_dev_t* uio = &g_uio_devs[g_uio_ndevs++];
         uio->pdev = &g_pci_devs[i];
         uio->irq_count = 0;

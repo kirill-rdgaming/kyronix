@@ -5,22 +5,18 @@ static int run_stream(FILE* f, const char* old, const char* new, bool global)
     char* line = NULL;
     size_t cap = 0;
     size_t oldlen = strlen(old);
-    while (getline(&line, &cap, f) >= 0)
-    {
+    while (getline(&line, &cap, f) >= 0) {
         char* p = line;
-        while (*p)
-        {
+        while (*p) {
             char* m = strstr(p, old);
-            if (!m || oldlen == 0)
-            {
+            if (!m || oldlen == 0) {
                 fputs(p, stdout);
                 break;
             }
             fwrite(p, 1, (size_t) (m - p), stdout);
             fputs(new, stdout);
             p = m + oldlen;
-            if (!global)
-            {
+            if (!global) {
                 fputs(p, stdout);
                 break;
             }
@@ -55,11 +51,9 @@ int main(int argc, char** argv)
     if (first == argc)
         argv[argc++] = NULL;
     int rc = 0;
-    for (int i = first; i < argc; i++)
-    {
+    for (int i = first; i < argc; i++) {
         FILE* f = argv[i] ? fopen(argv[i], "r") : stdin;
-        if (!f)
-        {
+        if (!f) {
             kx_warn(argv[i]);
             rc = 1;
             continue;

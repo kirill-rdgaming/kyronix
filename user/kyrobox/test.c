@@ -5,8 +5,7 @@ int main(int argc, char** argv)
         return 1;
     if (argc == 2)
         return argv[1][0] ? 0 : 1;
-    if (argc == 3)
-    {
+    if (argc == 3) {
         struct stat st;
         if (strcmp(argv[1], "-f") == 0)
             return stat(argv[2], &st) == 0 && S_ISREG(st.st_mode) ? 0 : 1;
@@ -19,8 +18,7 @@ int main(int argc, char** argv)
         if (strcmp(argv[1], "-z") == 0)
             return argv[2][0] ? 1 : 0;
     }
-    if (argc == 4)
-    {
+    if (argc == 4) {
         if (strcmp(argv[2], "=") == 0)
             return strcmp(argv[1], argv[3]) == 0 ? 0 : 1;
         if (strcmp(argv[2], "!=") == 0)

@@ -73,22 +73,16 @@ static void probe(uint8_t bus, uint8_t dev, uint8_t fn)
     d->irq_line = (uint8_t) (irq & 0xFF);
     d->irq_pin = (uint8_t) ((irq >> 8) & 0xFF);
 
-    if (d->header_type == 0)
-    { /* normal device: 6 BARs */
-        for (int i = 0; i < 6; i++)
-        {
+    if (d->header_type == 0) { /* normal device: 6 BARs */
+        for (int i = 0; i < 6; i++) {
             uint32_t bar = pci_read32(bus, dev, fn, (uint8_t) (0x10 + i * 4));
-            if (bar & 1)
-            { /* I/O BAR — skip */
+            if (bar & 1) { /* I/O BAR - skip */
                 d->bars[i] = 0;
                 d->bar_sizes[i] = 0;
-            }
-            else
-            {
+            } else {
                 int is64 = ((bar >> 1) & 3) == 2;
                 uint64_t base = bar & ~0xFULL;
-                if (is64 && i < 5)
-                {
+                if (is64 && i < 5) {
                     uint32_t hi = pci_read32(bus, dev, fn, (uint8_t) (0x14 + i * 4));
                     base |= (uint64_t) hi << 32;
                     i++; /* 64-bit BAR occupies two slots */
@@ -105,10 +99,8 @@ static void probe(uint8_t bus, uint8_t dev, uint8_t fn)
 
 void pci_enumerate(void)
 {
-    for (uint16_t bus = 0; bus < 256; bus++)
-    {
-        for (uint8_t dev = 0; dev < 32; dev++)
-        {
+    for (uint16_t bus = 0; bus < 256; bus++) {
+        for (uint8_t dev = 0; dev < 32; dev++) {
             uint32_t id = pci_read32((uint8_t) bus, dev, 0, 0);
             if ((id & 0xFFFF) == 0xFFFF)
                 continue;

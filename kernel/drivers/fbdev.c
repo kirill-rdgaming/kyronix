@@ -7,13 +7,11 @@
 #include "../syscall/syscall.h"
 #include "fb.h"
 
-typedef struct
-{
+typedef struct {
     uint32_t offset, length, msb_right;
 } fb_bitfield_t;
 
-typedef struct
-{
+typedef struct {
     uint32_t xres, yres;
     uint32_t xres_virtual, yres_virtual;
     uint32_t xoffset, yoffset;
@@ -29,8 +27,7 @@ typedef struct
     uint32_t reserved[4];
 } __attribute__((packed)) fb_var_t;
 
-typedef struct
-{
+typedef struct {
     char id[16];
     uint64_t smem_start;
     uint32_t smem_len;
@@ -55,10 +52,8 @@ typedef struct
 static int64_t fb0_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
 {
     (void) n;
-    switch (req)
-    {
-    case FBIOGET_VSCREENINFO:
-    {
+    switch (req) {
+    case FBIOGET_VSCREENINFO: {
         fb_var_t* v = (fb_var_t*) (uintptr_t) arg;
         if (!v)
             return -22;
@@ -68,15 +63,12 @@ static int64_t fb0_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
         v->xres = v->xres_virtual = (uint32_t) g_fb.width;
         v->yres = v->yres_virtual = (uint32_t) g_fb.height;
         v->bits_per_pixel = g_fb.bpp;
-        if (g_fb.bpp == 32)
-        {
+        if (g_fb.bpp == 32) {
             v->red = (fb_bitfield_t) {16, 8, 0};
             v->green = (fb_bitfield_t) {8, 8, 0};
             v->blue = (fb_bitfield_t) {0, 8, 0};
             v->transp = (fb_bitfield_t) {24, 8, 0};
-        }
-        else if (g_fb.bpp == 24)
-        {
+        } else if (g_fb.bpp == 24) {
             v->red = (fb_bitfield_t) {16, 8, 0};
             v->green = (fb_bitfield_t) {8, 8, 0};
             v->blue = (fb_bitfield_t) {0, 8, 0};
@@ -87,8 +79,7 @@ static int64_t fb0_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
     }
     case FBIOPUT_VSCREENINFO:
         return 0; /* accept but ignore mode changes */
-    case FBIOGET_FSCREENINFO:
-    {
+    case FBIOGET_FSCREENINFO: {
         fb_fix_t* f = (fb_fix_t*) (uintptr_t) arg;
         if (!f)
             return -22;

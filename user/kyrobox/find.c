@@ -6,8 +6,7 @@ static const char* name_pat;
 static int walk(const char* path)
 {
     struct stat st;
-    if (lstat(path, &st) < 0)
-    {
+    if (lstat(path, &st) < 0) {
         kx_warn(path);
         return 1;
     }
@@ -16,15 +15,13 @@ static int walk(const char* path)
     if (!S_ISDIR(st.st_mode))
         return 0;
     DIR* d = opendir(path);
-    if (!d)
-    {
+    if (!d) {
         kx_warn(path);
         return 1;
     }
     int rc = 0;
     struct dirent* de;
-    while ((de = readdir(d)))
-    {
+    while ((de = readdir(d))) {
         if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
             continue;
         char child[PATH_MAX];
@@ -42,8 +39,7 @@ int main(int argc, char** argv)
     int i = 1;
     if (i < argc && argv[i][0] != '-')
         root = argv[i++];
-    if (i < argc)
-    {
+    if (i < argc) {
         if (i + 1 < argc && strcmp(argv[i], "-name") == 0)
             name_pat = argv[i + 1];
         else

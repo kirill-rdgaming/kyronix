@@ -58,8 +58,7 @@
 
 #define NCCS 19
 
-struct termios_s
-{
+struct termios_s {
     uint32_t c_iflag;
     uint32_t c_oflag;
     uint32_t c_cflag;

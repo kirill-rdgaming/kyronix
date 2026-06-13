@@ -1,8 +1,7 @@
 #include "gdt.h"
 #include <stddef.h>
 
-typedef struct
-{
+typedef struct {
     uint32_t reserved0;
     uint64_t rsp0;
     uint64_t rsp1;
@@ -11,11 +10,10 @@ typedef struct
     uint64_t ist[7];
     uint64_t reserved2;
     uint16_t reserved3;
-    uint16_t iopb_offset; /* beyond TSS limit -> no IOPB -> deny all user I/O */
+    uint16_t iopb_offset; /* beyond tss limit -> no IOPB -> deny all user i/o */
 } __attribute__((packed)) tss_t;
 
-typedef struct
-{
+typedef struct {
     uint16_t limit_lo;
     uint16_t base_lo;
     uint8_t base_mid;
@@ -26,8 +24,7 @@ typedef struct
     uint32_t zero;
 } __attribute__((packed)) tss_desc_t;
 
-typedef struct
-{
+typedef struct {
     uint64_t null;
     uint64_t kernel_code;
     uint64_t kernel_data;
@@ -63,8 +60,7 @@ void gdt_init(void)
         .zero = 0,
     };
 
-    struct
-    {
+    struct {
         uint16_t limit;
         uint64_t base;
     } __attribute__((packed)) gdtr = {
@@ -82,10 +78,10 @@ void gdt_init(void)
                      "movw   %%ax,  %%ds         \n\t"
                      "movw   %%ax,  %%es         \n\t"
                      "movw   %%ax,  %%ss         \n\t"
-                     "xorw   %%ax,  %%ax         \n\t" /* FS=GS=0 (set via MSR later) */
+                     "xorw   %%ax,  %%ax         \n\t" /* FS=GS=0 (set via msr later) */
                      "movw   %%ax,  %%fs         \n\t"
                      "movw   %%ax,  %%gs         \n\t"
-                     "movw   $0x28, %%ax         \n\t" /* TSS selector */
+                     "movw   $0x28, %%ax         \n\t" /* tss selector */
                      "ltr    %%ax                \n\t"
                      :
                      : "m"(gdtr)

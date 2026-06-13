@@ -12,8 +12,7 @@
 #define ENOSYS 38
 
 #define EVBUF 128
-typedef struct
-{
+typedef struct {
     input_event_t buf[EVBUF];
     volatile int head, tail;
     proc_t* waiter;
@@ -68,8 +67,7 @@ static int64_t evdev_read(vfs_node_t* n, char* buf, uint64_t len, uint64_t off)
 
     evdev_t* e = &g_evdev[dev];
     e->waiter = g_current_proc;
-    while (e->head == e->tail)
-    {
+    while (e->head == e->tail) {
         if (g_current_proc)
             g_current_proc->wakeup_tick = g_ticks + 10;
         sched_yield_blocking();
@@ -79,8 +77,7 @@ static int64_t evdev_read(vfs_node_t* n, char* buf, uint64_t len, uint64_t off)
     e->waiter = NULL;
 
     uint64_t written = 0;
-    while (e->head != e->tail && written + sizeof(input_event_t) <= len)
-    {
+    while (e->head != e->tail && written + sizeof(input_event_t) <= len) {
         __builtin_memcpy(buf + written, &e->buf[e->tail], sizeof(input_event_t));
         e->tail = (e->tail + 1) % EVBUF;
         written += sizeof(input_event_t);
@@ -103,13 +100,10 @@ static bool evio_req(uint64_t req, uint8_t nr)
 static int64_t evdev_ioctl(vfs_node_t* n, uint64_t req64, uint64_t arg)
 {
     int dev = (int) (uintptr_t) n->data;
-    /* ioctl request is a 32-bit int; userspace sign-extends it (bit 31 set on
-       _IOC_READ requests), so the high half arrives as 0xffffffff — truncate it */
     uint64_t req = (uint32_t) req64;
 
     /* name: EVIO(0x06, len) */
-    if (evio_req(req, 0x06))
-    {
+    if (evio_req(req, 0x06)) {
         uint32_t len = (uint32_t) ((req >> 16) & 0x3FFF);
         const char* name = dev == INPUT_DEV_KBD ? "Kyronix Keyboard" : "Kyronix Mouse";
         uint32_t n2 = (uint32_t) strlen(name) + 1;
@@ -121,11 +115,9 @@ static int64_t evdev_ioctl(vfs_node_t* n, uint64_t req64, uint64_t arg)
         return (int64_t) n2;
     }
 
-    if (evio_req(req, 0x09) || evio_req(req, 0x18))
-    {
+    if (evio_req(req, 0x09) || evio_req(req, 0x18)) {
         uint32_t len = (uint32_t) ((req >> 16) & 0x3FFF);
-        if (arg && len)
-        {
+        if (arg && len) {
             if (!uptr_ok_w((void*) (uintptr_t) arg, len))
                 return -14;
             __builtin_memset((void*) (uintptr_t) arg, 0, len);
@@ -135,8 +127,7 @@ static int64_t evdev_ioctl(vfs_node_t* n, uint64_t req64, uint64_t arg)
 
     /* EVIOCGBIT(ev_type, len): dir=read, type='E', nr in [0x20,0x3F] */
     if ((req >> 30) == 2 && ((req >> 8) & 0xFF) == 0x45 && (req & 0xFF) >= 0x20 &&
-        (req & 0xFF) < 0x40)
-    {
+        (req & 0xFF) < 0x40) {
         uint32_t ev_type = (uint32_t) (req & 0xFF) - 0x20;
         uint32_t len = (uint32_t) ((req >> 16) & 0x3FFF);
         uint8_t* bits = (uint8_t*) (uintptr_t) arg;
@@ -145,33 +136,23 @@ static int64_t evdev_ioctl(vfs_node_t* n, uint64_t req64, uint64_t arg)
         if (!uptr_ok_w(bits, len))
             return -14;
         __builtin_memset(bits, 0, len);
-        if (ev_type == 0)
-        { /* supported event types */
-            if (dev == INPUT_DEV_KBD)
-            {
+        if (ev_type == 0) { /* supported event types */
+            if (dev == INPUT_DEV_KBD) {
                 bits[0] |= (1 << EV_SYN) | (1 << EV_KEY); /* EV_REP=0x14 */
                 if (2 < len)
                     bits[2] |= (1 << (0x14 - 16));
-            }
-            else
-            {
+            } else {
                 bits[0] |= (1 << EV_SYN) | (1 << EV_KEY) | (1 << EV_REL);
             }
-        }
-        else if (ev_type == EV_KEY && dev == INPUT_DEV_KBD)
-        {
+        } else if (ev_type == EV_KEY && dev == INPUT_DEV_KBD) {
             /* set bits for keys 1-127 */
             for (int i = 1; i <= 127 && i / 8 < (int) len; i++)
                 bits[i / 8] |= (uint8_t) (1u << (i % 8));
-        }
-        else if (ev_type == EV_KEY && dev == INPUT_DEV_MOUSE)
-        {
+        } else if (ev_type == EV_KEY && dev == INPUT_DEV_MOUSE) {
             /* BTN_LEFT=0x110, RIGHT=0x111, MIDDLE=0x112 */
             if (0x110 / 8 < (int) len)
                 bits[0x110 / 8] |= 0x07 << (0x110 % 8);
-        }
-        else if (ev_type == EV_REL && dev == INPUT_DEV_MOUSE)
-        {
+        } else if (ev_type == EV_REL && dev == INPUT_DEV_MOUSE) {
             if (0 < (int) len)
                 bits[0] |= (1 << REL_X) | (1 << REL_Y);
             if (1 < (int) len)
@@ -180,8 +161,7 @@ static int64_t evdev_ioctl(vfs_node_t* n, uint64_t req64, uint64_t arg)
         return 0;
     }
 
-    switch (req)
-    {
+    switch (req) {
     case EVIOCGVERSION:
         if (!arg || !uptr_ok_w((void*) (uintptr_t) arg, sizeof(uint32_t)))
             return -14;
@@ -196,7 +176,7 @@ static int64_t evdev_ioctl(vfs_node_t* n, uint64_t req64, uint64_t arg)
         ((uint16_t*) (uintptr_t) arg)[3] = 1;
         return 0;
     default:
-        return 0; /* ignore unknown evio ioctls */
+        return 0; /* ignore unkniwn evio ioctls */
     }
 }
 
@@ -205,14 +185,12 @@ void input_init(void)
     vfs_node_t* kbd_node = vfs_create_chr("/dev/input/event0", evdev_read, NULL);
     vfs_node_t* mouse_node = vfs_create_chr("/dev/input/event1", evdev_read, NULL);
 
-    if (kbd_node)
-    {
+    if (kbd_node) {
         kbd_node->data = (uint8_t*) (uintptr_t) INPUT_DEV_KBD;
         kbd_node->chr_ioctl = evdev_ioctl;
         kbd_node->chr_pollin = evdev_pollin;
     }
-    if (mouse_node)
-    {
+    if (mouse_node) {
         mouse_node->data = (uint8_t*) (uintptr_t) INPUT_DEV_MOUSE;
         mouse_node->chr_ioctl = evdev_ioctl;
         mouse_node->chr_pollin = evdev_pollin;

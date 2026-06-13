@@ -57,7 +57,7 @@ static void mouse_irq(int irq, void* arg)
     g_pkt_idx = 0;
 
     uint8_t flags = g_pkt[0];
-    /* X/Y overflow bits set → movement value is garbage, discard the packet */
+    /* X/Y overflow bits set -> movement value is garbage, discard the packet */
     if (flags & 0xC0)
         return;
 
@@ -86,11 +86,9 @@ static void mouse_irq(int irq, void* arg)
 
 void ps2mouse_init(void)
 {
-    /* enable aux port */
     ps2_wait_write();
     outb(KBD_STAT, 0xA8);
 
-    /* read config byte, enable aux IRQ (bit 1) */
     ps2_wait_write();
     outb(KBD_STAT, 0x20);
     ps2_wait_read();
@@ -102,7 +100,6 @@ void ps2mouse_init(void)
     ps2_wait_write();
     outb(KBD_DATA, cfg);
 
-    /* reset mouse */
     aux_write(0xFF);
     ps2_wait_read();
     inb(KBD_DATA); /* ACK */
@@ -111,12 +108,10 @@ void ps2mouse_init(void)
     ps2_wait_read();
     inb(KBD_DATA); /* 0x00 */
 
-    /* set default settings */
     aux_write(0xF6);
     ps2_wait_read();
     inb(KBD_DATA); /* ACK */
 
-    /* enable data reporting */
     aux_write(0xF4);
     ps2_wait_read();
     inb(KBD_DATA); /* ACK */

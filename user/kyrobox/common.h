@@ -41,16 +41,14 @@ static inline void kx_die(const char* msg)
 static inline int kx_copy_fd(int in, int out)
 {
     char buf[8192];
-    for (;;)
-    {
+    for (;;) {
         ssize_t n = read(in, buf, sizeof(buf));
         if (n < 0)
             return -1;
         if (n == 0)
             return 0;
         char* p = buf;
-        while (n > 0)
-        {
+        while (n > 0) {
             ssize_t w = write(out, p, (size_t) n);
             if (w < 0)
                 return -1;
@@ -64,16 +62,14 @@ static inline int kx_mkdir_p(const char* path, mode_t mode)
 {
     char tmp[PATH_MAX];
     size_t len = strlen(path);
-    if (len >= sizeof(tmp))
-    {
+    if (len >= sizeof(tmp)) {
         errno = ENAMETOOLONG;
         return -1;
     }
     strcpy(tmp, path);
     if (len > 1 && tmp[len - 1] == '/')
         tmp[len - 1] = 0;
-    for (char* p = tmp + 1; *p; p++)
-    {
+    for (char* p = tmp + 1; *p; p++) {
         if (*p != '/')
             continue;
         *p = 0;
@@ -92,8 +88,7 @@ static inline int kx_copy_file(const char* src, const char* dst)
     if (in < 0)
         return -1;
     int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (out < 0)
-    {
+    if (out < 0) {
         close(in);
         return -1;
     }

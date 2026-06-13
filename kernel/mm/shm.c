@@ -19,11 +19,10 @@
 #define SHM_RND 020000
 
 #define SHM_MAX_SEGS 64
-#define SHM_MAX_PAGES 512 /* up to 2 MiB per segment */
+#define SHM_MAX_PAGES 4096 /* up to 16 mb per segment */
 #define SHM_MAX_ATTACH (SHM_MAX_SEGS * 4)
 
-typedef struct
-{
+typedef struct {
     int shmid;
     int key;
     uint64_t size;
@@ -34,8 +33,7 @@ typedef struct
     uint32_t mode;
 } shm_seg_t;
 
-typedef struct
-{
+typedef struct {
     int shmid;
     uint64_t va;
     uint32_t pid;
@@ -78,11 +76,9 @@ int sys_shmget(int key, uint64_t size, int flags)
     if (npages > SHM_MAX_PAGES)
         return -EINVAL;
 
-    if (key != IPC_PRIVATE)
-    {
+    if (key != IPC_PRIVATE) {
         shm_seg_t* s = seg_by_key(key);
-        if (s)
-        {
+        if (s) {
             if ((flags & IPC_CREAT) && (flags & IPC_EXCL))
                 return -EEXIST;
             return s->shmid;
@@ -93,8 +89,7 @@ int sys_shmget(int key, uint64_t size, int flags)
 
     shm_seg_t* slot = NULL;
     for (int i = 0; i < SHM_MAX_SEGS; i++)
-        if (!g_segs[i].shmid)
-        {
+        if (!g_segs[i].shmid) {
             slot = &g_segs[i];
             break;
         }
@@ -102,11 +97,9 @@ int sys_shmget(int key, uint64_t size, int flags)
         return -ENOMEM;
 
     slot->n_pages = (int) npages;
-    for (int i = 0; i < (int) npages; i++)
-    {
+    for (int i = 0; i < (int) npages; i++) {
         slot->pages[i] = pmm_alloc_zeroed();
-        if (!slot->pages[i])
-        {
+        if (!slot->pages[i]) {
             for (int j = 0; j < i; j++)
                 pmm_free(slot->pages[j]);
             return -ENOMEM;
@@ -131,8 +124,7 @@ uint64_t sys_shmat(int shmid, uint64_t shmaddr, int shmflg)
 
     shm_attach_t* slot = NULL;
     for (int i = 0; i < SHM_MAX_ATTACH; i++)
-        if (!g_attaches[i].shmid)
-        {
+        if (!g_attaches[i].shmid) {
             slot = &g_attaches[i];
             break;
         }
@@ -140,14 +132,11 @@ uint64_t sys_shmat(int shmid, uint64_t shmaddr, int shmflg)
         return (uint64_t) (-(int64_t) ENOMEM);
 
     uint64_t va;
-    if (shmaddr)
-    {
+    if (shmaddr) {
         va = (shmflg & SHM_RND) ? (shmaddr & ~(uint64_t) (PAGE_SIZE - 1)) : shmaddr;
         if (va & (PAGE_SIZE - 1))
             return (uint64_t) (-(int64_t) EINVAL);
-    }
-    else
-    {
+    } else {
         uint64_t sz = (uint64_t) s->n_pages * PAGE_SIZE;
         p->mmap_bump += sz;
         va = p->mmap_bump - sz;
@@ -157,10 +146,8 @@ uint64_t sys_shmat(int shmid, uint64_t shmaddr, int shmflg)
     if (shmflg & SHM_RDONLY)
         vf &= ~(uint64_t) VMM_WRITE;
 
-    for (int i = 0; i < s->n_pages; i++)
-    {
-        if (vmm_map(p->space, va + (uint64_t) i * PAGE_SIZE, (uint64_t) s->pages[i], vf) < 0)
-        {
+    for (int i = 0; i < s->n_pages; i++) {
+        if (vmm_map(p->space, va + (uint64_t) i * PAGE_SIZE, (uint64_t) s->pages[i], vf) < 0) {
             for (int j = 0; j < i; j++)
                 vmm_unmap(p->space, va + (uint64_t) j * PAGE_SIZE);
             return (uint64_t) (-(int64_t) ENOMEM);
@@ -181,8 +168,7 @@ int sys_shmdt(uint64_t addr)
     if (!p)
         return -EINVAL;
 
-    for (int i = 0; i < SHM_MAX_ATTACH; i++)
-    {
+    for (int i = 0; i < SHM_MAX_ATTACH; i++) {
         if (!g_attaches[i].shmid)
             continue;
         if (g_attaches[i].pid != p->pid)
@@ -191,8 +177,7 @@ int sys_shmdt(uint64_t addr)
             continue;
 
         shm_seg_t* s = seg_by_id(g_attaches[i].shmid);
-        if (s)
-        {
+        if (s) {
             for (int j = 0; j < g_attaches[i].n_pages; j++)
                 vmm_unmap(p->space, addr + (uint64_t) j * PAGE_SIZE);
             s->ref_count--;
@@ -205,15 +190,14 @@ int sys_shmdt(uint64_t addr)
     return -EINVAL;
 }
 
-/* shmid_ds layout (x86-64 Linux ABI, ~144 bytes) — just zero + fill key fields */
+/* 0 + fill key fields */
 int sys_shmctl(int shmid, int cmd, void* buf)
 {
     shm_seg_t* s = seg_by_id(shmid);
     if (!s)
         return -EINVAL;
 
-    switch (cmd)
-    {
+    switch (cmd) {
     case IPC_RMID:
         if (s->ref_count > 0)
             s->destroy_pending = 1;
@@ -235,15 +219,13 @@ int sys_shmctl(int shmid, int cmd, void* buf)
 void shm_proc_exit(uint32_t pid)
 {
     proc_t* p = g_current_proc;
-    for (int i = 0; i < SHM_MAX_ATTACH; i++)
-    {
+    for (int i = 0; i < SHM_MAX_ATTACH; i++) {
         if (!g_attaches[i].shmid)
             continue;
         if (g_attaches[i].pid != pid)
             continue;
         shm_seg_t* s = seg_by_id(g_attaches[i].shmid);
-        if (s && p && p->space)
-        {
+        if (s && p && p->space) {
             for (int j = 0; j < g_attaches[i].n_pages; j++)
                 vmm_unmap(p->space, g_attaches[i].va + (uint64_t) j * PAGE_SIZE);
             s->ref_count--;

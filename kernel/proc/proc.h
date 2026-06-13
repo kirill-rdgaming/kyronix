@@ -16,8 +16,7 @@
 #define KSTACK_PAGES 8
 #define KSTACK_SIZE (KSTACK_PAGES * 4096ULL)
 
-typedef struct proc
-{
+typedef struct proc {
     int state;           /*  0 */
     int pgid;            /*  4 */
     uint32_t pid;        /*  8 */
@@ -34,11 +33,11 @@ typedef struct proc
     uint64_t mmap_bump;  /* 80 */
     uint64_t fs_base;    /* 88 */
     vfs_file_t** fds;    /* 96 */
-    uint32_t* fds_refcnt; /* 104 - reference counter for fds table */
-    uint64_t pending_sigs; /* 112 */
-    uint64_t sig_mask;     /* 120 */
-    k_sigaction_t sig_actions[NSIG]; /* 128 + NSIG*16 */
-    char cwd[512];          /* will be at offset ~ 128+NSIG*16 */
+    uint32_t* fds_refcnt;
+    uint64_t pending_sigs;
+    uint64_t sig_mask;
+    k_sigaction_t sig_actions[NSIG];
+    char cwd[512];
     uint64_t wakeup_tick;
     uint64_t alarm_tick;
     char exe_path[512];
@@ -47,13 +46,12 @@ typedef struct proc
     uint32_t uid, gid;     /* real */
     uint32_t euid, egid;   /* effective */
     uint32_t suid, sgid;   /* saved-set */
-    uint32_t fsuid, fsgid; /* filesystem credentials */
+    uint32_t fsuid, fsgid; /* fs creds */
     uint32_t umask;
-    uint64_t kstack_guard;       /* VA of the unmapped guard page below kstack */
-    uint64_t itimer_value_ms;    /* setitimer: initial value (ms) */
-    uint64_t itimer_interval_ms; /* setitimer: repeat interval (ms), 0=one-shot */
-    uint64_t itimer_next_tick;   /* g_ticks when next SIGALRM fires */
-    /* FXSAVE/FXRSTOR area: must be 16-byte aligned, 512 bytes */
+    uint64_t kstack_guard;
+    uint64_t itimer_value_ms;
+    uint64_t itimer_interval_ms;
+    uint64_t itimer_next_tick;
     uint8_t fpu_state[512] __attribute__((aligned(16)));
 } proc_t;
 

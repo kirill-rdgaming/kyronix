@@ -44,16 +44,27 @@ SRCS := \
     kernel/arch/x86_64/pit.c          \
     kernel/mm/pmm.c                   \
     kernel/mm/vmm.c                   \
+    kernel/mm/vma.c                   \
     kernel/mm/heap.c                  \
     kernel/mm/shm.c                   \
     kernel/arch/x86_64/syscall_setup.c \
     kernel/syscall/syscall.c          \
+    kernel/syscall/epoll.c            \
+    kernel/syscall/file.c             \
+    kernel/syscall/poll.c             \
+    kernel/syscall/socket.c           \
+    kernel/syscall/time.c             \
     kernel/exec/elf.c                  \
     kernel/exec/process.c              \
     kernel/proc/proc.c                 \
     kernel/proc/signal.c               \
     kernel/fs/vfs.c                    \
+    kernel/fs/devfs.c                  \
+    kernel/fs/eventfd.c                \
+    kernel/fs/fdctl.c                  \
+    kernel/fs/fdpipe.c                 \
     kernel/fs/procfs.c                 \
+    kernel/fs/unix_socket.c            \
     kernel/fs/pipe.c                   \
     kernel/fs/cpio.c                   \
     kernel/drivers/serial.c           \
@@ -82,7 +93,7 @@ DEPS := $(OBJS:.o=.d)
 SRC_DIR  := .
 INITRD   := initrd.cpio
 
-.PHONY: all iso run run-serial run-uefi clean user-build xorg testrunner test-initrd test-iso test-run test-run-log
+.PHONY: all iso run run-serial run-uefi clean user-build xorg testrunner test-initrd test-iso test-run test-run-log fmt fmt-check
 
 all: $(TARGET) $(INITRD)
 
@@ -117,7 +128,7 @@ $(BUILD_DIR)/%.o: %.S
 -include $(DEPS)
 
 $(LIMINE_DIR)/limine: $(LIMINE_DIR)/limine.c
-	gcc -o $@ $<
+	cc $(LIMINE_DIR)/limine.c -o $@
 
 iso: $(TARGET) $(INITRD) $(LIMINE_DIR)/limine
 	rm -rf iso_root

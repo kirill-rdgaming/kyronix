@@ -6,8 +6,7 @@ int main(int argc, char** argv)
         kx_die("usage: readlink LINK");
     char buf[PATH_MAX];
     ssize_t n = readlink(argv[1], buf, sizeof(buf) - 1);
-    if (n < 0)
-    {
+    if (n < 0) {
         kx_warn(argv[1]);
         return 1;
     }
