@@ -49,7 +49,6 @@ isr_no_err 29
 isr_err    30   /* #SX  Security Exception      */
 isr_no_err 31
 
-/* IRQs 32-47: remapped PIC (IRQ0-7 -> 32-39, IRQ8-15 -> 40-47) */
 isr_no_err 32   /* IRQ0  pit timer              */
 isr_no_err 33   /* IRQ1  ps/2 keyboard          */
 isr_no_err 34

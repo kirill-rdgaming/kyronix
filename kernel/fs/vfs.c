@@ -21,7 +21,7 @@ char g_cwd[512] = "/";
 static vfs_file_t* g_default_fds[VFS_FD_MAX];
 static vfs_file_t** g_fds = g_default_fds;
 
-#define VFS_FILE_MAGIC 0x4b59464d41474943ULL /* "KYFMAGIC" */
+#define VFS_FILE_MAGIC 0x4b59464d41474943ULL
 
 #define EACCES    13
 #define EFAULT    14
@@ -98,6 +98,60 @@ static void dir_remove(vfs_node_t* parent, vfs_node_t* child)
     }
     child->next = NULL;
     child->parent = NULL;
+}
+
+static void node_destroy(vfs_node_t* n)
+{
+    if (!n)
+        return;
+    if (n->type == VFS_TYPE_REG && n->data)
+        kfree(n->data);
+    if (n->type == VFS_TYPE_SYM && n->symlink)
+        kfree(n->symlink);
+    kfree(n);
+}
+
+static void node_ref(vfs_node_t* n)
+{
+    if (n)
+        n->refcnt++;
+}
+
+static void node_unref(vfs_node_t* n)
+{
+    if (!n)
+        return;
+    if (n->refcnt)
+        n->refcnt--;
+    if (n->deleted && n->refcnt == 0)
+        node_destroy(n);
+}
+
+static void node_unlink_or_destroy(vfs_node_t* n)
+{
+    if (!n)
+        return;
+    n->deleted = 1;
+    n->next = NULL;
+    n->parent = NULL;
+    if (n->refcnt == 0)
+        node_destroy(n);
+}
+
+void vfs_node_ref_internal(vfs_node_t* n)
+{
+    node_ref(n);
+}
+
+void vfs_node_unref_internal(vfs_node_t* n)
+{
+    node_unref(n);
+}
+
+void vfs_node_mark_deleted_internal(vfs_node_t* n)
+{
+    if (n)
+        n->deleted = 1;
 }
 
 static uint32_t cred_fsuid(void)
@@ -496,9 +550,7 @@ int vfs_unlink(const char* path)
     if (!n->parent) return -(int)EINVAL;
     if (!may_create_in(n->parent)) return -(int)EACCES;
     dir_remove(n->parent, n);
-    if (n->type == VFS_TYPE_REG && n->data) kfree(n->data);
-    if (n->type == VFS_TYPE_SYM && n->symlink) kfree(n->symlink);
-    kfree(n);
+    node_unlink_or_destroy(n);
     return 0;
 }
 
@@ -511,7 +563,7 @@ int vfs_rmdir(const char* path)
     if (!n->parent) return -(int)EINVAL;
     if (!may_create_in(n->parent)) return -(int)EACCES;
     dir_remove(n->parent, n);
-    kfree(n);
+    node_unlink_or_destroy(n);
     return 0;
 }
 
@@ -533,9 +585,7 @@ int vfs_rename(const char* oldpath, const char* newpath)
             return -(int)ENOTDIR;
         }
         dir_remove(new_parent, existing);
-        if (existing->type == VFS_TYPE_REG && existing->data) kfree(existing->data);
-        if (existing->type == VFS_TYPE_SYM && existing->symlink) kfree(existing->symlink);
-        kfree(existing);
+        node_unlink_or_destroy(existing);
     }
     dir_remove(n->parent, n);
     strncpy(n->name, new_leaf, sizeof(n->name) - 1);
@@ -627,9 +677,11 @@ int fd_open_node(vfs_node_t* n, int flags)
     int fd = fd_alloc_from(0);
     if (fd < 0) return -(int)EMFILE;
     vfs_file_t* f = file_alloc();
+    // ok fixed 
     if (!f) return -(int)ENOMEM;
     f->node  = n;
     f->flags = flags;
+    node_ref(n);
     g_fds[fd] = f;
     return fd;
 }
@@ -678,7 +730,7 @@ bool fd_pollin(int fd)
     if (!f) return false;
     if (f->efd) return f->efd->counter > 0;
     if (f->tfd) return f->tfd->next_tick && g_ticks >= f->tfd->next_tick;
-    if (f->wpipe) /* socket: readable when read-pipe has data */
+    if (f->wpipe) /* socket - readable when read-pipe has data */
         return f->pipe->count > 0 || f->pipe->write_refs == 0;
     if (f->pipe)
         return f->pipe_end == PIPE_END_READ &&
@@ -696,7 +748,7 @@ bool fd_pollout(int fd)
 {
     vfs_file_t* f = fd_get(fd);
     if (!f) return false;
-    if (f->wpipe) /* socket: writable when write-pipe has space */
+    if (f->wpipe) /* socket - writable when write-pipe has space */
         return f->wpipe->count < PIPE_BUFSZ && f->wpipe->read_refs > 0;
     if (f->node && f->node->type == VFS_TYPE_SOCK)
         return false;
@@ -742,13 +794,13 @@ static void file_close(vfs_file_t* f)
     if (f->tfd) { kfree(f->tfd); f->magic = 0; kfree(f); return; }
     if (!f->pipe && !f->wpipe && f->node && f->node->type == VFS_TYPE_SOCK) {
         unix_socket_close(f);
+        node_unref(f->node);
         f->magic = 0;
         kfree(f);
         return;
     }
     if (f->wpipe)
     {
-        /* socket fd: f->pipe is the read pipe, f->wpipe is the write pipe */
         if (f->pipe->read_refs) f->pipe->read_refs--;
         pipe_maybe_free(f->pipe);
         pipe_drop_write(f->wpipe);
@@ -767,6 +819,13 @@ static void file_close(vfs_file_t* f)
         }
         pipe_maybe_free(f->pipe);
     }
+    if (f->node) {
+        vfs_node_t* n = f->node;
+        void (*cc)(vfs_node_t*) = (n->type == VFS_TYPE_CHR) ? n->chr_close : NULL;
+        node_unref(n);
+        if (cc && n->refcnt == 0)
+            cc(n);
+    }
     f->magic = 0;
     kfree(f);
 }
@@ -778,7 +837,11 @@ void vfs_file_close(vfs_file_t* f)
 
 static void file_addref(vfs_file_t* f)
 {
-    if (!f || !f->pipe)
+    if (!f)
+        return;
+    if (f->node)
+        node_ref(f->node);
+    if (!f->pipe)
         return;
     if (f->wpipe)
     {
@@ -821,6 +884,7 @@ static void wire_stdio(vfs_file_t** fds)
             continue;
         f->node = n;
         f->flags = flags[i];
+        node_ref(n);
         fds[i] = f;
     }
 }
@@ -844,10 +908,10 @@ void vfs_copy_fdtable(vfs_file_t** dst, vfs_file_t** src)
         {
             *f = *src[i];
             f->magic = VFS_FILE_MAGIC;
-            file_addref(f); /* bump pipe ref-counts */
-            /* child doesn't own a listening socket's lifecycle */
+            /* child doesnt own a listening sockets lifecycle */
             if (f->node && f->node->type == VFS_TYPE_SOCK)
                 f->node = NULL;
+            file_addref(f); /* bump node/pipe ref-counts */
         }
         dst[i] = f;
     }
@@ -920,7 +984,7 @@ int fd_open(const char* path, int flags, int mode)
     if (!path)
         return -(int) ENOENT;
 
-    /* /proc/self/fd/N and /dev/fd/N — dup the existing fd */
+    /* /proc/self/fd/N and /dev/fd/N - dup the existing fd */
     const char* fd_prefix = NULL;
     if (strncmp(path, "/proc/self/fd/", 14) == 0)
         fd_prefix = path + 14;
@@ -956,6 +1020,9 @@ int fd_open(const char* path, int flags, int mode)
         if ((flags & O_CREAT) && (flags & O_EXCL))
             return -(int) EEXIST;
     }
+    if (n->type == VFS_TYPE_CHR && n->chr_open)
+        return n->chr_open(n, flags);
+
     if (n->type == VFS_TYPE_DIR && !(flags & O_DIRECTORY))
         return -(int) EISDIR;
 
@@ -980,6 +1047,7 @@ int fd_open(const char* path, int flags, int mode)
     f->flags = flags;
     f->pos = 0;
     f->cloexec = (flags & O_CLOEXEC) ? 1 : 0;
+    node_ref(n);
     if ((flags & O_TRUNC) && n->type == VFS_TYPE_REG)
         n->size = 0;
     if (flags & O_APPEND)
@@ -1018,7 +1086,7 @@ int64_t fd_read(int fd, void* buf, uint64_t len)
         return -(int64_t) EBADF;
     if (len == 0)
         return 0;
-    if (!uptr_ok_w(buf, len)) /* kernel writes into buf: needs a writable page */
+    if (!uptr_ok_w(buf, len)) /*  needs a writable page */
         return -(int64_t) EFAULT;
     if (f->efd) return eventfd_read(f, (char*)buf, len);
     if (f->tfd) return timerfd_read(f, (char*)buf, len);
@@ -1032,7 +1100,7 @@ int64_t fd_read(int fd, void* buf, uint64_t len)
         return pipe_read(f->pipe, buf, len);
     }
 
-    /* Pipe */
+    /* pipe */
     if (f->pipe)
     {
         if (f->pipe_end != PIPE_END_READ)
@@ -1076,7 +1144,7 @@ int64_t fd_peek(int fd, void* buf, uint64_t len, uint64_t skip)
         return -(int64_t) EBADF;
     if (len == 0)
         return 0;
-    if (!uptr_ok_w(buf, len)) /* kernel writes into buf: needs a writable page */
+    if (!uptr_ok_w(buf, len)) // too
         return -(int64_t) EFAULT;
 
     if (f->wpipe) {
@@ -1096,7 +1164,6 @@ int64_t fd_peek(int fd, void* buf, uint64_t len, uint64_t skip)
     return -(int64_t) EINVAL;
 }
 
-/* core write dispatch; buf already validated (or kernel-trusted) by caller */
 static int64_t fd_write_dispatch(vfs_file_t* f, const void* buf, uint64_t len)
 {
     if (!f->pipe && !f->wpipe && (f->flags & O_ACCMODE) == O_RDONLY)
@@ -1105,7 +1172,7 @@ static int64_t fd_write_dispatch(vfs_file_t* f, const void* buf, uint64_t len)
     if (f->wpipe) /* socket */
         return pipe_write(f->wpipe, buf, len);
 
-    /* Pipe */
+    /* pipe */
     if (f->pipe)
     {
         if (f->pipe_end != PIPE_END_WRITE)
@@ -1169,7 +1236,7 @@ int64_t fd_write(int fd, const void* buf, uint64_t len)
     return fd_write_dispatch(f, buf, len);
 }
 
-/* write from a kernel-trusted buffer (e.g. sendfile); skips user-pointer check */
+/* skips user-pointwr check */
 int64_t fd_write_kbuf(int fd, const void* buf, uint64_t len)
 {
     vfs_file_t* f = fd_get(fd);
@@ -1400,13 +1467,12 @@ int fd_readlink(const char* path, char* buf, uint64_t bufsz)
     return (int) len;
 }
 
-/* Reconstruct absolute path of node by walking parent pointers. */
+/* reconstruct absolute path of node by walking parent pointers. */
 char* vfs_node_abspath(vfs_node_t* n, char* buf, size_t sz)
 {
     if (!n || !buf || sz == 0) return NULL;
     if (n->parent == n) { /* root */ buf[0] = '/'; buf[1] = '\0'; return buf; }
 
-    /* collect ancestors */
     vfs_node_t* stack[128];
     int depth = 0;
     vfs_node_t* cur = n;
@@ -1552,7 +1618,6 @@ int vfs_mknod(const char* path, uint32_t mode, uint64_t dev)
     return 0;
 }
 
-/* Resolve *at dirfd+path into an absolute path stored in out[sz]. */
 int at_resolve(int dirfd, const char* path, char* out, size_t sz)
 {
     if (!path) return -(int)EFAULT;

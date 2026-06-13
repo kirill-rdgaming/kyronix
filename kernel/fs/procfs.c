@@ -419,7 +419,7 @@ static int parse_fd_link(const char* path)
     while (*s) {
         if (*s < '0' || *s > '9')
             return -1;
-        if (fd >= 102400)  /* prevent overflow: max fd is VFS_FD_MAX=1024 */
+        if (fd >= 102400)  /* prevent overflow - max fd is 1024 */
             return -1;
         fd = fd * 10 + (*s - '0');
         s++;

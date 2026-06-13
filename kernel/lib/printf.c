@@ -222,7 +222,6 @@ static void serial_putchar_cb(char c, void* ctx)
     serial_putchar(COM1, c);
 }
 
-/* debug output: serial port only, never the framebuffer */
 int kdbg(const char* fmt, ...)
 {
     va_list ap;

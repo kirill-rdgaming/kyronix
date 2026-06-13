@@ -76,7 +76,7 @@ static void probe(uint8_t bus, uint8_t dev, uint8_t fn)
     if (d->header_type == 0) { /* normal device: 6 BARs */
         for (int i = 0; i < 6; i++) {
             uint32_t bar = pci_read32(bus, dev, fn, (uint8_t)(0x10 + i * 4));
-            if (bar & 1) { /* I/O BAR — skip */
+            if (bar & 1) { /* I/O BAR - skip */
                 d->bars[i] = 0;
                 d->bar_sizes[i] = 0;
             } else {

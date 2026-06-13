@@ -47,13 +47,12 @@ typedef struct proc
     uint32_t uid,  gid;  /* real */
     uint32_t euid, egid; /* effective */
     uint32_t suid, sgid; /* saved-set */
-    uint32_t fsuid, fsgid; /* filesystem credentials */
+    uint32_t fsuid, fsgid; /* fs creds */
     uint32_t umask;
-    uint64_t kstack_guard; /* VA of the unmapped guard page below kstack */
-    uint64_t itimer_value_ms;    /* setitimer: initial value (ms) */
-    uint64_t itimer_interval_ms; /* setitimer: repeat interval (ms), 0=one-shot */
-    uint64_t itimer_next_tick;   /* g_ticks when next SIGALRM fires */
-    /* FXSAVE/FXRSTOR area: must be 16-byte aligned, 512 bytes */
+    uint64_t kstack_guard;
+    uint64_t itimer_value_ms;
+    uint64_t itimer_interval_ms;
+    uint64_t itimer_next_tick;
     uint8_t fpu_state[512] __attribute__((aligned(16)));
 } proc_t;
 

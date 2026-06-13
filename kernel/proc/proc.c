@@ -8,7 +8,6 @@
 #include "mm/vmm.h"
 #include "syscall/syscall.h"
 
-/* kernel stack VAs: one guard page + KSTACK_PAGES per process */
 #define KSTACK_VA_BASE 0xffff920000000000ULL
 #define KSTACK_VA_STRIDE ((KSTACK_PAGES + 1) * PAGE_SIZE)
 
@@ -99,7 +98,7 @@ proc_t* proc_alloc(uint32_t ppid)
         p->cwd[0] = '/';
         p->cwd[1] = '\0';
 
-        /* default x87 FPU + SSE state: mask all exceptions */
+        /* default x87 fpu + sse state: mask all exceptions */
         ((uint16_t*)p->fpu_state)[0] = 0x037F; /* FCW */
         ((uint32_t*)(p->fpu_state + 24))[0] = 0x1F80; /* MXCSR */
 

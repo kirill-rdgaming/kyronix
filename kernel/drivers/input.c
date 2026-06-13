@@ -93,8 +93,6 @@ static bool evio_req(uint64_t req, uint8_t nr)
 static int64_t evdev_ioctl(vfs_node_t* n, uint64_t req64, uint64_t arg)
 {
     int dev = (int)(uintptr_t)n->data;
-    /* ioctl request is a 32-bit int; userspace sign-extends it (bit 31 set on
-       _IOC_READ requests), so the high half arrives as 0xffffffff — truncate it */
     uint64_t req = (uint32_t)req64;
 
     /* name: EVIO(0x06, len) */
@@ -160,7 +158,7 @@ static int64_t evdev_ioctl(vfs_node_t* n, uint64_t req64, uint64_t arg)
         ((uint16_t*)(uintptr_t)arg)[3] = 1;
         return 0;
     default:
-        return 0; /* ignore unknown evio ioctls */
+        return 0; /* ignore unkniwn evio ioctls */
     }
 }
 

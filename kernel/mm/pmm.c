@@ -114,7 +114,7 @@ void* pmm_alloc(void)
         g_pmm.free_pages--;
         return (void*) (page << PAGE_SHIFT);
     }
-    return NULL; /* out of physical memory */
+    return NULL; /* out of phys memory */
 }
 
 void* pmm_alloc_zeroed(void)

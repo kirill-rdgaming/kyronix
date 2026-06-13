@@ -111,7 +111,7 @@ void isr_dispatch(cpu_state_t* state)
 
     if (n < 32)
     {
-        /* demand paging: allocate a page for non-present user-space access */
+        /* demand paging: allocate a page for non-present userspace access */
         if (n == 14 && g_current_proc && (state->cs & 3) == 3 && !(state->error_code & 0x1))
         {
             uint64_t cr2 = read_cr2();
@@ -126,7 +126,7 @@ void isr_dispatch(cpu_state_t* state)
             }
         }
 
-        /* user-mode exception: kill the process, don't halt the kernel */
+        /* user-mode exception: kill the process, dont halt the kernel */
         if ((state->cs & 3) == 3 && g_current_proc)
         {
             static const int exc_sig[] = {

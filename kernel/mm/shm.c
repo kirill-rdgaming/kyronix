@@ -19,7 +19,7 @@
 #define SHM_RND     020000
 
 #define SHM_MAX_SEGS   64
-#define SHM_MAX_PAGES  4096 /* up to 16 MiB per segment */
+#define SHM_MAX_PAGES  4096 /* up to 16 mb per segment */
 #define SHM_MAX_ATTACH (SHM_MAX_SEGS * 4)
 
 typedef struct {
@@ -167,7 +167,7 @@ int sys_shmdt(uint64_t addr)
     return -EINVAL;
 }
 
-/* shmid_ds layout (x86-64 Linux ABI, ~144 bytes) — just zero + fill key fields */
+/* 0 + fill key fields */
 int sys_shmctl(int shmid, int cmd, void* buf)
 {
     shm_seg_t* s = seg_by_id(shmid);

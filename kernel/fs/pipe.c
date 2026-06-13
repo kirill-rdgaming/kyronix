@@ -6,7 +6,7 @@
 #include "arch/x86_64/pit.h"
 #include <stdbool.h>
 
-#define PIPE_MAGIC 0x4b59504950454d47ULL /* "KYPipeMG" */
+#define PIPE_MAGIC 0x4b59504950454d47ULL
 #define EPIPE 32
 #define EAGAIN 11
 #define EIO 5
@@ -48,7 +48,8 @@ int64_t pipe_read(pipe_t* p, void* buf, uint64_t len)
             if (p->write_refs == 0)
                 break;
             if (done > 0)
-                break; /* return data already available; don't wait to fill buf */
+                break; /* return data already available
+                            don't wait to fill buf */
             proc_t* _rp = g_current_proc;
             if (_rp) _rp->wakeup_tick = g_ticks + 10;
             p->waiting_reader = _rp;
@@ -137,7 +138,7 @@ int64_t pipe_write(pipe_t* p, const void* buf, uint64_t len)
             if (reader->state == PROC_WAITING)
                 reader->state = PROC_READY;
         }
-        /* also wake any process in select()/poll() watching this pipe */
+        /* also wake any process in select/poll watching this pipe */
         for (int _i = 0; _i < PROC_MAX; _i++)
             if (g_proctable[_i].state == PROC_WAITING)
                 g_proctable[_i].state = PROC_READY;

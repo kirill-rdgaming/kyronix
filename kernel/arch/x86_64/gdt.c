@@ -11,7 +11,7 @@ typedef struct
     uint64_t ist[7];
     uint64_t reserved2;
     uint16_t reserved3;
-    uint16_t iopb_offset; /* beyond TSS limit -> no IOPB -> deny all user I/O */
+    uint16_t iopb_offset; /* beyond tss limit -> no IOPB -> deny all user i/o */
 } __attribute__((packed)) tss_t;
 
 typedef struct
@@ -82,10 +82,10 @@ void gdt_init(void)
                      "movw   %%ax,  %%ds         \n\t"
                      "movw   %%ax,  %%es         \n\t"
                      "movw   %%ax,  %%ss         \n\t"
-                     "xorw   %%ax,  %%ax         \n\t" /* FS=GS=0 (set via MSR later) */
+                     "xorw   %%ax,  %%ax         \n\t" /* FS=GS=0 (set via msr later) */
                      "movw   %%ax,  %%fs         \n\t"
                      "movw   %%ax,  %%gs         \n\t"
-                     "movw   $0x28, %%ax         \n\t" /* TSS selector */
+                     "movw   $0x28, %%ax         \n\t" /* tss selector */
                      "ltr    %%ax                \n\t"
                      :
                      : "m"(gdtr)

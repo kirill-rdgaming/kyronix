@@ -29,7 +29,7 @@ void fb_cursor_enable(int enable)
 
 static void cursor_draw(uint32_t col, uint32_t row, uint32_t color)
 {
-    uint32_t y = row * FONT_H + (FONT_H - 1); /* row 15: always blank in this font */
+    uint32_t y = row * FONT_H + (FONT_H - 1); /* row 15: always blank in this font (other psf fonts can be rendered badly) */
     fb_fill_rect(col * FONT_W, y, FONT_W, 1, color);
 }
 

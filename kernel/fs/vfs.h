@@ -85,67 +85,61 @@ typedef struct vfs_node
     uint32_t mode;
     uint32_t uid, gid;
     uint32_t ino;
-
+    uint32_t refcnt;
+    uint8_t deleted;
     uint64_t size;
-
-    /* REG: heap buffer, capacity >= size */
     uint8_t* data;
     uint64_t capacity;
-
-    /* DIR: linked list of children */
     struct vfs_node* children;
-    struct vfs_node* next; /* next sibling */
+    struct vfs_node* next;  
     struct vfs_node* parent;
-
-    /* SYM: target path */
     char* symlink;
-
-    /* CHR: device callbacks */
     int64_t (*chr_read)(struct vfs_node*, char*, uint64_t, uint64_t);
     int64_t (*chr_write)(struct vfs_node*, const char*, uint64_t);
     int64_t (*chr_ioctl)(struct vfs_node*, uint64_t req, uint64_t arg);
-    bool    (*chr_pollin)(struct vfs_node*); /* NULL → always readable */
-    /* optional: called by sys_mmap for chr-devs instead of normal file mapping */
+    bool    (*chr_pollin)(struct vfs_node*);
+    int     (*chr_open)(struct vfs_node*, int flags);
+    void    (*chr_close)(struct vfs_node*);
     int64_t (*chr_mmap)(struct vfs_node*, uint64_t off, uint64_t len, uint64_t va, uint64_t vflags);
 
-    /* SOCK: pending connection count (for poll/select on listening socket) */
     volatile int sock_backlog;
 } vfs_node_t;
 
 typedef struct {
     volatile uint64_t counter;
-    uint32_t          semaphore; /* EFD_SEMAPHORE */
-    void*             waiter;    /* proc_t* blocked in read */
+    uint32_t          semaphore;  
+    void*             waiter;     
 } eventfd_state_t;
 
 typedef struct {
     int      clockid;
-    uint64_t interval_ms;  /* 0 = one-shot */
-    uint64_t next_tick;    /* g_ticks when next expiry */
-    uint64_t overruns;     /* expired-but-unread count */
+    uint64_t interval_ms;   
+    uint64_t next_tick;     
+    uint64_t overruns;      
 } timerfd_state_t;
 
 typedef struct
 {
     uint64_t magic;
-    vfs_node_t* node; /* NULL for pipe fds */
+    vfs_node_t* node;  
     uint64_t pos;
     int flags;
     pipe_t* pipe;
-    int pipe_end; /* PIPE_END_READ or PIPE_END_WRITE */
-    pipe_t* wpipe; /* non-NULL for socket fds: separate write-direction pipe */
+    int pipe_end;  
+    pipe_t* wpipe;  
     uint32_t peer_pid, peer_uid, peer_gid;
     int passcred;
-    uint8_t cloexec; /* FD_CLOEXEC: close this fd on execve */
-    eventfd_state_t* efd;  /* non-NULL if eventfd */
-    timerfd_state_t* tfd;  /* non-NULL if timerfd */
+    uint8_t cloexec;  
+    eventfd_state_t* efd;   
+    timerfd_state_t* tfd;   
+
 } vfs_file_t;
 
 #define VFS_FD_MAX 1024
 
 void vfs_init(void);
 
-void vfs_cloexec_flush(void); /* close all FD_CLOEXEC fds (called on execve) */
+void vfs_cloexec_flush(void);
 void vfs_set_fdtable(vfs_file_t** fds);
 vfs_file_t** vfs_get_fdtable(void);
 void vfs_copy_fdtable(vfs_file_t** dst, vfs_file_t** src);
@@ -217,4 +211,4 @@ int vfs_mknod(const char* path, uint32_t mode, uint64_t dev);
 char* vfs_node_abspath(vfs_node_t* n, char* buf, size_t sz);
 int   at_resolve(int dirfd, const char* path, char* out, size_t sz);
 int   fd_dup3(int oldfd, int newfd, int flags);
-int   fd_open_node(vfs_node_t* n, int flags); /* open existing node as new fd */
+int   fd_open_node(vfs_node_t* n, int flags);

@@ -9,7 +9,7 @@
 #define KBS_OBF (1u << 0)
 #define KBS_AUXB (1u << 5) /* output byte is from the aux (mouse) port */
 
-/* scancode set 1 → Linux keycode (0 = no mapping) */
+/* scancode set 1 -> Linux keycode (0 = no mapping) */
 static const uint16_t sc_linuxkey[128] = {
     [0x01]=1,  [0x02]=2,  [0x03]=3,  [0x04]=4,  [0x05]=5,  [0x06]=6,
     [0x07]=7,  [0x08]=8,  [0x09]=9,  [0x0A]=10, [0x0B]=11, [0x0C]=12,
@@ -28,7 +28,7 @@ static const uint16_t sc_linuxkey[128] = {
     [0x57]=87, [0x58]=88,
 };
 
-/* extended (0xE0 prefix) scancode → Linux keycode */
+/* extended (0xE0 prefix) scancode -> Linux keycode */
 static const uint16_t sc_ext_linuxkey[128] = {
     [0x1C]=96, [0x1D]=97, [0x35]=98, [0x38]=100,
     [0x47]=102,[0x48]=103,[0x49]=104,[0x4B]=105,
@@ -101,14 +101,13 @@ void kbd_init(void)
     g_ext_seq = NULL;
     g_ext_seq_idx = -1;
 
-    /* IRQ 1 handler: pumps kbd data even when no process reads /dev/tty */
+    /* irq1 handler: pumps kbd data even when no process reads /dev/tty */
     request_irq(1, kbd_irq1, NULL);
     log_info("PS/2 keyboard: enabled");
 }
 
 int kbd_getchar(void)
 {
-    /* If we are mid-sequence, return the next byte */
     if (g_ext_seq_idx >= 0)
     {
         char c = g_ext_seq[g_ext_seq_idx];
@@ -126,7 +125,7 @@ int kbd_getchar(void)
     if (!(st & KBS_OBF))
         return -1;
     if (st & KBS_AUXB)
-        return -1; /* mouse byte — leave it for the IRQ12 handler */
+        return -1; /* mouse byte - leave it for the IRQ12 handler */
 
     int raw = inb(KBD_DATA);
     if (raw < 0)
@@ -134,7 +133,7 @@ int kbd_getchar(void)
 
     uint8_t sc = (uint8_t) raw;
 
-    /* extended prefix (arrow keys, etc.) */
+    /* extended prefix (arrow keys ...) */
     if (sc == 0xE0)
     {
         g_ext = true;

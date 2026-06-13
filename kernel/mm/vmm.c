@@ -3,6 +3,7 @@
 #include "lib/log.h"
 #include "lib/string.h"
 #include "pmm.h"
+#include "vma.h"
 
 vmm_space_t g_kernel_space;
 
@@ -166,13 +167,15 @@ vmm_space_t* vmm_space_new(void)
     if (!pml4_phys)
         return NULL;
 
-    /* share kernel half (PML4 entries 256-511); user half starts zeroed */
+    /* share kernel half (pml4 entries 256-511); user half starts zeroed */
     uint64_t* new_pml4 = (uint64_t*) phys_to_virt(pml4_phys);
     uint64_t* kern_pml4 = (uint64_t*) phys_to_virt(g_kernel_space.pml4_phys);
     for (int i = 256; i < 512; i++)
         new_pml4[i] = kern_pml4[i];
 
+    memset(&g_pool[slot], 0, sizeof(g_pool[slot]));
     g_pool[slot].pml4_phys = pml4_phys;
+    vma_reset(&g_pool[slot]);
     g_pool_used[slot] = true;
     return &g_pool[slot];
 }
@@ -228,7 +231,7 @@ void vmm_switch(vmm_space_t* sp)
 {
     if (sp != &g_kernel_space)
     {
-        /* sync any kernel mappings added after vmm_space_new (e.g. kstacks) */
+        /* sync any kernel mappings added after vmm_space_new */
         uint64_t* dst = (uint64_t*) phys_to_virt(sp->pml4_phys);
         uint64_t* src = (uint64_t*) phys_to_virt(g_kernel_space.pml4_phys);
         for (int i = 256; i < 512; i++)
@@ -240,6 +243,7 @@ void vmm_switch(vmm_space_t* sp)
 int vmm_fork_user(vmm_space_t* dst, vmm_space_t* src)
 {
     uint64_t* src_pml4 = (uint64_t*) phys_to_virt(src->pml4_phys);
+    vma_copy(dst, src);
 
     for (int i = 0; i < 256; i++)
     {

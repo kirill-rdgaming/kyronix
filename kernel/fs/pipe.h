@@ -7,7 +7,7 @@
 #define PIPE_ANC_MAXFDS 4
 
 typedef struct {
-    void*   files[PIPE_ANC_MAXFDS]; /* vfs_file_t* refs */
+    void*   files[PIPE_ANC_MAXFDS];
     int32_t nfds;
     int32_t _pad;
 } pipe_anc_t;

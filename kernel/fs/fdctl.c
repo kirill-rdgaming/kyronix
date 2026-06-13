@@ -40,8 +40,8 @@ int fd_ioctl(int fd, uint64_t req, uint64_t arg)
 
     if (f->node && f->node->type == VFS_TYPE_CHR && f->node->chr_ioctl)
         return (int)f->node->chr_ioctl(f->node, req, arg);
-
-    switch (req) {
+    // YEYEYEYEYEYEY IM FIXED THIS FUCKING SHIT
+    switch ((uint32_t)req) {
     case TIOCGWINSZ:
     {
         struct winsize* ws = (struct winsize*)(uintptr_t)arg;

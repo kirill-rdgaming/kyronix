@@ -51,7 +51,7 @@ static inline void pic_unmask_irq(uint8_t irq)
     if (irq >= 8)
     {
         irq -= 8;
-        /* slave IRQs reach the CPU only if the cascade line (IRQ2) is unmasked */
+        /* slave irqs reach the cpu only if the cascade line (IRQ2) is unmasked */
         outb(PIC1_DATA, inb(PIC1_DATA) & (uint8_t) ~(1u << 2));
     }
     outb(port, inb(port) & (uint8_t) ~(1u << irq));

@@ -42,7 +42,6 @@ static void setup_sigframe(proc_t* p, int sig, syscall_frame_t* f)
 {
     uint64_t user_rsp = cpu_get_user_rsp();
 
-    /* below red zone, sp ≡ 8 (mod 16) per x86-64 ABI */
     uint64_t sp = user_rsp - 128 - sizeof(rt_sigframe_t);
     sp = ((sp - 8) & ~(uint64_t) 0xF) + 8;
 

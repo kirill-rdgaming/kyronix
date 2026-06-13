@@ -14,3 +14,6 @@ vfs_node_t* vfs_node_alloc_internal(const char* name, uint8_t type, uint32_t mod
 void vfs_dir_insert_internal(vfs_node_t* dir, vfs_node_t* child);
 vfs_node_t* vfs_dir_find_internal(vfs_node_t* dir, const char* name);
 bool vfs_may_create_in_internal(vfs_node_t* dir);
+void vfs_node_ref_internal(vfs_node_t* n);
+void vfs_node_unref_internal(vfs_node_t* n);
+void vfs_node_mark_deleted_internal(vfs_node_t* n);

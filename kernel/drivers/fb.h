@@ -19,7 +19,7 @@
 typedef struct
 {
     void* addr;
-    uint64_t phys_addr; /* physical address for userspace mmap */
+    uint64_t phys_addr;
     uint64_t width;
     uint64_t height;
     uint64_t pitch;

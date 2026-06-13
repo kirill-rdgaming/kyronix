@@ -57,6 +57,7 @@ int fd_socket(int domain, int type, int proto)
     vfs_file_t* f = vfs_file_alloc();
     if (!f) { kfree(s); kfree(n); return -(int)ENOMEM; }
     f->node = n;
+    vfs_node_ref_internal(n);
     f->flags = O_RDWR | (type & O_NONBLOCK);
     f->cloexec = (type & O_CLOEXEC) ? 1 : 0;
     vfs_fd_install(fd, f);
@@ -216,7 +217,8 @@ int fd_connect_unix(int fd, const char* path)
             g_proctable[i].state = PROC_READY;
     unix_sock_t* cs = (unix_sock_t*)f->node->data;
     kfree(cs);
-    kfree(f->node);
+    vfs_node_mark_deleted_internal(f->node);
+    vfs_node_unref_internal(f->node);
     f->node = NULL;
     f->pipe = cli_rx;
     f->wpipe = srv_rx;
@@ -250,5 +252,5 @@ void unix_socket_close(vfs_file_t* f)
         }
         kfree(s);
     }
-    kfree(f->node);
+    vfs_node_mark_deleted_internal(f->node);
 }

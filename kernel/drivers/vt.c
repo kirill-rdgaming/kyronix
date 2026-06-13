@@ -60,7 +60,6 @@ typedef struct { char mode, waitv; short relsig, acqsig, frsig; } vt_mode_t;
 typedef struct { unsigned short v_active, v_signal, v_state; } vt_stat_t;
 typedef struct { unsigned short ws_row, ws_col, ws_xpixel, ws_ypixel; } winsize_t;
 
-/* termios matching the layout in vfs.c / musl */
 #define NCCS_VT 19
 typedef struct {
     uint32_t c_iflag, c_oflag, c_cflag, c_lflag;
@@ -204,7 +203,7 @@ void vt_init(void)
         if (n) n->chr_ioctl = vt_ioctl;
     }
 
-    /* replace /dev/console symlink with proper vt chr-dev */
+    /* replace /dev/console symlink with proper vt chr dev */
     vfs_unlink("/dev/console");
     vfs_node_t* nc = vfs_create_chr("/dev/console", vt_read, vt_write);
     if (nc) nc->chr_ioctl = vt_ioctl;

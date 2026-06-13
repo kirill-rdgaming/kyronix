@@ -82,7 +82,7 @@ int cpio_load(const void* data, uint64_t total_size)
 
         const char* name = (const char*) (base + name_off);
 
-        /* data offset: align (CPIO_HDR_SIZE + namesize) to 4 */
+        /* data offdet: align (CPIO_HDR_SIZE + namesize) to 4 */
         uint64_t data_off = pos + align4((uint64_t) CPIO_HDR_SIZE + namesize);
         if (data_off + filesize > total_size && filesize > 0)
             break;

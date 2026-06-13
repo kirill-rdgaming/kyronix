@@ -200,7 +200,7 @@ int64_t tty_read(char* buf, uint64_t len)
                 actionable &= ~(1ULL << idx);
                 if (g_current_proc->sig_actions[idx].sa_handler != SIG_IGN)
                     return -(int64_t) EINTR;
-                /* signal is ignored — consume it and keep reading */
+                /* signal is ignored - consume it and keep reading */
                 g_current_proc->pending_sigs &= ~(1ULL << idx);
             }
         }

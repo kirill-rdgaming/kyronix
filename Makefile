@@ -44,6 +44,7 @@ SRCS := \
     kernel/arch/x86_64/pit.c          \
     kernel/mm/pmm.c                   \
     kernel/mm/vmm.c                   \
+    kernel/mm/vma.c                   \
     kernel/mm/heap.c                  \
     kernel/mm/shm.c                   \
     kernel/arch/x86_64/syscall_setup.c \
