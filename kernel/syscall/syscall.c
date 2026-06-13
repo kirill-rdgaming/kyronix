@@ -1,4 +1,9 @@
 #include "syscall.h"
+#include "epoll.h"
+#include "file.h"
+#include "poll.h"
+#include "socket.h"
+#include "time.h"
 #include "arch/x86_64/cpu.h"
 #include "fs/pipe.h"
 #include "mm/shm.h"
@@ -1046,46 +1051,6 @@ static int64_t sys_kill(int64_t pid, int sig)
     return 0;
 }
 
-static int64_t sys_getrlimit(uint64_t r, void* rl)
-{
-    if (!rl)
-        return -(int64_t) EINVAL;
-    if (!uptr_ok_w(rl, 16))
-        return -(int64_t) EFAULT;
-    if (r == 7) /* RLIMIT_NOFILE */
-    {
-        ((uint64_t*) rl)[0] = VFS_FD_MAX;
-        ((uint64_t*) rl)[1] = VFS_FD_MAX;
-        return 0;
-    }
-    ((uint64_t*) rl)[0] = 1024ULL * 1024ULL * 1024ULL;
-    ((uint64_t*) rl)[1] = 1024ULL * 1024ULL * 1024ULL;
-    return 0;
-}
-
-static int64_t sys_prlimit64(uint64_t p, uint64_t r, void* nl, void* ol)
-{
-    (void) p;
-    (void) r;
-    (void) nl;
-    if (ol)
-    {
-        if (!uptr_ok_w(ol, 16))
-            return -(int64_t) EFAULT;
-        if (r == 7) /* RLIMIT_NOFILE */
-        {
-            ((uint64_t*) ol)[0] = VFS_FD_MAX;
-            ((uint64_t*) ol)[1] = VFS_FD_MAX;
-        }
-        else
-        {
-            ((uint64_t*) ol)[0] = 1024ULL * 1024ULL * 1024ULL;
-            ((uint64_t*) ol)[1] = 1024ULL * 1024ULL * 1024ULL;
-        }
-    }
-    return 0;
-}
-
 static int64_t sys_rt_sigaction(int sig, const k_sigaction_t* act, k_sigaction_t* oldact,
                                 uint64_t sigsetsize)
 {
@@ -1248,32 +1213,6 @@ static int64_t sys_rt_sigsuspend(const uint64_t* mask, uint64_t sigsetsize)
     }
     p->sig_mask = saved;
     return -(int64_t) EINTR;
-}
-
-static int64_t sys_nanosleep(void* r, void* m)
-{
-    (void) m;
-    if (!r) return 0;
-    if (!uptr_ok(r, 16)) return -(int64_t)EFAULT;
-    uint64_t sec = ((uint64_t*) r)[0];
-    uint64_t nsec = ((uint64_t*) r)[1];
-    uint64_t ms = sec * 1000 + nsec / 1000000;
-    if (ms == 0) return 0;
-    proc_t* p = cur();
-    if (!p) return 0;
-    uint64_t deadline = g_ticks + ms;
-    p->wakeup_tick = deadline;
-    while (g_ticks < deadline) {
-        if (proc_next_ready(p))
-            sched_yield_blocking();
-        else {
-            sti();
-            hlt();
-            cli();
-        }
-    }
-    p->wakeup_tick = 0;
-    return 0;
 }
 
 static int64_t sys_mkdir(const char* path, uint32_t mode)
@@ -1494,136 +1433,6 @@ static int64_t sys_prctl(int op, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t
     return 0;
 }
 
-#define POLLIN   0x0001
-#define POLLOUT  0x0004
-#define POLLHUP  0x0010
-#define POLLNVAL 0x0020
-
-struct pollfd_s
-{
-    int fd;
-    short events;
-    short revents;
-};
-
-static int poll_check(struct pollfd_s* fds, uint64_t nfds)
-{
-    int ready = 0;
-    for (uint64_t i = 0; i < nfds; i++) {
-        fds[i].revents = 0;
-        if (fds[i].fd < 0) continue;
-        if (!fd_valid(fds[i].fd)) {
-            fds[i].revents = POLLNVAL;
-        } else {
-            if ((fds[i].events & POLLIN)  && fd_pollin(fds[i].fd))  fds[i].revents |= POLLIN;
-            if ((fds[i].events & POLLOUT) && fd_pollout(fds[i].fd)) fds[i].revents |= POLLOUT;
-        }
-        if (fds[i].revents) ready++;
-    }
-    return ready;
-}
-
-static int64_t sys_poll(struct pollfd_s* fds, uint64_t nfds, int timeout)
-{
-    if (!fds && nfds) return -(int64_t) EFAULT;
-    if (nfds && !uptr_ok_w(fds, nfds * sizeof(*fds))) return -(int64_t)EFAULT;
-    int ready = nfds ? poll_check(fds, nfds) : 0;
-    if (ready > 0 || timeout == 0) return ready;
-    proc_t* p = cur();
-    uint64_t deadline = (timeout > 0) ? g_ticks + (uint64_t) timeout : (uint64_t) -1ULL;
-    while (!ready) {
-        if (g_ticks >= deadline) break;
-        if (p && (p->pending_sigs & ~p->sig_mask)) return -(int64_t) EINTR;
-        p->wakeup_tick = g_ticks + 5; /* re-check within 5ms even without explicit wake */
-        if (proc_next_ready(p))
-            sched_yield_blocking();
-        else { sti(); hlt(); cli(); }
-        p->wakeup_tick = 0;
-        if (nfds) ready = poll_check(fds, nfds);
-    }
-    return (int64_t) ready;
-}
-
-static int64_t sys_ppoll(struct pollfd_s* fds, uint64_t nfds, void* tmo, const void* sigmask,
-                         uint64_t sigsetsize)
-{
-    (void) sigmask;
-    (void) sigsetsize;
-    int timeout = -1;
-    if (tmo) {
-        uint64_t ms = ((uint64_t*) tmo)[0] * 1000 + ((uint64_t*) tmo)[1] / 1000000;
-        timeout = ms > 0x7fffffff ? 0x7fffffff : (int) ms;
-    }
-    return sys_poll(fds, nfds, timeout);
-}
-
-static inline bool fds_test(const uint8_t* set, int fd)
-{
-    return set && ((set[fd >> 3] >> (fd & 7)) & 1);
-}
-static inline void fds_set(uint8_t* set, int fd)
-{
-    if (set) set[fd >> 3] |= (uint8_t) (1 << (fd & 7));
-}
-
-static int64_t sys_select_common(int nfds, void* rfds, void* wfds, void* efds, void* timeout,
-                                 bool timeout_is_user)
-{
-    if (nfds < 0 || nfds > VFS_FD_MAX) return -(int64_t)EINVAL;
-    uint64_t set_bytes = ((uint64_t)nfds + 7) / 8;
-    if (rfds && (!uptr_ok(rfds, set_bytes) || !uptr_ok_w(rfds, set_bytes))) return -(int64_t)EFAULT;
-    if (wfds && (!uptr_ok(wfds, set_bytes) || !uptr_ok_w(wfds, set_bytes))) return -(int64_t)EFAULT;
-    if (efds && (!uptr_ok(efds, set_bytes) || !uptr_ok_w(efds, set_bytes))) return -(int64_t)EFAULT;
-    if (timeout && timeout_is_user && !uptr_ok(timeout, 16)) return -(int64_t)EFAULT;
-    uint64_t deadline = (uint64_t) -1ULL;
-    if (timeout) {
-        uint64_t ms = ((uint64_t*) timeout)[0] * 1000 + ((uint64_t*) timeout)[1] / 1000;
-        deadline = g_ticks + ms;
-    }
-    uint8_t rout[128], wout[128];
-    proc_t* p = cur();
-    for (;;) {
-        memset(rout, 0, sizeof(rout));
-        memset(wout, 0, sizeof(wout));
-        int ready = 0;
-        for (int fd = 0; fd < nfds && fd < VFS_FD_MAX; fd++) {
-            if (fds_test((uint8_t*) rfds, fd) && fd_pollin(fd))  { fds_set(rout, fd); ready++; }
-            if (fds_test((uint8_t*) wfds, fd) && fd_pollout(fd)) { fds_set(wout, fd); ready++; }
-        }
-        if (ready > 0 || g_ticks >= deadline) {
-            if (rfds) memcpy(rfds, rout, set_bytes);
-            if (wfds) memcpy(wfds, wout, set_bytes);
-            if (efds) memset(efds, 0, set_bytes);
-            return (int64_t) ready;
-        }
-        if (p && (p->pending_sigs & ~p->sig_mask)) return -(int64_t) EINTR;
-        p->wakeup_tick = g_ticks + 5; /* re-check within 5ms even without explicit wake */
-        if (proc_next_ready(p))
-            sched_yield_blocking();
-        else { sti(); hlt(); cli(); }
-        p->wakeup_tick = 0;
-    }
-}
-
-static int64_t sys_select(int nfds, void* rfds, void* wfds, void* efds, void* timeout)
-{
-    return sys_select_common(nfds, rfds, wfds, efds, timeout, true);
-}
-
-static int64_t sys_pselect6(int nfds, void* rfds, void* wfds, void* efds, void* timeout,
-                            void* sigmask)
-{
-    (void) sigmask;
-    /* pselect uses timespec (nsec), convert to timeval-style (usec) for sys_select */
-    uint64_t tv[2] = {0, 0};
-    if (timeout) {
-        if (!uptr_ok(timeout, 16)) return -(int64_t)EFAULT;
-        tv[0] = ((uint64_t*) timeout)[0];
-        tv[1] = ((uint64_t*) timeout)[1] / 1000;
-    }
-    return sys_select_common(nfds, rfds, wfds, efds, timeout ? tv : NULL, false);
-}
-
 static int64_t sys_umask(uint64_t mask)
 {
     proc_t* p = cur();
@@ -1697,122 +1506,6 @@ static int64_t sys_madvise(void* addr, uint64_t len, int advice)
     return 0;
 }
 
-static int64_t sys_getitimer(int w, void* v)
-{
-    (void) w;
-    proc_t* p = cur();
-    if (!v || !p) return 0;
-    if (!uptr_ok_w(v, 32)) return -(int64_t)EFAULT;
-    uint64_t* out = (uint64_t*) v;
-    out[0] = p->itimer_interval_ms / 1000;
-    out[1] = (p->itimer_interval_ms % 1000) * 1000;
-    uint64_t rem = (p->itimer_next_tick > g_ticks) ? p->itimer_next_tick - g_ticks : 0;
-    out[2] = rem / 1000;
-    out[3] = (rem % 1000) * 1000;
-    return 0;
-}
-static int64_t sys_setitimer(int w, const void* n, void* o)
-{
-    (void) w;
-    proc_t* p = cur();
-    if (!p) return 0;
-    if (o && !uptr_ok_w(o, 32)) return -(int64_t)EFAULT;
-    sys_getitimer(w, o); /* snapshot old value */
-    if (n) {
-        if (!uptr_ok(n, 32)) return -(int64_t)EFAULT;
-        const uint64_t* nv = (const uint64_t*) n; /* itimerval: interval(sec,usec), value(sec,usec) */
-        p->itimer_interval_ms = nv[0] * 1000 + nv[1] / 1000;
-        uint64_t val_ms       = nv[2] * 1000 + nv[3] / 1000;
-        p->itimer_next_tick   = val_ms ? g_ticks + val_ms : 0;
-        p->itimer_value_ms    = val_ms;
-    }
-    return 0;
-}
-
-static int64_t sys_clock_gettime(uint64_t c, void* t)
-{
-    (void) c;
-    if (t)
-    {
-        if (!uptr_ok_w(t, 16)) return -(int64_t)EFAULT;
-        uint64_t ms = g_epoch_base * 1000 + g_ticks;
-        ((uint64_t*) t)[0] = ms / 1000;
-        ((uint64_t*) t)[1] = (ms % 1000) * 1000000ULL;
-    }
-    return 0;
-}
-
-static int64_t sys_gettimeofday(void* tv, void* tz)
-{
-    (void) tz;
-    if (tv)
-    {
-        if (!uptr_ok_w(tv, 16)) return -(int64_t)EFAULT;
-        uint64_t ms = g_epoch_base * 1000 + g_ticks;
-        ((uint64_t*) tv)[0] = ms / 1000;
-        ((uint64_t*) tv)[1] = (ms % 1000) * 1000ULL;
-    }
-    return 0;
-}
-
-static int64_t sys_times(void* b)
-{
-    if (b) {
-        if (!uptr_ok_w(b, 32)) return -(int64_t)EFAULT;
-        memset(b, 0, 32);
-    }
-    return 0;
-}
-
-struct iovec
-{
-    uint64_t iov_base;
-    uint64_t iov_len;
-};
-
-static int64_t sys_readv(int fd, const struct iovec* iov, int n)
-{
-    if (n < 0 || n > 1024) return -(int64_t)EINVAL;
-    if (n && (!iov || !uptr_ok(iov, (uint64_t)n * sizeof(*iov)))) return -(int64_t)EFAULT;
-    int64_t total = 0;
-    for (int i = 0; i < n; i++)
-    {
-        int64_t r = fd_read(fd, (void*) iov[i].iov_base, iov[i].iov_len);
-        if (r < 0)
-        {
-            if (!total)
-                total = r;
-            break;
-        }
-        total += r;
-        if ((uint64_t) r < iov[i].iov_len)
-            break;
-    }
-    return total;
-}
-
-static int64_t sys_writev(int fd, const void* iov_ptr, int n)
-{
-    if (n < 0 || n > 1024) return -(int64_t)EINVAL;
-    if (n && (!iov_ptr || !uptr_ok(iov_ptr, (uint64_t)n * sizeof(struct iovec)))) return -(int64_t)EFAULT;
-    const struct iovec* iov = (const struct iovec*) iov_ptr;
-    int64_t total = 0;
-    for (int i = 0; i < n; i++)
-    {
-        int64_t r = fd_write(fd, (const void*) iov[i].iov_base, iov[i].iov_len);
-        if (r < 0)
-        {
-            if (!total)
-                total = r;
-            break;
-        }
-        total += r;
-        if ((uint64_t) r < iov[i].iov_len)
-            break; /* short write (non-blocking socket): stop, don't skip the tail */
-    }
-    return total;
-}
-
 static int64_t sys_access(const char* p, int m)
 {
     if (!p) return -(int64_t)EFAULT;
@@ -1859,117 +1552,6 @@ static int64_t sys_mremap(uint64_t old_addr, uint64_t old_sz, uint64_t new_sz,
     }
     return (int64_t)new_va;
 }
-static int64_t sys_sendfile(int outfd, int infd, uint64_t* offp, uint64_t count)
-{
-    if (offp && !uptr_ok_w(offp, sizeof(*offp))) return -(int64_t)EFAULT;
-    vfs_file_t* inf = fd_get_file(infd);
-    if (!inf || !inf->node || inf->node->type != VFS_TYPE_REG) return -(int64_t)EINVAL;
-    vfs_node_t* src = inf->node;
-    uint64_t off = offp ? *offp : inf->pos;
-    if (off >= src->size) return 0;
-    uint64_t avail = src->size - off;
-    if (count > avail) count = avail;
-    int64_t w = fd_write_kbuf(outfd, src->data + off, count);
-    if (w > 0) { if (offp) *offp = off + (uint64_t)w; else inf->pos = off + (uint64_t)w; }
-    return w;
-}
-
-static int64_t sys_preadv(int fd, const struct iovec* iov, int n, uint64_t off)
-{
-    int64_t total = 0;
-    for (int i = 0; i < n; i++) {
-        int64_t r = fd_pread(fd, (void*)iov[i].iov_base, iov[i].iov_len, off + (uint64_t)total);
-        if (r < 0) return total ? total : r;
-        total += r;
-        if ((uint64_t)r < iov[i].iov_len) break;
-    }
-    return total;
-}
-static int64_t sys_pwritev(int fd, const struct iovec* iov, int n, uint64_t off)
-{
-    int64_t total = 0;
-    for (int i = 0; i < n; i++) {
-        int64_t r = fd_pwrite(fd, (const void*)iov[i].iov_base, iov[i].iov_len, off + (uint64_t)total);
-        if (r < 0) return total ? total : r;
-        total += r;
-    }
-    return total;
-}
-
-static uint32_t g_memfd_seq;
-static int64_t sys_memfd_create(const char* name, uint32_t flags)
-{
-    (void)name; (void)flags;
-    char path[32];
-    snprintf(path, sizeof(path), "/tmp/.mfd%u", ++g_memfd_seq);
-    return fd_open(path, O_RDWR|O_CREAT|O_TRUNC, 0600);
-}
-
-static int64_t sys_copy_file_range(int infd, uint64_t* off_in, int outfd, uint64_t* off_out,
-                                   uint64_t len, uint32_t flags)
-{
-    (void)flags;
-    if (off_in && !uptr_ok_w(off_in, sizeof(*off_in))) return -(int64_t)EFAULT;
-    if (off_out && !uptr_ok_w(off_out, sizeof(*off_out))) return -(int64_t)EFAULT;
-    vfs_file_t* inf = fd_get_file(infd);
-    if (!inf || !inf->node || inf->node->type != VFS_TYPE_REG) return -(int64_t)EINVAL;
-    vfs_node_t* src = inf->node;
-    uint64_t rin = off_in ? *off_in : inf->pos;
-    if (rin >= src->size) return 0;
-    uint64_t avail = src->size - rin;
-    if (len > avail) len = avail;
-    uint64_t rout = off_out ? *off_out : (fd_get_file(outfd) ? fd_get_file(outfd)->pos : 0);
-    int64_t w = fd_pwrite(outfd, src->data + rin, len, rout);
-    if (w > 0) {
-        if (off_in)  *off_in  = rin  + (uint64_t)w; else inf->pos = rin + (uint64_t)w;
-        if (off_out) *off_out = rout + (uint64_t)w;
-        else if (fd_get_file(outfd)) fd_get_file(outfd)->pos = rout + (uint64_t)w;
-    }
-    return w;
-}
-
-#define STATX_BASIC_STATS 0x7ffU
-
-struct statx_ts { int64_t tv_sec; uint32_t tv_nsec; int32_t _r; };
-struct statx {
-    uint32_t stx_mask, stx_blksize;
-    uint64_t stx_attributes;
-    uint32_t stx_nlink, stx_uid, stx_gid;
-    uint16_t stx_mode; uint16_t _pad0;
-    uint64_t stx_ino, stx_size, stx_blocks, stx_attributes_mask;
-    struct statx_ts stx_atime, stx_btime, stx_ctime, stx_mtime;
-    uint32_t stx_rdev_major, stx_rdev_minor, stx_dev_major, stx_dev_minor;
-    uint64_t stx_mnt_id, _spare[9];
-};
-
-static int64_t sys_statx(int dirfd, const char* path, int flags, uint32_t mask,
-                         struct statx* sx)
-{
-    (void)mask;
-    if (!sx) return -(int64_t)EFAULT;
-    if (!uptr_ok_w(sx, sizeof(*sx))) return -(int64_t)EFAULT;
-    vfs_node_t* n = NULL;
-    if (!path || path[0] == '\0') {
-        n = fd_get_node(dirfd);
-    } else {
-        char abs[512];
-        at_resolve(dirfd, path, abs, sizeof(abs));
-        n = (flags & AT_SYMLINK_NOFOLLOW) ? vfs_lookup_nofollow(abs) : vfs_lookup(abs);
-    }
-    if (!n) return -(int64_t)ENOENT;
-    memset(sx, 0, sizeof(*sx));
-    sx->stx_mask    = STATX_BASIC_STATS;
-    sx->stx_blksize = 4096;
-    sx->stx_nlink   = 1;
-    sx->stx_uid     = n->uid; sx->stx_gid = n->gid;
-    sx->stx_mode    = (uint16_t)n->mode;
-    sx->stx_ino     = n->ino;
-    sx->stx_size    = n->size;
-    sx->stx_blocks  = (n->size + 511) / 512;
-    sx->stx_dev_major = 1;
-    return 0;
-}
-
 static int64_t sys_rt_sigtimedwait(const uint64_t* set, void* info, const void* timeout,
                                    uint64_t sigsetsize)
 {
@@ -1994,126 +1576,6 @@ static int64_t sys_rt_sigtimedwait(const uint64_t* set, void* info, const void* 
     return (int64_t)sig;
 }
 
-#define EPOLLIN    0x001U
-#define EPOLLOUT   0x004U
-#define EPOLLERR   0x008U
-#define EPOLLHUP   0x010U
-#define EPOLLET    (1U<<31)
-#define EPOLL_CTL_ADD 1
-#define EPOLL_CTL_DEL 2
-#define EPOLL_CTL_MOD 3
-#define EPOLL_SLOTS 64
-#define EPOLL_MAXW  256
-
-struct epoll_event { uint32_t events; uint64_t data; } __attribute__((packed));
-struct epoll_watch { int fd; uint32_t events; uint64_t data; };
-typedef struct { int epfd; vmm_space_t* owner_space; struct epoll_watch w[EPOLL_MAXW]; int nw; } epoll_t;
-static epoll_t g_epolls[EPOLL_SLOTS];
-static int g_epoll_init;
-
-static epoll_t* epoll_find(int epfd)
-{
-    proc_t* p = cur();
-    for (int i = 0; i < EPOLL_SLOTS; i++)
-        if (g_epolls[i].epfd == epfd && g_epolls[i].owner_space == (p ? p->space : NULL))
-            return &g_epolls[i];
-    return NULL;
-}
-
-static int64_t sys_epoll_create1(int flags)
-{
-    (void)flags;
-    if (!g_epoll_init) {
-        for (int i = 0; i < EPOLL_SLOTS; i++) {
-            g_epolls[i].epfd = -1;
-            g_epolls[i].owner_space = NULL;
-        }
-        g_epoll_init = 1;
-    }
-    /* reclaim slots whose fd was closed */
-    for (int i = 0; i < EPOLL_SLOTS; i++)
-        if (g_epolls[i].epfd >= 0 && g_epolls[i].owner_space == cur()->space && !fd_valid(g_epolls[i].epfd)) {
-            g_epolls[i].epfd = -1;
-            g_epolls[i].owner_space = NULL;
-            g_epolls[i].nw = 0;
-        }
-    int epfd = fd_open("/dev/null", O_RDONLY, 0);
-    if (epfd < 0) return -(int64_t)EMFILE;
-    epoll_t* ep = NULL;
-    for (int i = 0; i < EPOLL_SLOTS; i++)
-        if (g_epolls[i].epfd == -1) { ep = &g_epolls[i]; break; }
-    if (!ep) { fd_close(epfd); return -(int64_t)ENOMEM; }
-    ep->epfd = epfd;
-    ep->owner_space = cur()->space;
-    ep->nw = 0;
-    return epfd;
-}
-
-static int64_t sys_epoll_ctl(int epfd, int op, int fd, struct epoll_event* ev)
-{
-    epoll_t* ep = epoll_find(epfd);
-    if (!ep) return -(int64_t)EBADF;
-    if (op != EPOLL_CTL_DEL && ev && !uptr_ok(ev, sizeof(*ev))) return -(int64_t)EFAULT;
-    if (op != EPOLL_CTL_DEL && !fd_valid(fd)) return -(int64_t)EBADF;
-    switch (op) {
-    case EPOLL_CTL_ADD:
-        if (ep->nw >= EPOLL_MAXW) return -(int64_t)ENOMEM;
-        for (int i = 0; i < ep->nw; i++) if (ep->w[i].fd == fd) return -(int64_t)EEXIST;
-        ep->w[ep->nw] = (struct epoll_watch){ fd, ev ? ev->events : EPOLLIN|EPOLLOUT, ev ? ev->data : 0 };
-        ep->nw++;
-        return 0;
-    case EPOLL_CTL_DEL:
-        for (int i = 0; i < ep->nw; i++)
-            if (ep->w[i].fd == fd) { ep->w[i] = ep->w[--ep->nw]; return 0; }
-        return -(int64_t)ENOENT;
-    case EPOLL_CTL_MOD:
-        for (int i = 0; i < ep->nw; i++)
-            if (ep->w[i].fd == fd) { ep->w[i].events = ev ? ev->events : 0; ep->w[i].data = ev ? ev->data : 0; return 0; }
-        return -(int64_t)ENOENT;
-    }
-    return -(int64_t)EINVAL;
-}
-
-static int64_t sys_epoll_wait(int epfd, struct epoll_event* events, int maxevents, int timeout)
-{
-    epoll_t* ep = epoll_find(epfd);
-    if (!ep || !events || maxevents <= 0) return -(int64_t)EINVAL;
-    if (!uptr_ok_w(events, (uint64_t)maxevents * sizeof(*events))) return -(int64_t)EFAULT;
-    proc_t* p = cur();
-    uint64_t deadline = timeout >= 0 ? g_ticks + (uint64_t)timeout : (uint64_t)-1ULL;
-    for (;;) {
-        int n = 0;
-        for (int i = 0; i < ep->nw && n < maxevents; i++) {
-            int wfd = ep->w[i].fd;
-            uint32_t got = fd_valid(wfd) ? 0 : (EPOLLERR|EPOLLHUP);
-            if (!got) {
-                if ((ep->w[i].events & EPOLLIN)  && fd_pollin(wfd))  got |= EPOLLIN;
-                if ((ep->w[i].events & EPOLLOUT) && fd_pollout(wfd)) got |= EPOLLOUT;
-            }
-            if (got) { events[n].events = got; events[n].data = ep->w[i].data; n++; }
-        }
-        if (n > 0 || timeout == 0 || g_ticks >= deadline) {
-            return n;
-        }
-        if (p && (p->pending_sigs & ~p->sig_mask)) return -(int64_t)EINTR;
-        if (p) p->wakeup_tick = g_ticks + 5; /* re-check within 5ms: avoids lost-wakeup race */
-        if (proc_next_ready(p)) sched_yield_blocking();
-        else { sti(); hlt(); cli(); }
-        if (p) p->wakeup_tick = 0;
-    }
-}
-
-static int64_t sys_alarm(uint32_t seconds)
-{
-    proc_t* p = cur();
-    if (!p) return 0;
-    uint64_t prev = 0;
-    if (p->alarm_tick && p->alarm_tick > g_ticks)
-        prev = (p->alarm_tick - g_ticks + 999) / 1000;
-    p->alarm_tick = seconds ? g_ticks + (uint64_t)seconds * 1000 : 0;
-    return (int64_t)prev;
-}
-
 static int64_t sys_fchdir(int fd)
 {
     vfs_node_t* n = fd_get_node(fd);
@@ -2133,242 +1595,6 @@ static int64_t sys_link(const char* old, const char* lnew)
     char abs_old[512], abs_new[512];
     path_abs(abs_old, old); path_abs(abs_new, lnew);
     return (int64_t)vfs_link(abs_old, abs_new);
-}
-
-static int64_t sys_clock_getres(uint64_t clk, void* res)
-{
-    (void)clk;
-    if (res) {
-        if (!uptr_ok_w(res, 16)) return -(int64_t)EFAULT;
-        ((uint64_t*)res)[0] = 0;
-        ((uint64_t*)res)[1] = 1000000ULL;
-    }
-    return 0;
-}
-
-struct sysinfo_s {
-    int64_t  uptime;
-    uint64_t loads[3];
-    uint64_t totalram, freeram, sharedram, bufferram;
-    uint64_t totalswap, freeswap;
-    uint16_t procs;
-    uint8_t  _pad[6];
-    uint64_t totalhigh, freehigh;
-    uint32_t mem_unit;
-};
-
-static int64_t sys_sysinfo(struct sysinfo_s* si)
-{
-    if (!si) return -(int64_t)EFAULT;
-    if (!uptr_ok_w(si, sizeof(*si))) return -(int64_t)EFAULT;
-    memset(si, 0, sizeof(*si));
-    si->uptime   = (int64_t)(g_ticks / 1000);
-    si->totalram = 256ULL * 1024 * 1024;
-    si->freeram  = 128ULL * 1024 * 1024;
-    si->mem_unit = 1;
-    si->procs    = 1;
-    return 0;
-}
-
-struct sockaddr_un { uint16_t sun_family; char sun_path[108]; };
-
-#define SO_TYPE   3
-#define SO_ERROR  4
-#define SO_PASSCRED 16
-#define SO_PEERCRED 17
-#define SO_DOMAIN 39
-#define SOL_SOCKET 1
-#define SCM_CREDENTIALS 2
-#define SCM_RIGHTS      1
-#define MSG_PEEK 0x0002
-
-struct ucred_s { int32_t pid; uint32_t uid; uint32_t gid; };
-
-static void fill_peer_cred(vfs_file_t* f, struct ucred_s* cr)
-{
-    if (f && f->peer_pid) {
-        cr->pid = (int32_t)f->peer_pid;
-        cr->uid = f->peer_uid;
-        cr->gid = f->peer_gid;
-        return;
-    }
-
-    proc_t* p = cur();
-    cr->pid = p ? (int32_t)p->pid : 0;
-    cr->uid = p ? p->uid : 0;
-    cr->gid = p ? p->gid : 0;
-}
-
-static uint64_t align8(uint64_t v)
-{
-    return (v + 7) & ~7ULL;
-}
-
-static int64_t sys_getsockopt(int fd, int lvl, int opt, void* val, int* olen)
-{
-    vfs_file_t* f = fd_get_file(fd);
-    if (!f) return -(int64_t)EBADF;
-    if (!val || !olen) return -(int64_t)EFAULT;
-    if (!uptr_ok_w(olen, sizeof(*olen))) return -(int64_t)EFAULT;
-    if (lvl != SOL_SOCKET) return -(int64_t)EINVAL;
-    switch (opt) {
-    case SO_TYPE:
-        if (*olen < (int)sizeof(int) || !uptr_ok_w(val, sizeof(int))) return -(int64_t)EINVAL;
-        *(int*)val = 1; *olen = sizeof(int); return 0; /* SOCK_STREAM */
-    case SO_ERROR:
-        if (*olen < (int)sizeof(int) || !uptr_ok_w(val, sizeof(int))) return -(int64_t)EINVAL;
-        *(int*)val = 0; *olen = sizeof(int); return 0;
-    case SO_PEERCRED:
-    {
-        if (*olen < (int)sizeof(struct ucred_s) || !uptr_ok_w(val, sizeof(struct ucred_s)))
-            return -(int64_t)EINVAL;
-        fill_peer_cred(f, (struct ucred_s*)val);
-        *olen = sizeof(struct ucred_s);
-        return 0;
-    }
-    case SO_DOMAIN:
-        if (*olen < (int)sizeof(int) || !uptr_ok_w(val, sizeof(int))) return -(int64_t)EINVAL;
-        *(int*)val = 1; *olen = sizeof(int); return 0; /* AF_UNIX */
-    }
-    return -(int64_t)EINVAL;
-}
-
-static int64_t sys_getsockname(int fd, struct sockaddr_un* addr, int* alen)
-{
-    if (!addr || !alen) return -(int64_t)EFAULT;
-    if (!uptr_ok_w(addr, sizeof(*addr)) || !uptr_ok_w(alen, sizeof(*alen))) return -(int64_t)EFAULT;
-    vfs_file_t* f = fd_get_file(fd);
-    if (!f) return -(int64_t)EBADF;
-    addr->sun_family = 1; /* AF_UNIX */
-    addr->sun_path[0] = '\0';
-    /* for socket nodes with a bound path, fill it in */
-    if (f->node && f->node->type == VFS_TYPE_SOCK) {
-        /* the data pointer holds unix_sock_t* — read path via vfs_node data */
-        /* we use node->data as (uint8_t*) pointing to unix_sock_t */
-        typedef struct { int state; char path[108]; } usock_peek_t;
-        usock_peek_t* s = (usock_peek_t*)f->node->data;
-        if (s && s->path[0]) strncpy(addr->sun_path, s->path, 107);
-    }
-    *alen = (int)sizeof(*addr);
-    return 0;
-}
-
-static int64_t sys_sendmsg(int fd, const void* mhdr, int flags)
-{
-    (void)flags;
-    if (!mhdr) return -(int64_t)EFAULT;
-    if (!uptr_ok(mhdr, 56)) return -(int64_t)EFAULT;
-    const uint64_t* m = (const uint64_t*)mhdr;
-    const struct iovec* iov = (const struct iovec*)m[2];
-    int iovlen = (int)m[3];
-    if (iovlen < 0 || (iovlen && !uptr_ok(iov, (uint64_t)iovlen * sizeof(*iov))))
-        return -(int64_t)EFAULT;
-    int64_t total = 0;
-    for (int i = 0; i < iovlen; i++) {
-        int64_t r = fd_write(fd, (const void*)iov[i].iov_base, iov[i].iov_len);
-        if (r < 0) return total ? total : r;
-        total += r;
-        if ((uint64_t) r < iov[i].iov_len)
-            break;
-    }
-
-    /* SCM_RIGHTS: attach fds to the write pipe */
-    const void* ctrl = (const void*)m[4];
-    uint64_t ctrl_len = m[5];
-    if (ctrl && ctrl_len >= 16 && uptr_ok(ctrl, ctrl_len)) {
-        uint64_t cmsg_len = *(const uint64_t*)ctrl;
-        int32_t  cmsg_lvl = *(const int32_t*)((const uint8_t*)ctrl + 8);
-        int32_t  cmsg_typ = *(const int32_t*)((const uint8_t*)ctrl + 12);
-        if (cmsg_lvl == SOL_SOCKET && cmsg_typ == SCM_RIGHTS && cmsg_len >= 16) {
-            const int* fdarr = (const int*)((const uint8_t*)ctrl + 16);
-            int nfds = (int)((cmsg_len - 16) / sizeof(int));
-            vfs_file_t* sf = fd_get_file(fd);
-            pipe_t* tx = sf ? (sf->wpipe ? sf->wpipe : sf->pipe) : NULL;
-            if (tx && nfds > 0) {
-                void* nodes[PIPE_ANC_MAXFDS];
-                int n = nfds < PIPE_ANC_MAXFDS ? nfds : PIPE_ANC_MAXFDS;
-                for (int i = 0; i < n; i++) {
-                    vfs_node_t* nd = fd_get_node(fdarr[i]);
-                    nodes[i] = nd; /* NULL if invalid fd */
-                }
-                pipe_anc_send(tx, nodes, n);
-            }
-        }
-    }
-    return total;
-}
-
-static int64_t sys_recvmsg(int fd, void* mhdr, int flags)
-{
-    if (!mhdr) return -(int64_t)EFAULT;
-    if (!uptr_ok_w(mhdr, 56)) return -(int64_t)EFAULT;
-    uint64_t* m = (uint64_t*)mhdr;
-    const struct iovec* iov = (const struct iovec*)m[2];
-    int iovlen = (int)m[3];
-    if (iovlen < 0 || (iovlen && !uptr_ok(iov, (uint64_t)iovlen * sizeof(*iov))))
-        return -(int64_t)EFAULT;
-    int64_t total = 0;
-    uint64_t peek_skip = 0;
-    for (int i = 0; i < iovlen; i++) {
-        int64_t r = (flags & MSG_PEEK)
-            ? fd_peek(fd, (void*)iov[i].iov_base, iov[i].iov_len, peek_skip)
-            : fd_read(fd, (void*)iov[i].iov_base, iov[i].iov_len);
-        if (r < 0) return total ? total : r;
-        total += r;
-        if (flags & MSG_PEEK)
-            peek_skip += (uint64_t)r;
-        if ((uint64_t)r < iov[i].iov_len) break;
-    }
-
-    void* control = (void*)m[4];
-    uint64_t control_len = m[5];
-    uint64_t cmsg_hdr_len = 16;
-    vfs_file_t* sf = fd_get_file(fd);
-
-    /* SCM_RIGHTS: deliver pending fd ancillary data */
-    if (sf && control && control_len >= cmsg_hdr_len) {
-        void* nodes[PIPE_ANC_MAXFDS];
-        pipe_t* rx = sf->pipe;
-        int nfds = rx ? pipe_anc_recv(rx, nodes, PIPE_ANC_MAXFDS) : 0;
-        if (nfds > 0) {
-            uint64_t rights_data = (uint64_t)nfds * sizeof(int);
-            uint64_t rights_len  = cmsg_hdr_len + rights_data;
-            uint64_t rights_sp   = align8(rights_len);
-            if (control_len >= rights_sp && uptr_ok_w(control, rights_sp)) {
-                *(uint64_t*)control = rights_len;
-                *(int32_t*)((uint8_t*)control + 8)  = SOL_SOCKET;
-                *(int32_t*)((uint8_t*)control + 12) = SCM_RIGHTS;
-                int* fdarr = (int*)((uint8_t*)control + cmsg_hdr_len);
-                for (int i = 0; i < nfds; i++) {
-                    vfs_node_t* nd = (vfs_node_t*)nodes[i];
-                    fdarr[i] = nd ? fd_open_node(nd, O_RDWR) : -1;
-                }
-                m[5] = rights_sp;
-                ((uint32_t*)mhdr)[12] = 0;
-                return total;
-            }
-        }
-    }
-
-    /* SCM_CREDENTIALS fallback */
-    uint64_t cred_len = sizeof(struct ucred_s);
-    uint64_t cmsg_len = cmsg_hdr_len + cred_len;
-    uint64_t cmsg_space = align8(cmsg_len);
-    if (sf && sf->passcred && control && control_len >= cmsg_space) {
-        if (!uptr_ok_w(control, cmsg_space)) return -(int64_t)EFAULT;
-        uint64_t* cmsg_len_p = (uint64_t*)control;
-        int32_t* cmsg_meta = (int32_t*)((uint8_t*)control + 8);
-        struct ucred_s* cr = (struct ucred_s*)((uint8_t*)control + cmsg_hdr_len);
-        *cmsg_len_p = cmsg_len;
-        cmsg_meta[0] = SOL_SOCKET;
-        cmsg_meta[1] = SCM_CREDENTIALS;
-        fill_peer_cred(sf, cr);
-        m[5] = cmsg_space;
-    } else {
-        m[5] = 0;
-    }
-    ((uint32_t*)mhdr)[12] = 0;
-    return total;
 }
 
 void syscall_dispatch(syscall_frame_t* f)
@@ -2488,31 +1714,11 @@ void syscall_dispatch(syscall_frame_t* f)
         ret = (int64_t)fd_socket((int)a1, (int)a2, (int)a3);
         break;
     case 42: /* connect(fd, addr, addrlen) */
-    {
-        struct sockaddr_un* ua = (struct sockaddr_un*)a2;
-        if (!ua) { ret = -(int64_t)EFAULT; break; }
-        if (!uptr_ok(ua, sizeof(*ua))) { ret = -(int64_t)EFAULT; break; }
-        /* abstract sockets have sun_path[0]=='\0'; bypass path_abs which would corrupt it */
-        const char* cp;
-        char abs[512];
-        if (ua->sun_path[0] == '\0') { cp = ua->sun_path; }
-        else { path_abs(abs, ua->sun_path); cp = abs[0] ? abs : ua->sun_path; }
-        ret = (int64_t)fd_connect_unix((int)a1, cp);
+        ret = sys_socket_connect((int)a1, (struct sockaddr_un*)a2, a3);
         break;
-    }
     case 43: /* accept(fd, addr, addrlen) */
-    {
-        struct sockaddr_un* ua = (struct sockaddr_un*)a2;
-        char tmp[108] = {0};
-        int r = fd_accept_unix((int)a1, tmp, sizeof(tmp), 0);
-        if (r >= 0 && ua) {
-            if (!uptr_ok_w(ua, sizeof(*ua))) { ret = -(int64_t)EFAULT; break; }
-            ua->sun_family = 1;
-            strncpy(ua->sun_path, tmp, 107);
-        }
-        ret = (int64_t)r;
+        ret = sys_socket_accept((int)a1, (struct sockaddr_un*)a2, (int*)a3, 0);
         break;
-    }
     case 44: /* send(fd, buf, len, flags) */
         ret = fd_write((int)a1, (const void*)a2, a3);
         break;
@@ -2520,57 +1726,31 @@ void syscall_dispatch(syscall_frame_t* f)
         ret = fd_read((int)a1, (void*)a2, a3);
         break;
     case 46: /* sendmsg(fd, msghdr, flags) */
-        ret = sys_sendmsg((int)a1, (const void*)a2, (int)a3);
+        ret = sys_socket_sendmsg((int)a1, (const void*)a2, (int)a3);
         break;
     case 47: /* recvmsg(fd, msghdr, flags) */
-        ret = sys_recvmsg((int)a1, (void*)a2, (int)a3);
+        ret = sys_socket_recvmsg((int)a1, (void*)a2, (int)a3);
         break;
     case 48: /* shutdown(fd, how) */
         ret = 0; /* no-op: close() will tear down the pipes */
         break;
     case 49: /* bind(fd, addr, addrlen) */
-    {
-        struct sockaddr_un* ua = (struct sockaddr_un*)a2;
-        if (!ua) { ret = -(int64_t)EFAULT; break; }
-        if (!uptr_ok(ua, sizeof(*ua))) { ret = -(int64_t)EFAULT; break; }
-        /* abstract sockets have sun_path[0]=='\0'; bypass path_abs */
-        const char* bp;
-        char abs2[512];
-        if (ua->sun_path[0] == '\0') { bp = ua->sun_path; }
-        else { path_abs(abs2, ua->sun_path); bp = abs2[0] ? abs2 : ua->sun_path; }
-        ret = (int64_t)fd_bind_unix((int)a1, bp);
+        ret = sys_socket_bind((int)a1, (struct sockaddr_un*)a2, a3);
         break;
-    }
     case 50: /* listen(fd, backlog) */
         ret = (int64_t)fd_listen_unix((int)a1, (int)a2);
         break;
     case 51: /* getsockname(fd, addr, addrlen) */
-        ret = sys_getsockname((int)a1, (struct sockaddr_un*)a2, (int*)a3);
+        ret = sys_socket_getsockname((int)a1, (struct sockaddr_un*)a2, (int*)a3);
         break;
     case 52: /* getpeername(fd, addr, addrlen) */
-    {
-        struct sockaddr_un* ua = (struct sockaddr_un*)a2;
-        if (ua) {
-            if (!uptr_ok_w(ua, sizeof(*ua))) { ret = -(int64_t)EFAULT; break; }
-            ua->sun_family = 1;
-            ua->sun_path[0] = '\0';
-        }
-        ret = 0;
+        ret = sys_socket_getpeername((int)a1, (struct sockaddr_un*)a2, (int*)a3);
         break;
-    }
     case 54:
-        if ((int)a2 == SOL_SOCKET && (int)a3 == SO_PASSCRED) {
-            vfs_file_t* sf = fd_get_file((int)a1);
-            if (!sf) { ret = -(int64_t)EBADF; break; }
-            if (a4 && !uptr_ok((void*)a4, sizeof(int))) { ret = -(int64_t)EFAULT; break; }
-            sf->passcred = a4 ? (*(int*)a4 != 0) : 0;
-            ret = 0;
-            break;
-        }
-        ret = 0; /* setsockopt: accept silently */
+        ret = sys_socket_setsockopt((int)a1, (int)a2, (int)a3, (void*)a4, (int)a5);
         break;
     case 55: /* getsockopt */
-        ret = sys_getsockopt((int)a1, (int)a2, (int)a3, (void*)a4, (int*)a5);
+        ret = sys_socket_getsockopt((int)a1, (int)a2, (int)a3, (void*)a4, (int*)a5);
         break;
     case 32:
         ret = fd_dup((int) a1);
@@ -2985,18 +2165,8 @@ void syscall_dispatch(syscall_frame_t* f)
         ret = sys_epoll_wait((int)a1, (struct epoll_event*)a2, (int)a3, (int)a4);
         break; /* epoll_pwait */
     case 282: /* accept4(fd, addr, addrlen, flags) */
-    {
-        struct sockaddr_un* ua = (struct sockaddr_un*)a2;
-        char tmp[108] = {0};
-        int r = fd_accept_unix((int)a1, tmp, sizeof(tmp), (int)a4);
-        if (r >= 0 && ua) {
-            if (!uptr_ok_w(ua, sizeof(*ua))) { ret = -(int64_t)EFAULT; break; }
-            ua->sun_family = 1;
-            strncpy(ua->sun_path, tmp, 107);
-        }
-        ret = (int64_t)r;
+        ret = sys_socket_accept((int)a1, (struct sockaddr_un*)a2, (int*)a3, (int)a4);
         break;
-    }
     case 283: case 284: ret = -(int64_t)ENOSYS; break; /* signalfd4, eventfd2 */
     case 285: ret = 0; break; /* fallocate: no-op */
     case 286: ret = -(int64_t)ENOSYS; break; /* inotify_init1 */

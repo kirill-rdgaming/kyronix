@@ -48,12 +48,22 @@ SRCS := \
     kernel/mm/shm.c                   \
     kernel/arch/x86_64/syscall_setup.c \
     kernel/syscall/syscall.c          \
+    kernel/syscall/epoll.c            \
+    kernel/syscall/file.c             \
+    kernel/syscall/poll.c             \
+    kernel/syscall/socket.c           \
+    kernel/syscall/time.c             \
     kernel/exec/elf.c                  \
     kernel/exec/process.c              \
     kernel/proc/proc.c                 \
     kernel/proc/signal.c               \
     kernel/fs/vfs.c                    \
+    kernel/fs/devfs.c                  \
+    kernel/fs/eventfd.c                \
+    kernel/fs/fdctl.c                  \
+    kernel/fs/fdpipe.c                 \
     kernel/fs/procfs.c                 \
+    kernel/fs/unix_socket.c            \
     kernel/fs/pipe.c                   \
     kernel/fs/cpio.c                   \
     kernel/drivers/serial.c           \
