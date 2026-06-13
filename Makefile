@@ -201,14 +201,18 @@ testrunner: build/libatomic_asneeded.a
 test-initrd: $(TARGET) testrunner build/libatomic_asneeded.a
 	$(MAKE) -C user/kyrobox
 	$(MAKE) -C user/fetch
+	$(MAKE) -C user/shell
 	rm -rf $(TEST_ROOTFS) $(TEST_INITRD)
 	mkdir -p $(TEST_ROOTFS)/bin
 	cp build/bin/testrunner $(TEST_ROOTFS)/init
-	cp build/bin/ls        $(TEST_ROOTFS)/bin/
-	cp build/bin/grep      $(TEST_ROOTFS)/bin/
-	cp build/bin/echo      $(TEST_ROOTFS)/bin/
+	cp build/bin/ksh        $(TEST_ROOTFS)/bin/
+	ln -sf ksh $(TEST_ROOTFS)/bin/sh
+	for app in basename cat chgrp chmod chown cksum clear cmp cp cut date dd dirname du echo env false \
+	    find grep head hostname kill link ln ls mkdir mktemp mv printenv printf pwd readlink reboot rm rmdir \
+	    sed seq sleep sort sync tail tee test touch tr true tty uname uniq unlink wc which whoami yes; do \
+	    cp build/bin/$$app $(TEST_ROOTFS)/bin/; \
+	done
 	cp build/bin/fetch     $(TEST_ROOTFS)/bin/
-	cp build/bin/reboot    $(TEST_ROOTFS)/bin/
 	cd $(TEST_ROOTFS) && find . | sort | cpio -o --format=newc --owner=0:0 --reproducible > ../$(TEST_INITRD) 2>/dev/null
 	@echo "  Built: $(TEST_INITRD)"
 

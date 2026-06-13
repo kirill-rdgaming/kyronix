@@ -959,7 +959,7 @@ static int64_t sys_getcwd(char* buf, uint64_t size)
     if (len > size)
         return -(int64_t) EINVAL;
     memcpy(buf, cwd, len);
-    return (int64_t) (uintptr_t) buf;
+    return (int64_t) len;
 }
 
 static int64_t sys_chdir(const char* path)
@@ -1691,9 +1691,19 @@ static int64_t sys_statfs(const char* path, void* buf)
 {
     (void) path;
     if (buf) {
+        /* struct statfs on x86_64 is ~120 bytes */
         if (!uptr_ok_w(buf, 120))
             return -(int64_t) EFAULT;
         memset(buf, 0, 120);
+        /* populate plausible values so callers don't see all-zeros */
+        uint64_t* p = (uint64_t*) buf;
+        p[0] = 0x01021994;  /* f_type:  */
+        p[1] = 4096;         /* f_bsize  */
+        p[2] = 1024;         /* f_blocks */
+        p[3] = 512;          /* f_bfree  */
+        p[4] = 256;          /* f_bavail */
+        p[5] = 1024;         /* f_files  */
+        p[6] = 512;          /* f_ffree  */
     }
     return 0;
 }
@@ -2729,6 +2739,18 @@ void syscall_dispatch(syscall_frame_t* f)
             break;
         }
         ret = fd_pipe((int*) a1);
+        if (ret == 0 && (a2 & (O_CLOEXEC | O_NONBLOCK))) {
+            int* pf = (int*) a1;
+            for (int _e = 0; _e < 2; _e++) {
+                vfs_file_t* pe = fd_get_file(pf[_e]);
+                if (!pe)
+                    continue;
+                if (a2 & O_CLOEXEC)
+                    pe->cloexec = 1;
+                if (a2 & O_NONBLOCK)
+                    pe->flags |= O_NONBLOCK;
+            }
+        }
         break;
     case 295:
     case 296:

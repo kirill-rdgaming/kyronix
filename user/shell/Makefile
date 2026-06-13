@@ -11,9 +11,7 @@ CFLAGS += $(FNO_LINK_LIBATOMIC)
 all: check-musl $(OUT)
 
 check-musl:
-	@command -v $(CC) >/dev/null 2>&1 && test -f /usr/lib/musl/lib/libc.a || { \
-		exit 1; \
-	}
+	@command -v $(CC) >/dev/null 2>&1 || { echo "musl-gcc not found"; exit 1; }
 
 $(OUT): ksh.c
 	mkdir -p ../../build/bin

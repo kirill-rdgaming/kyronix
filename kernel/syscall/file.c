@@ -3,10 +3,13 @@
 #include "lib/printf.h"
 #include "lib/string.h"
 #include "syscall/syscall.h"
+#include "mm/heap.h"
 
 #define EFAULT 14
 #define EINVAL 22
 #define ENOENT 2
+#define ENOMEM 12
+#define ENOSPC 28
 
 #define STATX_BASIC_STATS 0x7ffU
 
@@ -133,8 +136,31 @@ int64_t sys_copy_file_range(int infd, uint64_t* off_in, int outfd, uint64_t* off
     uint64_t avail = src->size - rin;
     if (len > avail)
         len = avail;
-    uint64_t rout = off_out ? *off_out : (fd_get_file(outfd) ? fd_get_file(outfd)->pos : 0);
-    int64_t w = fd_pwrite(outfd, src->data + rin, len, rout);
+
+    /* write directly to destination node (src->data is kernel memory) */
+    vfs_file_t* outf = fd_get_file(outfd);
+    if (!outf || !outf->node || outf->node->type != VFS_TYPE_REG)
+        return -(int64_t) EINVAL;
+    vfs_node_t* dst = outf->node;
+    uint64_t rout = off_out ? *off_out : outf->pos;
+    uint64_t end = rout + len;
+    if (end > dst->capacity) {
+        uint64_t newcap = (end + 4095) & ~4095ULL;
+        uint8_t* newdata = (uint8_t*) kmalloc(newcap);
+        if (!newdata)
+            return -(int64_t) ENOSPC;
+        if (dst->data) {
+            memcpy(newdata, dst->data, dst->size);
+            kfree(dst->data);
+        }
+        dst->data = newdata;
+        dst->capacity = newcap;
+    }
+    memcpy(dst->data + rout, src->data + rin, len);
+    if (end > dst->size)
+        dst->size = end;
+    int64_t w = (int64_t) len;
+
     if (w > 0) {
         if (off_in)
             *off_in = rin + (uint64_t) w;
@@ -142,8 +168,8 @@ int64_t sys_copy_file_range(int infd, uint64_t* off_in, int outfd, uint64_t* off
             inf->pos = rin + (uint64_t) w;
         if (off_out)
             *off_out = rout + (uint64_t) w;
-        else if (fd_get_file(outfd))
-            fd_get_file(outfd)->pos = rout + (uint64_t) w;
+        else
+            outf->pos = rout + (uint64_t) w;
     }
     return w;
 }
