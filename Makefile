@@ -208,6 +208,7 @@ test-initrd: $(TARGET) testrunner build/libatomic_asneeded.a
 	cp build/bin/grep      $(TEST_ROOTFS)/bin/
 	cp build/bin/echo      $(TEST_ROOTFS)/bin/
 	cp build/bin/fetch     $(TEST_ROOTFS)/bin/
+	cp build/bin/reboot    $(TEST_ROOTFS)/bin/
 	cd $(TEST_ROOTFS) && find . | sort | cpio -o --format=newc --owner=0:0 --reproducible > ../$(TEST_INITRD) 2>/dev/null
 	@echo "  Built: $(TEST_INITRD)"
 
@@ -251,6 +252,7 @@ test-run-log: test-iso
 	    -M q35                      \
 	    -m 512M                     \
 	    -cdrom $(TEST_ISO)          \
+	    -device isa-debug-exit,iobase=0x501 \
 	    -display none               \
 	    -serial file:test.log       \
 	    -no-reboot 2>/dev/null;     \

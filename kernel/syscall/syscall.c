@@ -2404,6 +2404,12 @@ void syscall_dispatch(syscall_frame_t* f)
             ret = -(int64_t) EPERM;
             break;
         }
+        outb(0xf4, 0x00);
+        outb(0x501, 0x00);
+        outw(0x604, 0x3C00);
+        outw(0xB004, 0x2000);
+        outb(0xcf9, 0x0E);
+        outb(0x64, 0xfe);
         cpu_halt();
         ret = 0;
         break;
