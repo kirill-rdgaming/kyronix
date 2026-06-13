@@ -145,3 +145,32 @@ int64_t pipe_write(pipe_t* p, const void* buf, uint64_t len)
 
     return (int64_t) done;
 }
+
+int pipe_anc_send(pipe_t* p, void** files, int nfds)
+{
+    if (!pipe_valid(p) || !files || nfds <= 0 || nfds > PIPE_ANC_MAXFDS)
+        return -1;
+    uint32_t next = (p->anc_wr + 1) % PIPE_ANC_SLOTS;
+    if (next == p->anc_rd)
+        return -1;
+    pipe_anc_t* slot = &p->anc_q[p->anc_wr];
+    slot->nfds = nfds;
+    for (int i = 0; i < nfds; i++)
+        slot->files[i] = files[i];
+    p->anc_wr = next;
+    return 0;
+}
+
+int pipe_anc_recv(pipe_t* p, void** out, int max)
+{
+    if (!pipe_valid(p) || !out || max <= 0)
+        return 0;
+    if (p->anc_rd == p->anc_wr)
+        return 0;
+    pipe_anc_t* slot = &p->anc_q[p->anc_rd];
+    int n = slot->nfds < max ? slot->nfds : max;
+    for (int i = 0; i < n; i++)
+        out[i] = slot->files[i];
+    p->anc_rd = (p->anc_rd + 1) % PIPE_ANC_SLOTS;
+    return n;
+}

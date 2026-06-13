@@ -83,6 +83,8 @@ menu "defops"
 "Xterm"		f.exec "xterm &"
 "Xcalc"		f.exec "xcalc &"
 "Xeyes"		f.exec "xeyes &"
+"Feh"		f.exec "feh --scale-down ~ &"
+"Xedit"		f.exec "xedit &"
 ""		f.nop
 "Kill"		f.destroy
 "Delete"	f.delete

@@ -112,6 +112,19 @@ typedef struct vfs_node
     volatile int sock_backlog;
 } vfs_node_t;
 
+typedef struct {
+    volatile uint64_t counter;
+    uint32_t          semaphore; /* EFD_SEMAPHORE */
+    void*             waiter;    /* proc_t* blocked in read */
+} eventfd_state_t;
+
+typedef struct {
+    int      clockid;
+    uint64_t interval_ms;  /* 0 = one-shot */
+    uint64_t next_tick;    /* g_ticks when next expiry */
+    uint64_t overruns;     /* expired-but-unread count */
+} timerfd_state_t;
+
 typedef struct
 {
     uint64_t magic;
@@ -124,6 +137,8 @@ typedef struct
     uint32_t peer_pid, peer_uid, peer_gid;
     int passcred;
     uint8_t cloexec; /* FD_CLOEXEC: close this fd on execve */
+    eventfd_state_t* efd;  /* non-NULL if eventfd */
+    timerfd_state_t* tfd;  /* non-NULL if timerfd */
 } vfs_file_t;
 
 #define VFS_FD_MAX 1024
@@ -163,6 +178,14 @@ bool fd_pollin(int fd);
 bool fd_pollout(int fd);
 int fd_pipe(int pipefd[2]);
 int fd_socketpair(int sv[2]);
+int fd_eventfd(uint32_t initval, int eflags);
+int64_t eventfd_read(vfs_file_t* f, char* buf, uint64_t len);
+int64_t eventfd_write(vfs_file_t* f, const char* buf, uint64_t len);
+int fd_timerfd_create(int clockid, int tflags);
+typedef struct { uint64_t sec; uint64_t nsec; } ktimespec_t;
+typedef struct { ktimespec_t interval; ktimespec_t value; } kitimerspec_t;
+int fd_timerfd_settime(int fd, int flags, const kitimerspec_t* new_val, kitimerspec_t* old_val);
+int fd_timerfd_gettime(int fd, kitimerspec_t* cur_val);
 
 int fd_socket(int domain, int type, int proto);
 int fd_bind_unix(int fd, const char* path);
@@ -194,3 +217,4 @@ int vfs_mknod(const char* path, uint32_t mode, uint64_t dev);
 char* vfs_node_abspath(vfs_node_t* n, char* buf, size_t sz);
 int   at_resolve(int dirfd, const char* path, char* out, size_t sz);
 int   fd_dup3(int oldfd, int newfd, int flags);
+int   fd_open_node(vfs_node_t* n, int flags); /* open existing node as new fd */

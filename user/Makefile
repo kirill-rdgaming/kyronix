@@ -7,7 +7,7 @@ all:
 	$(MAKE) -C shell
 	$(MAKE) -C login
 	$(MAKE) -C vi
-	$(MAKE) -C coreutils
+	$(MAKE) -C kutils
 	$(MAKE) -C fetch
 	rm -rf $(ROOTFS)/bin
 	mkdir -p $(ROOTFS)/bin
@@ -18,16 +18,18 @@ all:
 	cp ../build/bin/fetch $(ROOTFS)/bin/
 	ln -sf ksh $(ROOTFS)/bin/sh
 	for app in basename cat chgrp chmod chown cksum clear cmp cp cut date dd dirname du echo env false \
-	    find grep head hostname kill link ln ls mkdir mktemp mv printenv printf pwd readlink rm rmdir \
-	    sed seq sleep sort sync tail tee test touch tr true tty uname uniq unlink wc which whoami yes; do \
+	    find grep head hostname id kill link ln ls mkdir mktemp mv printenv printf pwd readlink realpath rm rmdir \
+	    sed seq sleep sort stat sync tail tee test touch tr true tty uname uniq unlink wc which whoami \
+	    xargs yes; do \
 	    cp ../build/bin/$$app $(ROOTFS)/bin/; \
 	done
+	ln -sf test $(ROOTFS)/bin/[
 
 clean:
 	$(MAKE) -C init clean
 	$(MAKE) -C shell clean
 	$(MAKE) -C login clean
 	$(MAKE) -C vi clean
-	$(MAKE) -C coreutils clean
+	$(MAKE) -C kutils clean
 	$(MAKE) -C fetch clean
 	rm -rf $(ROOTFS)/bin

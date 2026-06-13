@@ -9,6 +9,7 @@
 #include "arch/x86_64/syscall_setup.h"
 #include "boot/limine.h"
 #include "drivers/fb.h"
+
 #include "drivers/fbdev.h"
 #include "drivers/input.h"
 #include "drivers/vt.h"
@@ -182,6 +183,7 @@ void kmain(void)
     kstatus("Initialising UIO", true);
     fbdev_init();
     kstatus("Registering framebuffer", vfs_lookup("/dev/fb0") != NULL);
+
     input_init();
     kstatus("Initialising evdev", vfs_lookup("/dev/input/event0") != NULL &&
                                  vfs_lookup("/dev/input/event1") != NULL);

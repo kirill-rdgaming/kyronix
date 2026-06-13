@@ -2179,6 +2179,7 @@ struct sockaddr_un { uint16_t sun_family; char sun_path[108]; };
 #define SO_DOMAIN 39
 #define SOL_SOCKET 1
 #define SCM_CREDENTIALS 2
+#define SCM_RIGHTS      1
 #define MSG_PEEK 0x0002
 
 struct ucred_s { int32_t pid; uint32_t uid; uint32_t gid; };
@@ -2268,7 +2269,31 @@ static int64_t sys_sendmsg(int fd, const void* mhdr, int flags)
         if (r < 0) return total ? total : r;
         total += r;
         if ((uint64_t) r < iov[i].iov_len)
-            break; /* short write (non-blocking socket): stop, don't skip the tail */
+            break;
+    }
+
+    /* SCM_RIGHTS: attach fds to the write pipe */
+    const void* ctrl = (const void*)m[4];
+    uint64_t ctrl_len = m[5];
+    if (ctrl && ctrl_len >= 16 && uptr_ok(ctrl, ctrl_len)) {
+        uint64_t cmsg_len = *(const uint64_t*)ctrl;
+        int32_t  cmsg_lvl = *(const int32_t*)((const uint8_t*)ctrl + 8);
+        int32_t  cmsg_typ = *(const int32_t*)((const uint8_t*)ctrl + 12);
+        if (cmsg_lvl == SOL_SOCKET && cmsg_typ == SCM_RIGHTS && cmsg_len >= 16) {
+            const int* fdarr = (const int*)((const uint8_t*)ctrl + 16);
+            int nfds = (int)((cmsg_len - 16) / sizeof(int));
+            vfs_file_t* sf = fd_get_file(fd);
+            pipe_t* tx = sf ? (sf->wpipe ? sf->wpipe : sf->pipe) : NULL;
+            if (tx && nfds > 0) {
+                void* nodes[PIPE_ANC_MAXFDS];
+                int n = nfds < PIPE_ANC_MAXFDS ? nfds : PIPE_ANC_MAXFDS;
+                for (int i = 0; i < n; i++) {
+                    vfs_node_t* nd = fd_get_node(fdarr[i]);
+                    nodes[i] = nd; /* NULL if invalid fd */
+                }
+                pipe_anc_send(tx, nodes, n);
+            }
+        }
     }
     return total;
 }
@@ -2298,10 +2323,37 @@ static int64_t sys_recvmsg(int fd, void* mhdr, int flags)
     void* control = (void*)m[4];
     uint64_t control_len = m[5];
     uint64_t cmsg_hdr_len = 16;
+    vfs_file_t* sf = fd_get_file(fd);
+
+    /* SCM_RIGHTS: deliver pending fd ancillary data */
+    if (sf && control && control_len >= cmsg_hdr_len) {
+        void* nodes[PIPE_ANC_MAXFDS];
+        pipe_t* rx = sf->pipe;
+        int nfds = rx ? pipe_anc_recv(rx, nodes, PIPE_ANC_MAXFDS) : 0;
+        if (nfds > 0) {
+            uint64_t rights_data = (uint64_t)nfds * sizeof(int);
+            uint64_t rights_len  = cmsg_hdr_len + rights_data;
+            uint64_t rights_sp   = align8(rights_len);
+            if (control_len >= rights_sp && uptr_ok_w(control, rights_sp)) {
+                *(uint64_t*)control = rights_len;
+                *(int32_t*)((uint8_t*)control + 8)  = SOL_SOCKET;
+                *(int32_t*)((uint8_t*)control + 12) = SCM_RIGHTS;
+                int* fdarr = (int*)((uint8_t*)control + cmsg_hdr_len);
+                for (int i = 0; i < nfds; i++) {
+                    vfs_node_t* nd = (vfs_node_t*)nodes[i];
+                    fdarr[i] = nd ? fd_open_node(nd, O_RDWR) : -1;
+                }
+                m[5] = rights_sp;
+                ((uint32_t*)mhdr)[12] = 0;
+                return total;
+            }
+        }
+    }
+
+    /* SCM_CREDENTIALS fallback */
     uint64_t cred_len = sizeof(struct ucred_s);
     uint64_t cmsg_len = cmsg_hdr_len + cred_len;
     uint64_t cmsg_space = align8(cmsg_len);
-    vfs_file_t* sf = fd_get_file(fd);
     if (sf && sf->passcred && control && control_len >= cmsg_space) {
         if (!uptr_ok_w(control, cmsg_space)) return -(int64_t)EFAULT;
         uint64_t* cmsg_len_p = (uint64_t*)control;
@@ -2315,7 +2367,7 @@ static int64_t sys_recvmsg(int fd, void* mhdr, int flags)
     } else {
         m[5] = 0;
     }
-    ((uint32_t*)mhdr)[12] = 0; /* msg_flags */
+    ((uint32_t*)mhdr)[12] = 0;
     return total;
 }
 

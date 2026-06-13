@@ -23,6 +23,12 @@
 #define MAX_HISTORY 64
 #define MAX_JOBS 16
 
+#define SEG_FIRST 0
+#define SEG_AND   1
+#define SEG_OR    2
+#define SEG_SEQ   3
+typedef struct { char seg[MAX_LINE]; int conn; } seg_t;
+
 typedef struct {
     pid_t pgid;
     pid_t pids[32];
@@ -511,37 +517,30 @@ static void complete_token(char* line, size_t* cursor, size_t* length)
         while ((entry = readdir(directory)) != NULL && match_count < 64)
         {
             if (entry->d_name[0] == '.' && base_len == 0)
-            {
                 continue;
-            }
             if (strncmp(entry->d_name, base, base_len) != 0)
-            {
                 continue;
-            }
 
             char full[PATH_MAX];
             if (strcmp(dirpart, "/") == 0)
-            {
                 snprintf(full, sizeof(full), "/%s", entry->d_name);
-            }
             else
-            {
                 snprintf(full, sizeof(full), "%s/%s", dirpart, entry->d_name);
-            }
 
             struct stat st;
-            if (stat(full, &st) == 0 && S_ISDIR(st.st_mode))
-            {
-                strncat(full, "/", sizeof(full) - strlen(full) - 1);
-            }
+            int is_dir = stat(full, &st) == 0 && S_ISDIR(st.st_mode);
 
-            if (slash != NULL)
-            {
-                snprintf(matches[match_count], sizeof(matches[match_count]), "%s", full);
-            }
-            else
-            {
-                snprintf(matches[match_count], sizeof(matches[match_count]), "%s", full);
+            if (slash != NULL) {
+                size_t fl = strlen(full);
+                if (fl + 2 < PATH_MAX) { memcpy(matches[match_count], full, fl);
+                    if (is_dir) { matches[match_count][fl] = '/'; fl++; }
+                    matches[match_count][fl] = '\0'; }
+            } else {
+                /* no slash in token → complete with just the name, not full path */
+                size_t nl = strlen(entry->d_name);
+                if (nl + 2 < PATH_MAX) { memcpy(matches[match_count], entry->d_name, nl);
+                    if (is_dir) { matches[match_count][nl] = '/'; nl++; }
+                    matches[match_count][nl] = '\0'; }
             }
             match_count++;
         }
@@ -749,35 +748,35 @@ static int exec_pipeline(char** argv, int argc, int background, const char* cmd)
     }
     int n_stages = n_pipes + 1;
 
-    int st_start[32], st_end[32];
+    int st_start[32];
     char* outfile[32];
     int append[32];
     int prev = 0;
+    char* infile[32];
     for (int s = 0; s < n_stages; s++)
     {
         int end = (s < n_pipes) ? pipe_at[s] : argc;
         st_start[s] = prev;
-        st_end[s] = end;
         outfile[s] = NULL;
-        append[s] = 0;
-        for (int i = prev; i < end; i++)
+        infile[s]  = NULL;
+        append[s]  = 0;
+        int cmd_end = end;
+        for (int i = prev; i + 1 < end; i++)
         {
-            if (strcmp(argv[i], ">") == 0 && i + 1 < end)
-            {
+            if (strcmp(argv[i], "<") == 0) {
+                infile[s] = argv[i + 1];
+                if (i < cmd_end) cmd_end = i;
+            } else if (strcmp(argv[i], ">") == 0) {
                 outfile[s] = argv[i + 1];
                 append[s] = 0;
-                st_end[s] = i;
-                break;
-            }
-            if (strcmp(argv[i], ">>") == 0 && i + 1 < end)
-            {
+                if (i < cmd_end) cmd_end = i;
+            } else if (strcmp(argv[i], ">>") == 0) {
                 outfile[s] = argv[i + 1];
                 append[s] = 1;
-                st_end[s] = i;
-                break;
+                if (i < cmd_end) cmd_end = i;
             }
         }
-        argv[st_end[s]] = NULL;
+        argv[cmd_end] = NULL;
         prev = end + 1;
     }
 
@@ -817,7 +816,13 @@ static int exec_pipeline(char** argv, int argc, int background, const char* cmd)
             /* all pipeline children join the same pgroup */
             setpgid(0, job_pgid ? job_pgid : 0);
 
-            if (prev_read >= 0) { dup2(prev_read, STDIN_FILENO);  close(prev_read); }
+            if (prev_read >= 0) { dup2(prev_read, STDIN_FILENO); close(prev_read); }
+            if (infile[s] != NULL) {
+                int fd = open(infile[s], O_RDONLY);
+                if (fd < 0) { perror(infile[s]); _exit(1); }
+                dup2(fd, STDIN_FILENO);
+                close(fd);
+            }
             if (pipe_w[1] >= 0) { close(pipe_w[0]); dup2(pipe_w[1], STDOUT_FILENO); close(pipe_w[1]); }
             if (outfile[s] != NULL)
             {
@@ -1047,7 +1052,8 @@ static int apply_builtin_redirs(char** argv, int* argc, int start)
             path = argv[++i];
         } else if (strcmp(argv[i], "2>&1") == 0) {
             if (err_fd >= 0) close(err_fd);
-            err_fd = dup(STDOUT_FILENO);
+            /* dup out_fd if already set, else current stdout */
+            err_fd = dup(out_fd >= 0 ? out_fd : STDOUT_FILENO);
             if (err_fd < 0) goto fail;
             continue;
         } else if (argv[i][0] == '>' && argv[i][1]) {
@@ -1056,12 +1062,19 @@ static int apply_builtin_redirs(char** argv, int* argc, int start)
         } else if (strncmp(argv[i], "2>", 2) == 0 && argv[i][2]) {
             if (strcmp(argv[i] + 2, "&1") == 0) {
                 if (err_fd >= 0) close(err_fd);
-                err_fd = dup(STDOUT_FILENO);
+                err_fd = dup(out_fd >= 0 ? out_fd : STDOUT_FILENO);
                 if (err_fd < 0) goto fail;
                 continue;
             }
             target = STDERR_FILENO;
             path = argv[i] + 2;
+        } else if (strcmp(argv[i], "<") == 0) {
+            if (i + 1 >= *argc) { errno = EINVAL; goto fail; }
+            int fd = open(argv[++i], O_RDONLY);
+            if (fd < 0) { perror(argv[i]); goto fail; }
+            if (dup2(fd, STDIN_FILENO) < 0) { close(fd); goto fail; }
+            close(fd);
+            continue;
         } else {
             argv[new_argc++] = argv[i];
             continue;
@@ -1110,7 +1123,7 @@ static int run_command(int argc, char** argv)
         if (argc == 0) return 0;
     }
 
-    if (strcmp(argv[0], "exit") == 0) exit(0);
+    if (strcmp(argv[0], "exit") == 0) exit(argc > 1 ? atoi(argv[1]) : 0);
 
     if (strcmp(argv[0], "help") == 0) { print_help(); return 0; }
 
@@ -1122,7 +1135,8 @@ static int run_command(int argc, char** argv)
             char* eq = strchr(argv[i], '=');
             if (eq == NULL)
             {
-                if (getenv(argv[i]) == NULL && setenv(argv[i], "", 1) != 0)
+                const char* cur = getenv(argv[i]);
+                if (setenv(argv[i], cur ? cur : "", 1) != 0)
                 {
                     perror("export");
                     ret = 1;
@@ -1223,6 +1237,148 @@ static int run_command(int argc, char** argv)
     return exec_pipeline(argv, argc, background, cmdbuf);
 }
 
+static int split_logic(const char* in, seg_t* segs, int max)
+{
+    int n = 0, conn = SEG_FIRST, quote = 0;
+    char buf[MAX_LINE];
+    int bpos = 0;
+    const char* p = in;
+
+    for (;;) {
+        char c = *p;
+
+        if (!c) {
+            buf[bpos] = '\0';
+            char* s = buf; while (isspace((unsigned char)*s)) s++;
+            char* e = s + strlen(s); while (e > s && isspace((unsigned char)e[-1])) *--e = '\0';
+            if (*s && n < max) {
+                segs[n].conn = conn;
+                strncpy(segs[n].seg, s, MAX_LINE - 1);
+                segs[n].seg[MAX_LINE - 1] = '\0';
+                n++;
+            }
+            break;
+        }
+
+        if (quote) {
+            if (c == (char)quote) quote = 0;
+            if (bpos < MAX_LINE - 1) buf[bpos++] = c;
+            p++; continue;
+        }
+        if (c == '\'' || c == '"') {
+            quote = c;
+            if (bpos < MAX_LINE - 1) buf[bpos++] = c;
+            p++; continue;
+        }
+        if (c == '\\' && p[1]) {
+            if (bpos < MAX_LINE - 2) { buf[bpos++] = c; buf[bpos++] = p[1]; }
+            p += 2; continue;
+        }
+
+        int flush = 0, next_conn = SEG_FIRST;
+        if      (c == '&' && p[1] == '&') { flush = 1; next_conn = SEG_AND; p += 2; }
+        else if (c == '|' && p[1] == '|') { flush = 1; next_conn = SEG_OR;  p += 2; }
+        else if (c == ';')                 { flush = 1; next_conn = SEG_SEQ; p++;    }
+
+        if (flush) {
+            buf[bpos] = '\0';
+            char* s = buf; while (isspace((unsigned char)*s)) s++;
+            char* e = s + strlen(s); while (e > s && isspace((unsigned char)e[-1])) *--e = '\0';
+            if (*s && n < max) {
+                segs[n].conn = conn;
+                strncpy(segs[n].seg, s, MAX_LINE - 1);
+                segs[n].seg[MAX_LINE - 1] = '\0';
+                n++;
+            }
+            conn = next_conn;
+            bpos = 0;
+        } else {
+            if (bpos < MAX_LINE - 1) buf[bpos++] = c;
+            p++;
+        }
+    }
+    return n;
+}
+
+static int run_line_logic(char* input)
+{
+    seg_t segs[32];
+    int n = split_logic(input, segs, 32);
+    int status = 0;
+    for (int i = 0; i < n; i++) {
+        if (segs[i].conn == SEG_AND && status != 0) continue;
+        if (segs[i].conn == SEG_OR  && status == 0) continue;
+        char copy[MAX_LINE];
+        strncpy(copy, segs[i].seg, MAX_LINE - 1);
+        copy[MAX_LINE - 1] = '\0';
+        char* cmd_argv[MAX_ARGS];
+        int argc = split_line(copy, cmd_argv);
+        if (argc > 0) expand_globs(&argc, cmd_argv);
+        status = run_command(argc, cmd_argv);
+    }
+    return status;
+}
+
+/* Execute an if/elif/else/fi block.
+   cond_line is the full `if COND` line (with optional `; then` suffix).
+   File is positioned right after that line (next line may be `then`). */
+static int run_if_block(FILE* f, const char* cond_line, int outer_status)
+{
+    /* extract condition: skip `if `, strip `; then` or ` then` suffix */
+    const char* cp = cond_line;
+    while (*cp && !isspace((unsigned char)*cp)) cp++; /* skip 'if' */
+    while (*cp && isspace((unsigned char)*cp)) cp++;  /* skip space */
+    char cond[MAX_LINE];
+    strncpy(cond, cp, sizeof(cond)-1);
+    cond[sizeof(cond)-1] = '\0';
+    /* strip ; then */
+    char* semi = strstr(cond, "; then");
+    if (!semi) semi = strstr(cond, ";then");
+    if (semi) *semi = '\0';
+    else {
+        char* sthen = strstr(cond, " then");
+        if (sthen) *sthen = '\0';
+    }
+    /* strip trailing whitespace */
+    int cl = (int)strlen(cond);
+    while (cl > 0 && isspace((unsigned char)cond[cl-1])) cond[--cl] = '\0';
+
+    /* evaluate condition */
+    int cond_status = run_line_logic(cond);
+    int take_then = (cond_status == 0);
+
+    int depth = 1;       /* nesting depth */
+    int in_else = 0;     /* 0=then-block, 1=else-block */
+    int status = outer_status;
+    char line[MAX_LINE];
+
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\n")] = '\0';
+        char* p = line;
+        while (isspace((unsigned char)*p)) p++;
+        if (*p == '\0' || *p == '#') continue;
+
+        /* track nesting */
+        if (strncmp(p, "if ", 3) == 0 || strcmp(p, "if") == 0) {
+            depth++;
+        } else if (strcmp(p, "fi") == 0) {
+            if (--depth == 0) break;
+        } else if (depth == 1 && strcmp(p, "else") == 0) {
+            in_else = 1; continue;
+        } else if (depth == 1 && strcmp(p, "then") == 0) {
+            continue; /* standalone `then` line */
+        }
+
+        if (depth == 1) {
+            int should_exec = in_else ? !take_then : take_then;
+            if (should_exec) {
+                status = run_line_logic(p);
+            }
+        }
+    }
+    return status;
+}
+
 static int run_script(const char* path)
 {
     FILE* file = fopen(path, "r");
@@ -1234,7 +1390,6 @@ static int run_script(const char* path)
 
     char logical[MAX_LINE];
     char physical[MAX_LINE];
-    char* cmd_argv[MAX_ARGS];
     int status = 0;
 
     logical[0] = '\0';
@@ -1275,14 +1430,18 @@ static int run_script(const char* path)
             continue;
         }
 
+        /* if/then/fi block */
+        if (strncmp(p, "if ", 3) == 0)
+        {
+            status = run_if_block(file, p, status);
+            logical[0] = '\0';
+            continue;
+        }
+
         char line_copy[MAX_LINE];
         strncpy(line_copy, p, sizeof(line_copy) - 1);
         line_copy[sizeof(line_copy) - 1] = '\0';
-
-        int argc = split_line(line_copy, cmd_argv);
-        if (argc > 0)
-            expand_globs(&argc, cmd_argv);
-        status = run_command(argc, cmd_argv);
+        status = run_line_logic(line_copy);
         logical[0] = '\0';
     }
 
@@ -1293,15 +1452,9 @@ static int run_script(const char* path)
 static int run_command_string(const char* command)
 {
     char line[MAX_LINE];
-    char* cmd_argv[MAX_ARGS];
-
     strncpy(line, command, sizeof(line) - 1);
     line[sizeof(line) - 1] = '\0';
-
-    int argc = split_line(line, cmd_argv);
-    if (argc > 0)
-        expand_globs(&argc, cmd_argv);
-    return run_command(argc, cmd_argv);
+    return run_line_logic(line);
 }
 
 int main(int argc, char** argv)
@@ -1329,8 +1482,16 @@ int main(int argc, char** argv)
     if (argc > 2 && strcmp(argv[1], "-c") == 0)
         return run_command_string(argv[2]);
 
-    if (argc > 1)
-        return run_script(argv[1]);
+    /* skip flags like -i/-l/-s that xterm passes for interactive/login shells;
+       only treat a non-flag argument as a script path */
+    {
+        int script_arg = 0;
+        for (int ai = 1; ai < argc; ai++) {
+            if (argv[ai][0] != '-') { script_arg = ai; break; }
+        }
+        if (script_arg)
+            return run_script(argv[script_arg]);
+    }
 
     puts("");
     puts("Type 'help' for commands.");
@@ -1338,7 +1499,6 @@ int main(int argc, char** argv)
     history_load();
 
     char line[MAX_LINE];
-    char* cmd_argv[MAX_ARGS];
 
     for (;;)
     {
@@ -1346,9 +1506,19 @@ int main(int argc, char** argv)
         for (int i = 0; i < MAX_JOBS; i++) {
             job_t* j = &g_jobs[i];
             if (!j->pgid || j->stopped) continue;
-            int s;
-            pid_t p = waitpid(j->pids[j->npids - 1], &s, WNOHANG);
-            if (p > 0 && (WIFEXITED(s) || WIFSIGNALED(s))) {
+            int all_done = 1;
+            for (int k = 0; k < j->npids; k++) {
+                if (j->pids[k] <= 0) continue;
+                int s;
+                pid_t p = waitpid(j->pids[k], &s, WNOHANG);
+                if (p > 0) {
+                    j->pids[k] = -1;
+                    if (!(WIFEXITED(s) || WIFSIGNALED(s))) all_done = 0;
+                } else if (p == 0) {
+                    all_done = 0;
+                }
+            }
+            if (all_done) {
                 printf("[%d]+  Done\t\t%s\n", j->id, j->cmd);
                 job_remove(j);
             }
@@ -1358,13 +1528,13 @@ int main(int argc, char** argv)
         if (rl == 2) continue;
         if (rl != 0) { putchar('\n'); break; }
 
+        char* tp = line; while (isspace((unsigned char)*tp)) tp++;
+        if (*tp) history_add(line);
+
         char line_copy[MAX_LINE];
         strncpy(line_copy, line, sizeof(line_copy) - 1);
         line_copy[sizeof(line_copy) - 1] = '\0';
-
-        int argc = split_line(line_copy, cmd_argv);
-        if (argc > 0) { history_add(line); expand_globs(&argc, cmd_argv); }
-        run_command(argc, cmd_argv);
+        run_line_logic(line_copy);
     }
 
     terminal_restore();

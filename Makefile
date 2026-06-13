@@ -82,7 +82,7 @@ DEPS := $(OBJS:.o=.d)
 SRC_DIR  := .
 INITRD   := initrd.cpio
 
-.PHONY: all iso run run-serial run-uefi clean user-build xorg
+.PHONY: all iso run run-serial run-uefi clean user-build xorg mesa
 
 all: $(TARGET) $(INITRD)
 

@@ -12,6 +12,7 @@
 #include "mm/vmm.h"
 #include "proc/proc.h"
 
+extern volatile uint64_t g_ticks;
 static vfs_node_t* g_root = NULL;
 static uint32_t g_next_ino = 1;
 
@@ -44,12 +45,10 @@ static vfs_file_t** g_fds = g_default_fds;
 #define EISCONN      106
 #define EADDRINUSE    98
 
-/* unix socket structs (used by file_close and fd_*_unix functions below) */
 #define SOCK_UNBOUND   0
 #define SOCK_BOUND     1
 #define SOCK_LISTENING 2
 
-/* abstract Unix socket registry (Linux @-namespace, sun_path[0]=='\0') */
 #define MAX_ABSTRACT_SOCKS 16
 static struct { char name[107]; vfs_node_t* node; } g_abstract_socks[MAX_ABSTRACT_SOCKS];
 
@@ -724,6 +723,19 @@ vfs_file_t* fd_get_file(int fd)
     return fd_get(fd);
 }
 
+int fd_open_node(vfs_node_t* n, int flags)
+{
+    if (!n) return -(int)ENOENT;
+    int fd = fd_alloc_from(0);
+    if (fd < 0) return -(int)EMFILE;
+    vfs_file_t* f = file_alloc();
+    if (!f) return -(int)ENOMEM;
+    f->node  = n;
+    f->flags = flags;
+    g_fds[fd] = f;
+    return fd;
+}
+
 int64_t fd_pread(int fd, void* buf, uint64_t len, uint64_t off)
 {
     vfs_file_t* f = fd_get(fd);
@@ -766,6 +778,8 @@ bool fd_pollin(int fd)
 {
     vfs_file_t* f = fd_get(fd);
     if (!f) return false;
+    if (f->efd) return f->efd->counter > 0;
+    if (f->tfd) return f->tfd->next_tick && g_ticks >= f->tfd->next_tick;
     if (f->wpipe) /* socket: readable when read-pipe has data */
         return f->pipe->count > 0 || f->pipe->write_refs == 0;
     if (f->pipe)
@@ -816,6 +830,8 @@ static void file_close(vfs_file_t* f)
 {
     if (!file_valid(f))
         return;
+    if (f->efd) { kfree(f->efd); f->magic = 0; kfree(f); return; }
+    if (f->tfd) { kfree(f->tfd); f->magic = 0; kfree(f); return; }
     /* listening/bound socket: free unix_sock_t and remove VFS bind node */
     if (!f->pipe && !f->wpipe && f->node && f->node->type == VFS_TYPE_SOCK) {
         unix_sock_t* s = (unix_sock_t*)f->node->data;
@@ -1134,6 +1150,140 @@ int fd_socketpair(int sv[2])
     return 0;
 }
 
+extern volatile uint64_t g_ticks;
+
+int fd_eventfd(uint32_t initval, int eflags)
+{
+    eventfd_state_t* e = (eventfd_state_t*) kcalloc(1, sizeof(eventfd_state_t));
+    if (!e) return -(int) ENOMEM;
+    e->counter   = initval;
+    e->semaphore = !!(eflags & 1); /* EFD_SEMAPHORE = 1 */
+
+    int fd = fd_alloc_from(0);
+    if (fd < 0) { kfree(e); return -(int) EMFILE; }
+    vfs_file_t* f = file_alloc();
+    if (!f) { kfree(e); return -(int) ENOMEM; }
+    f->efd   = e;
+    f->flags = O_RDWR;
+    if (eflags & 0x80000) f->flags |= O_NONBLOCK; /* EFD_NONBLOCK */
+    if (eflags & 0x40000) f->cloexec = 1;          /* EFD_CLOEXEC */
+    g_fds[fd] = f;
+    return fd;
+}
+
+/* called by fd_read / fd_write via vfs.c read/write paths */
+int64_t eventfd_read(vfs_file_t* f, char* buf, uint64_t len)
+{
+    if (len < 8) return -(int) EINVAL;
+    eventfd_state_t* e = f->efd;
+    while (e->counter == 0) {
+        if (f->flags & O_NONBLOCK) return -(int) EAGAIN;
+        proc_t* p = g_current_proc;
+        e->waiter = p;
+        if (p) {
+            if (proc_next_ready(p)) sched_yield_blocking();
+            else { sti(); hlt(); cli(); }
+        }
+        e->waiter = NULL;
+    }
+    uint64_t val;
+    if (e->semaphore) { val = 1; e->counter--; }
+    else              { val = e->counter; e->counter = 0; }
+    __builtin_memcpy(buf, &val, 8);
+    return 8;
+}
+
+int64_t eventfd_write(vfs_file_t* f, const char* buf, uint64_t len)
+{
+    if (len < 8) return -(int) EINVAL;
+    uint64_t val;
+    __builtin_memcpy(&val, buf, 8);
+    if (val == (uint64_t)-1) return -(int) EINVAL;
+    eventfd_state_t* e = f->efd;
+    e->counter += val;
+    if (e->waiter) {
+        proc_t* w = (proc_t*) e->waiter;
+        if (w->state == PROC_WAITING) w->state = PROC_READY;
+        e->waiter = NULL;
+    }
+    return 8;
+}
+
+int fd_timerfd_create(int clockid, int tflags)
+{
+    timerfd_state_t* t = (timerfd_state_t*) kcalloc(1, sizeof(timerfd_state_t));
+    if (!t) return -(int) ENOMEM;
+    t->clockid = clockid;
+
+    int fd = fd_alloc_from(0);
+    if (fd < 0) { kfree(t); return -(int) EMFILE; }
+    vfs_file_t* f = file_alloc();
+    if (!f) { kfree(t); return -(int) ENOMEM; }
+    f->tfd   = t;
+    f->flags = O_RDWR;
+    if (tflags & 0x80000) f->flags |= O_NONBLOCK;
+    if (tflags & 0x40000) f->cloexec = 1;
+    g_fds[fd] = f;
+    return fd;
+}
+
+int fd_timerfd_settime(int fd, int flags, const kitimerspec_t* new_val, kitimerspec_t* old_val)
+{
+    vfs_file_t* f = fd_get(fd);
+    if (!f || !f->tfd) return -(int) EINVAL;
+    timerfd_state_t* t = f->tfd;
+    if (old_val) {
+        uint64_t remaining_ms = (t->next_tick > g_ticks) ? (t->next_tick - g_ticks) : 0;
+        old_val->value.sec  = remaining_ms / 1000;
+        old_val->value.nsec = (remaining_ms % 1000) * 1000000;
+        old_val->interval.sec  = t->interval_ms / 1000;
+        old_val->interval.nsec = (t->interval_ms % 1000) * 1000000;
+    }
+    uint64_t val_ms = new_val->value.sec * 1000 + new_val->value.nsec / 1000000;
+    t->interval_ms = new_val->interval.sec * 1000 + new_val->interval.nsec / 1000000;
+    t->next_tick   = val_ms ? g_ticks + val_ms : 0;
+    t->overruns    = 0;
+    return 0;
+}
+
+int fd_timerfd_gettime(int fd, kitimerspec_t* cur_val)
+{
+    vfs_file_t* f = fd_get(fd);
+    if (!f || !f->tfd || !cur_val) return -(int) EINVAL;
+    timerfd_state_t* t = f->tfd;
+    uint64_t remaining_ms = (t->next_tick > g_ticks) ? (t->next_tick - g_ticks) : 0;
+    cur_val->value.sec  = remaining_ms / 1000;
+    cur_val->value.nsec = (remaining_ms % 1000) * 1000000;
+    cur_val->interval.sec  = t->interval_ms / 1000;
+    cur_val->interval.nsec = (t->interval_ms % 1000) * 1000000;
+    return 0;
+}
+
+/* timerfd_read: blocks until expired, returns number of expirations as uint64_t */
+int64_t timerfd_read(vfs_file_t* f, char* buf, uint64_t len)
+{
+    if (len < 8) return -(int) EINVAL;
+    timerfd_state_t* t = f->tfd;
+    for (;;) {
+        if (t->next_tick && g_ticks >= t->next_tick) {
+            uint64_t exp = 1 + t->overruns;
+            t->overruns = 0;
+            if (t->interval_ms)
+                t->next_tick += t->interval_ms;
+            else
+                t->next_tick = 0;
+            __builtin_memcpy(buf, &exp, 8);
+            return 8;
+        }
+        if (f->flags & O_NONBLOCK) return -(int) EAGAIN;
+        proc_t* p = g_current_proc;
+        if (p) {
+            if (proc_next_ready(p)) sched_yield_blocking();
+            else { sti(); hlt(); cli(); }
+        }
+    }
+}
+
 int fd_socket(int domain, int type, int proto)
 {
     (void)proto;
@@ -1422,6 +1572,9 @@ int64_t fd_read(int fd, void* buf, uint64_t len)
         return 0;
     if (!uptr_ok_w(buf, len)) /* kernel writes into buf: needs a writable page */
         return -(int64_t) EFAULT;
+    if (f->efd) return eventfd_read(f, (char*)buf, len);
+    if (f->tfd) return timerfd_read(f, (char*)buf, len);
+
     if (!f->pipe && !f->wpipe && (f->flags & O_ACCMODE) == O_WRONLY)
         return -(int64_t) EBADF;
 
@@ -1556,9 +1709,8 @@ int64_t fd_write(int fd, const void* buf, uint64_t len)
         return 0;
     if (!uptr_ok(buf, len))
         return -(int64_t) EFAULT;
-    /* non-blocking socket: never block in pipe_write — return EAGAIN when the send
-       buffer is full, else clamp to the free space so the write completes at once.
-       lets XCB drain incoming events instead of deadlocking on a full buffer. */
+    if (f->efd) return eventfd_write(f, (const char*)buf, len);
+    if (f->tfd) return -(int64_t) EINVAL; /* timerfd not writable via write() */
     if (f->wpipe && (f->flags & O_NONBLOCK) && f->wpipe->read_refs > 0) {
         uint64_t space = PIPE_BUFSZ - f->wpipe->count;
         if (space == 0)

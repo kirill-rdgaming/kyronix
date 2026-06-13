@@ -19,7 +19,7 @@
 #define SHM_RND     020000
 
 #define SHM_MAX_SEGS   64
-#define SHM_MAX_PAGES  512  /* up to 2 MiB per segment */
+#define SHM_MAX_PAGES  4096 /* up to 16 MiB per segment */
 #define SHM_MAX_ATTACH (SHM_MAX_SEGS * 4)
 
 typedef struct {
