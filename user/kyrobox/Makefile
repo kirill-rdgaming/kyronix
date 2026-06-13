@@ -6,6 +6,9 @@ UTILS := basename cat chgrp chmod chown cksum clear cmp cp cut date dd dirname d
 	find grep head hostname kill link ln ls mkdir mktemp mv printenv printf pwd readlink rm rmdir \
 	sed seq sleep sort sync tail tee test touch tr true tty uname uniq unlink wc which whoami yes
 
+FNO_LINK_LIBATOMIC := $(shell echo 'int main(void){return 0;}' | $(CC) -x c - -fno-link-libatomic -o /dev/null 2>/dev/null && echo '-fno-link-libatomic')
+CFLAGS += $(FNO_LINK_LIBATOMIC)
+
 .PHONY: all clean
 
 all: $(UTILS:%=$(OUT)/%)
