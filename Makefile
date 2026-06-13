@@ -93,7 +93,7 @@ DEPS := $(OBJS:.o=.d)
 SRC_DIR  := .
 INITRD   := initrd.cpio
 
-.PHONY: all iso run run-serial run-uefi clean user-build xorg mesa
+.PHONY: all iso run run-serial clean user-build xorg
 
 all: $(TARGET) $(INITRD)
 
@@ -173,28 +173,6 @@ run-serial: iso
 	    -boot d                     \
 	    -display none               \
 	    -serial stdio
-
-OVMF ?= /usr/share/edk2/x64/OVMF.fd
-
-run-uefi: iso
-	qemu-system-x86_64              \
-	    -M q35                      \
-	    -m 2G                       \
-	    -cdrom $(ISO)               \
-	    -bios $(OVMF)               \
-	    -boot d                     \
-	    -serial stdio               \
-	    -vga qxl                    \
-	    -global qxl-vga.vgamem_mb=1024
-
-fmt:
-	@echo "Formatting code..."
-	@find $(SRC_DIR) -type f \( -name "*.c" -o -name "*.h" \) -exec clang-format -i {} \;
-	@echo "Format complete"
-
-fmt-check:
-	@echo "Checking code style..."
-	@find $(SRC_DIR) -type f \( -name "*.c" -o -name "*.h" \) -exec clang-format --dry-run -Werror {} +
 
 clean:
 	rm -f $(TARGET) $(ISO) $(INITRD)

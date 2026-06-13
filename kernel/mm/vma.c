@@ -4,6 +4,10 @@
 #define ENOMEM 12
 #define EINVAL 22
 
+#define PROT_READ  0x1
+#define PROT_WRITE 0x2
+#define PROT_EXEC  0x4
+
 static bool range_end(uint64_t start, uint64_t len, uint64_t* end)
 {
     if (!len)
@@ -105,6 +109,31 @@ bool vma_page_owned(vmm_space_t* sp, uint64_t addr)
 {
     vmm_vma_t* v = containing(sp, addr);
     return v && v->free_on_unmap;
+}
+
+bool vma_page_fault_allowed(vmm_space_t* sp, uint64_t addr, bool write, bool exec)
+{
+    vmm_vma_t* v = containing(sp, addr);
+    if (!v || !v->free_on_unmap)
+        return false;
+    if (write && !(v->prot & PROT_WRITE))
+        return false;
+    if (exec && !(v->prot & PROT_EXEC))
+        return false;
+    return (v->prot & (PROT_READ | PROT_WRITE | PROT_EXEC)) != 0;
+}
+
+uint64_t vma_page_flags(vmm_space_t* sp, uint64_t addr)
+{
+    vmm_vma_t* v = containing(sp, addr);
+    uint64_t flags = VMM_USER | VMM_NX;
+    if (!v)
+        return flags;
+    if (v->prot & PROT_WRITE)
+        flags |= VMM_WRITE;
+    if (v->prot & PROT_EXEC)
+        flags &= ~(uint64_t) VMM_NX;
+    return flags;
 }
 
 static int split_for_hole(vmm_space_t* sp, vmm_vma_t* v, uint64_t start, uint64_t end)

@@ -2,12 +2,15 @@
 #include "gdt.h"
 #include "lib/printf.h"
 #include "mm/pmm.h"
+#include "mm/vma.h"
 #include "mm/vmm.h"
 #include "pic.h"
 #include "pit.h"
 #include "arch/x86_64/syscall_setup.h"
+#include "exec/process.h"
 #include "fs/vfs.h"
 #include "proc/proc.h"
+#include "proc/signal.h"
 #include "syscall/syscall.h"
 #include "drivers/fb.h"
 
@@ -105,34 +108,89 @@ static const char* const exc_name[] = {
     "(reserved 31)",
 };
 
+typedef enum
+{
+    PF_UNHANDLED = 0,
+    PF_HANDLED,
+    PF_SIGSEGV,
+    PF_SIGBUS,
+} page_fault_result_t;
+
+static bool page_fault_stack_growth_ok(cpu_state_t* state, uint64_t page, bool exec)
+{
+    if (exec)
+        return false;
+    if (page < USER_STACK_GROW_BASE || page >= USER_STACK_TOP)
+        return false;
+    return page + USER_STACK_GROW_SLOP_PAGES * PAGE_SIZE >= state->rsp;
+}
+
+static page_fault_result_t handle_user_page_fault(cpu_state_t* state)
+{
+    if (!g_current_proc || !g_current_proc->space)
+        return PF_SIGSEGV;
+
+    if (state->error_code & 0x1)
+        return PF_SIGSEGV; /* protection violation */
+
+    uint64_t cr2 = read_cr2();
+    uint64_t page = cr2 & ~0xFFFULL;
+    bool write = (state->error_code & 0x2) != 0;
+    bool exec = (state->error_code & 0x10) != 0;
+
+    if (page_fault_stack_growth_ok(state, page, exec))
+    {
+        void* phys = pmm_alloc_zeroed();
+        if (!phys)
+            return PF_SIGBUS;
+        if (vmm_map(g_current_proc->space, page, (uint64_t) phys, VMM_UDATA) == 0)
+            return PF_HANDLED;
+        pmm_free(phys);
+        return PF_SIGBUS;
+    }
+
+    if (vma_page_fault_allowed(g_current_proc->space, page, write, exec))
+    {
+        void* phys = pmm_alloc_zeroed();
+        if (!phys)
+            return PF_SIGBUS;
+        uint64_t flags = vma_page_flags(g_current_proc->space, page);
+        if (vmm_map(g_current_proc->space, page, (uint64_t) phys, flags) == 0)
+            return PF_HANDLED;
+        pmm_free(phys);
+        return PF_SIGBUS;
+    }
+
+    return PF_SIGSEGV;
+}
+
+static int exception_signal(uint64_t n)
+{
+    static const int exc_sig[] = {
+        SIGFPE, SIGFPE, SIGILL, SIGTRAP, SIGILL, SIGFPE, SIGILL, SIGFPE,
+        SIGFPE, SIGFPE, SIGFPE, SIGTRAP, SIGILL, SIGSEGV, SIGSEGV, SIGFPE,
+        SIGBUS, SIGFPE, SIGTRAP, SIGFPE, SIGFPE, SIGFPE, SIGFPE, SIGFPE,
+        SIGFPE, SIGFPE, SIGFPE, SIGFPE, SIGFPE, SIGFPE, SIGFPE, SIGFPE,
+    };
+    return (n < 32) ? exc_sig[n] : SIGSEGV;
+}
+
 void isr_dispatch(cpu_state_t* state)
 {
     uint64_t n = state->int_no;
 
     if (n < 32)
     {
-        /* demand paging: allocate a page for non-present userspace access */
-        if (n == 14 && g_current_proc && (state->cs & 3) == 3 && !(state->error_code & 0x1))
-        {
-            uint64_t cr2 = read_cr2();
-            uint64_t page = cr2 & ~0xFFFULL;
-            if (page >= 0x400000ULL)
-            {
-                void* phys = pmm_alloc_zeroed();
-                if (phys && vmm_map(g_current_proc->space, page, (uint64_t) phys, VMM_UDATA) == 0)
-                    return;
-                if (phys)
-                    pmm_free(phys);
-            }
-        }
-
         /* user-mode exception: kill the process, dont halt the kernel */
         if ((state->cs & 3) == 3 && g_current_proc)
         {
-            static const int exc_sig[] = {
-                8,8,4,5,4,8,4,8,8,8,8,5,4,11,8,8,7,8,5,8,8,8,8,8,8,8,8,8,8,8,8,8
-            };
-            int sig = (n < 32) ? exc_sig[n] : 11;
+            int sig = exception_signal(n);
+            if (n == 14) {
+                page_fault_result_t pf = handle_user_page_fault(state);
+                if (pf == PF_HANDLED)
+                    return;
+                sig = (pf == PF_SIGBUS) ? SIGBUS : SIGSEGV;
+            }
             kdbg("\n[exc#%lu pid=%u RIP=%lx] -> sig %d\n",
                  n, g_current_proc->pid, state->rip, sig);
             if (n == 14) {

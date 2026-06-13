@@ -11,10 +11,6 @@
 #include "proc/proc.h"
 #include "syscall/syscall.h"
 
-#define USER_STACK_PAGES 4
-#define USER_STACK_TOP 0x7fffffff0000ULL
-#define USER_STACK_BASE (USER_STACK_TOP - (uint64_t) USER_STACK_PAGES * PAGE_SIZE)
-
 uint64_t kern_rand64(void)
 {
     static uint64_t s;

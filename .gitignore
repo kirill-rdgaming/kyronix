@@ -5,3 +5,4 @@
 *.cpio
 kyronix.iso
 build/*
+iso_root/*
