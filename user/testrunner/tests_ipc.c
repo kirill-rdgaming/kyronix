@@ -1,14 +1,5 @@
 #include "test_harness.h"
 
-/* ================================================================== */
-/*  Phase 5 — Pipes & IPC                                             */
-/* ================================================================== */
-
-/* ---------------------------------------------------------------- */
-/*  5.2  pipe close race — writer gets EPIPE/SIGPIPE when reader    */
-/*       closes                                                     */
-/* ---------------------------------------------------------------- */
-
 static volatile sig_atomic_t sigpipe_caught = 0;
 
 static void handler_sigpipe(int sig) {
@@ -54,16 +45,8 @@ int test_pipe_close_race(void) {
 }
 REGISTER_TEST(pipe_close_race, "Phase 5: Pipes & IPC");
 
-/* ---------------------------------------------------------------- */
-/*  5.3  pipe capacity — fill pipe until EAGAIN (non-block)         */
-/* ---------------------------------------------------------------- */
-
-int test_pipe_capacity(void) { SKIP(""); }
+int test_pipe_capacity(void) { return TEST_FAIL; }
 REGISTER_TEST(pipe_capacity, "Phase 5: Pipes & IPC");
-
-/* ---------------------------------------------------------------- */
-/*  5.4  dup / dup2 / dup3                                          */
-/* ---------------------------------------------------------------- */
 
 int test_dup_dup2_dup3(void) {
     int p[2];
@@ -99,42 +82,8 @@ int test_dup_dup2_dup3(void) {
 }
 REGISTER_TEST(dup_dup2_dup3, "Phase 5: Pipes & IPC");
 
-/* ---------------------------------------------------------------- */
-/*  5.5  socketpair — AF_UNIX stream pair                           */
-/* ---------------------------------------------------------------- */
-
-int test_socketpair(void) {
-    SKIP("");
-
-    int sv[2];
-    int ret = socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
-    if (ret < 0 && (errno == ENOSYS || errno == ENOTSUP || errno == EAFNOSUPPORT)) return 1;
-    ASSERT_EQ(0, ret);
-
-    /* Write from one end, read from other */
-    const char *msg = "hello socket";
-    ASSERT_EQ((ssize_t) strlen(msg), write(sv[0], msg, strlen(msg)));
-
-    char buf[64];
-    ssize_t n = read(sv[1], buf, sizeof(buf));
-    ASSERT_EQ((ssize_t) strlen(msg), n);
-    buf[n] = '\0';
-    ASSERT_STREQ(msg, buf);
-
-    /* Half-close */
-    ASSERT_EQ(0, shutdown(sv[0], SHUT_WR));
-    n = read(sv[1], buf, sizeof(buf));
-    ASSERT_EQ(0, n);
-
-    close(sv[0]);
-    close(sv[1]);
-    return 1;
-}
+int test_socketpair(void) { return TEST_FAIL; }
 REGISTER_TEST(socketpair, "Phase 5: Pipes & IPC");
-
-/* ---------------------------------------------------------------- */
-/*  5.6  Unix sockets: stream server/client                         */
-/* ---------------------------------------------------------------- */
 
 int test_unix_stream(void) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -202,10 +151,6 @@ int test_unix_stream(void) {
 }
 REGISTER_TEST(unix_stream, "Phase 5: Pipes & IPC");
 
-/* ---------------------------------------------------------------- */
-/*  5.6b  Unix sockets: datagram (SOCK_DGRAM)                       */
-/* ---------------------------------------------------------------- */
-
 int test_unix_dgram(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "unix_dgram.sock");
@@ -238,10 +183,6 @@ int test_unix_dgram(void) {
     return 1;
 }
 REGISTER_TEST(unix_dgram, "Phase 5: Pipes & IPC");
-
-/* ---------------------------------------------------------------- */
-/*  5.7  shmget / shmat / shmdt / shmctl                           */
-/* ---------------------------------------------------------------- */
 
 int test_shm_basic(void) {
     int shmid = shmget(IPC_PRIVATE, 4096, IPC_CREAT | 0600);
@@ -285,10 +226,6 @@ int test_shm_basic(void) {
 }
 REGISTER_TEST(shm_basic, "Phase 5: Pipes & IPC");
 
-/* ---------------------------------------------------------------- */
-/*  5.8  futex — basic FUTEX_WAIT / FUTEX_WAKE mutex               */
-/* ---------------------------------------------------------------- */
-
 int test_futex_basic(void) {
     uint32_t futex_word = 0;
     int ret;
@@ -319,63 +256,8 @@ int test_futex_basic(void) {
 }
 REGISTER_TEST(futex_basic, "Phase 5: Pipes & IPC");
 
-/* ---------------------------------------------------------------- */
-/*  5.8b  futex — requeue                                           */
-/* ---------------------------------------------------------------- */
-
-int test_futex_requeue(void) {
-    SKIP("");
-
-    uint32_t futex1 = 0, futex2 = 0;
-    pid_t pid = fork();
-    ASSERT_GE(pid, 0);
-
-    if (pid == 0) {
-        /* Child waits on futex1 */
-        syscall(SYS_futex, &futex1, FUTEX_WAIT, 0, NULL, NULL, 0);
-        _exit(0);
-    }
-
-    usleep(100000);
-
-    /* Another child waits on futex1 too */
-    pid_t pid2 = fork();
-    ASSERT_GE(pid2, 0);
-
-    if (pid2 == 0) {
-        syscall(SYS_futex, &futex1, FUTEX_WAIT, 0, NULL, NULL, 0);
-        _exit(0);
-    }
-
-    usleep(100000);
-
-    /* Requeue one waiter from futex1 to futex2, wake the other */
-    long ret = syscall(SYS_futex, &futex1, FUTEX_CMP_REQUEUE, 1, (long) &futex2, &futex2, 0);
-    if (ret < 0 && (errno == ENOSYS || errno == EINVAL)) {
-        /* kill children and skip */
-        kill(pid, SIGKILL);
-        kill(pid2, SIGKILL);
-        int st;
-        waitpid(pid, &st, 0);
-        waitpid(pid2, &st, 0);
-        return 1;
-    }
-    ASSERT_GE(ret, 0);
-
-    /* Wake the requeued waiter on futex2 */
-    ret = syscall(SYS_futex, &futex2, FUTEX_WAKE, 1, NULL, NULL, 0);
-    ASSERT_GE(ret, 0);
-
-    int status;
-    waitpid(pid, &status, 0);
-    waitpid(pid2, &status, 0);
-    return 1;
-}
+int test_futex_requeue(void) { return TEST_FAIL; }
 REGISTER_TEST(futex_requeue, "Phase 5: Pipes & IPC");
-
-/* ---------------------------------------------------------------- */
-/*  5.9  eventfd — ENOSYS stub coverage                             */
-/* ---------------------------------------------------------------- */
 
 int test_eventfd(void) {
     int fd = eventfd(0, 0);
@@ -395,10 +277,6 @@ int test_eventfd(void) {
     return 1;
 }
 REGISTER_TEST(eventfd, "Phase 5: Pipes & IPC");
-
-/* ---------------------------------------------------------------- */
-/*  5.10  signalfd — ENOSYS stub coverage                           */
-/* ---------------------------------------------------------------- */
 
 int test_signalfd(void) {
     sigset_t mask;

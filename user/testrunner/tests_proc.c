@@ -1,12 +1,5 @@
 #include "test_harness.h"
 
-/* ================================================================== */
-/*  Phase 3 — Process & Scheduling Syscalls                           */
-/* ================================================================== */
-
-/* ---------------------------------------------------------------- */
-/*  3.1  fork basic                                                 */
-/* ---------------------------------------------------------------- */
 int test_fork_basic(void) {
     pid_t pid = fork();
     ASSERT_GE(pid, 0);
@@ -24,9 +17,6 @@ int test_fork_basic(void) {
 }
 REGISTER_TEST(fork_basic, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.2  fork — child gets correct PID values                       */
-/* ---------------------------------------------------------------- */
 int test_fork_pid(void) {
     pid_t parent_pid = getpid();
     int p[2];
@@ -62,9 +52,6 @@ int test_fork_pid(void) {
 }
 REGISTER_TEST(fork_pid, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.3  fork — COW semantics (write in child)                     */
-/* ---------------------------------------------------------------- */
 int test_fork_cow(void) {
     int shared = 42;
     pid_t pid = fork();
@@ -86,9 +73,6 @@ int test_fork_cow(void) {
 }
 REGISTER_TEST(fork_cow, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.4  fork — shared fd table before fork vs separate after       */
-/* ---------------------------------------------------------------- */
 int test_fork_fdtable(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "fork_fd");
@@ -124,9 +108,6 @@ int test_fork_fdtable(void) {
 }
 REGISTER_TEST(fork_fdtable, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.5  vfork                                                      */
-/* ---------------------------------------------------------------- */
 int test_vfork(void) {
     int status;
     pid_t pid;
@@ -153,9 +134,6 @@ int test_vfork(void) {
 }
 REGISTER_TEST(vfork, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.6  execve                                                     */
-/* ---------------------------------------------------------------- */
 int test_execve(void) {
     pid_t pid = fork();
     ASSERT_GE(pid, 0);
@@ -175,9 +153,6 @@ int test_execve(void) {
 }
 REGISTER_TEST(execve, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.7  execve — bad binary (ENOEXEC)                              */
-/* ---------------------------------------------------------------- */
 int test_execve_bad(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "bad_bin");
@@ -203,9 +178,6 @@ int test_execve_bad(void) {
 }
 REGISTER_TEST(execve_bad, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.8  exit status (WEXITSTATUS)                                  */
-/* ---------------------------------------------------------------- */
 int test_exit_status(void) {
     pid_t pid = fork();
     ASSERT_GE(pid, 0);
@@ -220,9 +192,6 @@ int test_exit_status(void) {
 }
 REGISTER_TEST(exit_status, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.9  wait — WNOHANG                                             */
-/* ---------------------------------------------------------------- */
 int test_wait_nohang(void) {
     pid_t pid = fork();
     ASSERT_GE(pid, 0);
@@ -244,9 +213,6 @@ int test_wait_nohang(void) {
 }
 REGISTER_TEST(wait_nohang, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.10  wait — specific PID                                       */
-/* ---------------------------------------------------------------- */
 int test_wait_specific(void) {
     pid_t p1 = fork();
     ASSERT_GE(p1, 0);
@@ -271,9 +237,6 @@ int test_wait_specific(void) {
 }
 REGISTER_TEST(wait_specific, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.11  wait — ECHILD (no children)                               */
-/* ---------------------------------------------------------------- */
 int test_wait_echild(void) {
     int status;
     ASSERT_EQ(-1, waitpid(-1, &status, 0));
@@ -282,9 +245,6 @@ int test_wait_echild(void) {
 }
 REGISTER_TEST(wait_echild, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.12  getpid / getppid / gettid                                 */
-/* ---------------------------------------------------------------- */
 int test_getpid_getppid(void) {
     pid_t pid = getpid();
     ASSERT_GT(pid, 0);
@@ -301,9 +261,6 @@ int test_getpid_getppid(void) {
 }
 REGISTER_TEST(getpid_getppid, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.13  getuid / geteuid / getgid / getegid                       */
-/* ---------------------------------------------------------------- */
 int test_getuid_getgid(void) {
     uid_t uid = getuid();
     uid_t euid = geteuid();
@@ -319,9 +276,6 @@ int test_getuid_getgid(void) {
 }
 REGISTER_TEST(getuid_getgid, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.14  setuid / setgid                                           */
-/* ---------------------------------------------------------------- */
 int test_setuid_setgid(void) {
     /* As root, we can change uid/gid */
     ASSERT_EQ(0, setgid(0));
@@ -333,9 +287,6 @@ int test_setuid_setgid(void) {
 }
 REGISTER_TEST(setuid_setgid, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.15  setreuid / setregid                                       */
-/* ---------------------------------------------------------------- */
 int test_setreuid_setregid(void) {
     ASSERT_EQ(0, setreuid(0, 0));
     ASSERT_EQ(0, setregid(0, 0));
@@ -345,9 +296,6 @@ int test_setreuid_setregid(void) {
 }
 REGISTER_TEST(setreuid_setregid, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.16  setresuid / setresgid / getresuid / getresgid              */
-/* ---------------------------------------------------------------- */
 int test_setresuid_setresgid(void) {
     uid_t ruid, euid, suid;
     ASSERT_EQ(0, setresuid(0, 0, 0));
@@ -366,9 +314,6 @@ int test_setresuid_setresgid(void) {
 }
 REGISTER_TEST(setresuid_setresgid, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.17  setpgid / getpgid / getpgrp                               */
-/* ---------------------------------------------------------------- */
 int test_setpgid_getpgid(void) {
     pid_t pid = getpid();
     pid_t pgrp = getpgrp();
@@ -387,9 +332,6 @@ int test_setpgid_getpgid(void) {
 }
 REGISTER_TEST(setpgid_getpgid, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.18  setsid / getsid                                           */
-/* ---------------------------------------------------------------- */
 int test_setsid_getsid(void) {
     pid_t sid = getsid(0);
     ASSERT_GT(sid, 0);
@@ -413,9 +355,6 @@ int test_setsid_getsid(void) {
 }
 REGISTER_TEST(setsid_getsid, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.19  getgroups / setgroups                                     */
-/* ---------------------------------------------------------------- */
 int test_getgroups_setgroups(void) {
     gid_t list[16];
     int n = getgroups(16, list);
@@ -432,9 +371,6 @@ int test_getgroups_setgroups(void) {
 }
 REGISTER_TEST(getgroups_setgroups, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.20  setfsuid / setfsgid                                       */
-/* ---------------------------------------------------------------- */
 int test_setfsuid_setfsgid(void) {
     /* setfsuid/setfsgid via syscall (musl may not provide wrappers) */
     ASSERT_EQ(0, syscall(SYS_setfsuid, 0));
@@ -445,9 +381,6 @@ int test_setfsuid_setfsgid(void) {
 }
 REGISTER_TEST(setfsuid_setfsgid, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.21  sched_yield                                               */
-/* ---------------------------------------------------------------- */
 int test_sched_yield(void) {
     /* sched_yield should always succeed */
     ASSERT_EQ(0, sched_yield());
@@ -455,9 +388,6 @@ int test_sched_yield(void) {
 }
 REGISTER_TEST(sched_yield, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.22  prctl                                                     */
-/* ---------------------------------------------------------------- */
 int test_prctl(void) {
     char name[17] = {};
     int ret = prctl(PR_GET_NAME, name);
@@ -474,9 +404,6 @@ int test_prctl(void) {
 }
 REGISTER_TEST(prctl, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.23  arch_prctl                                                */
-/* ---------------------------------------------------------------- */
 int test_arch_prctl(void) {
     /* ARCH_GET_FS via syscall — should succeed (TLS is set by libc) */
     unsigned long fs_base;
@@ -488,9 +415,6 @@ int test_arch_prctl(void) {
 }
 REGISTER_TEST(arch_prctl, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.24  uname                                                     */
-/* ---------------------------------------------------------------- */
 int test_uname(void) {
     struct utsname buf;
     ASSERT_EQ(0, uname(&buf));
@@ -502,9 +426,6 @@ int test_uname(void) {
 }
 REGISTER_TEST(uname, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.25  sysinfo                                                   */
-/* ---------------------------------------------------------------- */
 int test_sysinfo(void) {
     struct sysinfo info;
     ASSERT_EQ(0, sysinfo(&info));
@@ -516,9 +437,6 @@ int test_sysinfo(void) {
 }
 REGISTER_TEST(sysinfo, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.26  brk — heap growth                                         */
-/* ---------------------------------------------------------------- */
 int test_brk(void) {
     /* Get current break via brk(0) */
     void *cur = (void *) syscall(SYS_brk, 0);
@@ -543,9 +461,6 @@ int test_brk(void) {
 }
 REGISTER_TEST(brk, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.27  mmap / munmap                                             */
-/* ---------------------------------------------------------------- */
 int test_mmap_munmap(void) {
     size_t sz = 4096;
     void *p = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -571,9 +486,6 @@ int test_mmap_munmap(void) {
 }
 REGISTER_TEST(mmap_munmap, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.28  mprotect                                                  */
-/* ---------------------------------------------------------------- */
 int test_mprotect(void) {
     size_t sz = 4096;
     void *p = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -596,9 +508,6 @@ int test_mprotect(void) {
 }
 REGISTER_TEST(mprotect, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.29  mremap                                                    */
-/* ---------------------------------------------------------------- */
 int test_mremap(void) {
     size_t old_sz = 4096, new_sz = 8192;
     void *p = mmap(NULL, old_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -622,9 +531,6 @@ int test_mremap(void) {
 }
 REGISTER_TEST(mremap, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.30  msync / mincore                                           */
-/* ---------------------------------------------------------------- */
 int test_msync_mincore(void) {
     size_t sz = 4096;
     void *p = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -646,9 +552,6 @@ int test_msync_mincore(void) {
 }
 REGISTER_TEST(msync_mincore, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.31  madvise                                                   */
-/* ---------------------------------------------------------------- */
 int test_madvise(void) {
     size_t sz = 4096;
     void *p = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -665,9 +568,6 @@ int test_madvise(void) {
 }
 REGISTER_TEST(madvise, "Phase 3: Process & Scheduling");
 
-/* ---------------------------------------------------------------- */
-/*  3.32  iopl / ioperm                                            */
-/* ---------------------------------------------------------------- */
 int test_iopl_ioperm(void) {
     long ret;
 

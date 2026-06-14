@@ -1,18 +1,10 @@
 #include "test_harness.h"
 
-/* ------------------------------------------------------------------ */
-/*  Global counters                                                    */
-/* ------------------------------------------------------------------ */
-
 static int total = 0;
 static int passed = 0;
 static int failed = 0;
 
 char tmpdir[256];
-
-/* ------------------------------------------------------------------ */
-/*  Failure pipe & log (child→parent)                                 */
-/* ------------------------------------------------------------------ */
 
 int failure_pipe[2] = { -1, -1 };
 
@@ -24,19 +16,8 @@ static struct {
 } failures[MAX_FAILURES];
 static int nfailures = 0;
 
-/* Timeout guard: parent kills child if it hangs (no alarm/timer needed) */
-#define TEST_TIMEOUT 10
-
-/* ------------------------------------------------------------------ */
-/*  Test registry (populated by constructor REGISTER_TEST calls)      */
-/* ------------------------------------------------------------------ */
-
 test_entry_t test_registry[MAX_TESTS];
 int test_count = 0;
-
-/* ------------------------------------------------------------------ */
-/*  Phase tracking                                                     */
-/* ------------------------------------------------------------------ */
 
 static const char *cur_phase = NULL;
 static int ph_total = 0;
@@ -54,10 +35,6 @@ static void phase_begin(const char *phase) {
     ph_total = ph_passed = ph_failed = 0;
     fprintf(stderr, "\n" ANSI_CYAN "[%s]" ANSI_RESET "\n", phase);
 }
-
-/* ------------------------------------------------------------------ */
-/*  Sandboxed test runner (fork + alarm per test)                      */
-/* ------------------------------------------------------------------ */
 
 static int run_sandbox(const char *test_name, int (*test_fn)(void)) {
     int p[2];
@@ -99,19 +76,18 @@ static int run_sandbox(const char *test_name, int (*test_fn)(void)) {
     close(p[1]);
     failure_pipe[1] = -1;
 
-    /* Poll-based timeout (no dependency on alarm/timers) */
-    time_t deadline = time(NULL) + TEST_TIMEOUT;
+    /* Poll-based timeout (no syscall dependency — pure iteration count) */
     int status = 0;
-    while (1) {
+    for (int iter = 0; iter < 20000000; iter++) {
         pid_t ret = waitpid(pid, &status, WNOHANG);
         if (ret == pid) break;
         if (ret < 0) break;
-        if (time(NULL) >= deadline) {
-            kill(pid, SIGKILL);
-            waitpid(pid, &status, 0);
-            break;
-        }
         sched_yield();
+    }
+    /* If the loop exhausted without the child exiting, kill it */
+    if (!WIFEXITED(status) && !WIFSIGNALED(status)) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
     }
 
     char buf[256];
@@ -137,10 +113,6 @@ static int run_sandbox(const char *test_name, int (*test_fn)(void)) {
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     return TEST_FAIL;
 }
-
-/* ================================================================== */
-/*  Existing tests (inherited from original testrunner)                */
-/* ================================================================== */
 
 int test_pipe_dup2_exec(void) {
     int p[2];
@@ -317,10 +289,6 @@ int test_basic_syscalls(void) {
 }
 REGISTER_TEST(basic_syscalls, "Infrastructure");
 
-/* ================================================================== */
-/*  Main                                                               */
-/* ================================================================== */
-
 int main(void) {
     int fd = open("/dev/tty", O_RDWR);
     if (fd >= 0) {
@@ -329,10 +297,6 @@ int main(void) {
         dup2(fd, STDERR_FILENO);
         if (fd > STDERR_FILENO) close(fd);
     }
-
-    signal(SIGCHLD, SIG_IGN);
-    signal(SIGINT, SIG_IGN);
-    signal(SIGALRM, SIG_IGN);
 
     setenv("PATH", "/bin", 1);
     setenv("HOME", "/root", 1);
@@ -383,7 +347,5 @@ int main(void) {
     }
 
     fflush(stderr);
-    __asm__ volatile("mov $169, %%rax; xor %%rdi, %%rdi; syscall" ::: "rax", "rdi");
-
-    for (;;) pause();
+    reboot(LINUX_REBOOT_CMD_RESTART);
 }

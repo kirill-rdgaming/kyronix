@@ -1,13 +1,5 @@
 #include "test_harness.h"
 
-/* ================================================================== */
-/*  Phase 6 — Timers & Time                                           */
-/* ================================================================== */
-
-/* ---------------------------------------------------------------- */
-/*  6.1  time                                                       */
-/* ---------------------------------------------------------------- */
-
 int test_time(void) {
     time_t t1 = time(NULL);
     ASSERT_GT(t1, 0);
@@ -18,10 +10,6 @@ int test_time(void) {
     return 1;
 }
 REGISTER_TEST(time, "Phase 6: Timers & Time");
-
-/* ---------------------------------------------------------------- */
-/*  6.2  gettimeofday                                                */
-/* ---------------------------------------------------------------- */
 
 int test_gettimeofday(void) {
     struct timeval tv;
@@ -34,10 +22,6 @@ int test_gettimeofday(void) {
     return 1;
 }
 REGISTER_TEST(gettimeofday, "Phase 6: Timers & Time");
-
-/* ---------------------------------------------------------------- */
-/*  6.3  clock_gettime                                               */
-/* ---------------------------------------------------------------- */
 
 int test_clock_gettime(void) {
     struct timespec ts;
@@ -60,10 +44,6 @@ int test_clock_gettime(void) {
 }
 REGISTER_TEST(clock_gettime, "Phase 6: Timers & Time");
 
-/* ---------------------------------------------------------------- */
-/*  6.4  clock_getres                                                */
-/* ---------------------------------------------------------------- */
-
 int test_clock_getres(void) {
     struct timespec ts;
 
@@ -79,39 +59,8 @@ int test_clock_getres(void) {
 }
 REGISTER_TEST(clock_getres, "Phase 6: Timers & Time");
 
-/* ---------------------------------------------------------------- */
-/*  6.5  clock_nanosleep                                             */
-/* ---------------------------------------------------------------- */
-
-int test_clock_nanosleep(void) {
-    SKIP("");
-
-    struct timespec req, rem;
-
-    /* sleep for 10ms */
-    req.tv_sec = 0;
-    req.tv_nsec = 10000000;
-    int ret = clock_nanosleep(CLOCK_MONOTONIC, 0, &req, &rem);
-    /* nanosleep may be a stub — accept ENOSYS */
-    if (ret == ENOSYS) return 1;
-    ASSERT_EQ(0, ret);
-
-    /* TIMER_ABSTIME */
-    struct timespec abs;
-    clock_gettime(CLOCK_MONOTONIC, &abs);
-    abs.tv_sec += 1;
-    ret = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &abs, NULL);
-    if (ret == ENOSYS) return 1;
-    if (ret == EINVAL) return 1; /* TIMER_ABSTIME may not be supported */
-    ASSERT_EQ(0, ret);
-
-    return 1;
-}
+int test_clock_nanosleep(void) { return TEST_FAIL; }
 REGISTER_TEST(clock_nanosleep, "Phase 6: Timers & Time");
-
-/* ---------------------------------------------------------------- */
-/*  6.6  nanosleep                                                   */
-/* ---------------------------------------------------------------- */
 
 int test_nanosleep(void) {
     struct timespec req, rem;
@@ -124,10 +73,6 @@ int test_nanosleep(void) {
     return 1;
 }
 REGISTER_TEST(nanosleep, "Phase 6: Timers & Time");
-
-/* ---------------------------------------------------------------- */
-/*  6.7  getitimer / setitimer                                      */
-/* ---------------------------------------------------------------- */
 
 int test_getitimer_setitimer(void) {
     struct itimerval old, curr;
@@ -163,10 +108,6 @@ int test_getitimer_setitimer(void) {
 }
 REGISTER_TEST(getitimer_setitimer, "Phase 6: Timers & Time");
 
-/* ---------------------------------------------------------------- */
-/*  6.8  alarm — set, cancel, multiple (last wins)                  */
-/* ---------------------------------------------------------------- */
-
 int test_alarm_basic(void) {
     unsigned prev;
 
@@ -190,10 +131,6 @@ int test_alarm_basic(void) {
     return 1;
 }
 REGISTER_TEST(alarm_basic, "Phase 6: Timers & Time");
-
-/* ---------------------------------------------------------------- */
-/*  6.9  POSIX timers — stubs, just test return codes               */
-/* ---------------------------------------------------------------- */
 
 int test_posix_timers(void) {
     timer_t timerid;
@@ -229,10 +166,6 @@ int test_posix_timers(void) {
     return 1;
 }
 REGISTER_TEST(posix_timers, "Phase 6: Timers & Time");
-
-/* ---------------------------------------------------------------- */
-/*  6.10  times — process/children time                              */
-/* ---------------------------------------------------------------- */
 
 int test_times(void) {
     struct tms buf;

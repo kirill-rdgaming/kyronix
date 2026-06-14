@@ -1,13 +1,5 @@
 #include "test_harness.h"
 
-/* ================================================================== */
-/*  Phase 4 — Signal Handling                                         */
-/* ================================================================== */
-
-/* ---------------------------------------------------------------- */
-/*  4.1  rt_sigaction — set handler, SIG_IGN, SIG_DFL, SA_RESTART  */
-/* ---------------------------------------------------------------- */
-
 static volatile sig_atomic_t sig_usr1_caught = 0;
 
 static void handler_usr1(int sig) {
@@ -39,10 +31,6 @@ int test_sigaction_basic(void) {
     return 1;
 }
 REGISTER_TEST(sigaction_basic, "Phase 4: Signal Handling");
-
-/* ---------------------------------------------------------------- */
-/*  4.1b  SA_RESTART — syscall interrupted by signal is restarted   */
-/* ---------------------------------------------------------------- */
 
 int test_sigaction_sa_restart(void) {
     struct sigaction sa;
@@ -99,10 +87,6 @@ int test_sigaction_sa_restart(void) {
 }
 REGISTER_TEST(sigaction_sa_restart, "Phase 4: Signal Handling");
 
-/* ---------------------------------------------------------------- */
-/*  4.2  rt_sigprocmask — block, unblock, pending                  */
-/* ---------------------------------------------------------------- */
-
 int test_sigprocmask(void) {
     sigset_t newmask, oldmask, pending;
 
@@ -129,10 +113,6 @@ int test_sigprocmask(void) {
 }
 REGISTER_TEST(sigprocmask, "Phase 4: Signal Handling");
 
-/* ---------------------------------------------------------------- */
-/*  4.3  rt_sigpending                                              */
-/* ---------------------------------------------------------------- */
-
 int test_sigpending(void) {
     sigset_t mask, pending;
 
@@ -149,10 +129,6 @@ int test_sigpending(void) {
     return 1;
 }
 REGISTER_TEST(sigpending, "Phase 4: Signal Handling");
-
-/* ---------------------------------------------------------------- */
-/*  4.4  rt_sigsuspend — atomically set mask and wait for signal    */
-/* ---------------------------------------------------------------- */
 
 int test_sigsuspend(void) {
     sigset_t mask;
@@ -178,10 +154,6 @@ int test_sigsuspend(void) {
     return 1;
 }
 REGISTER_TEST(sigsuspend, "Phase 4: Signal Handling");
-
-/* ---------------------------------------------------------------- */
-/*  4.5  rt_sigtimedwait — wait for signal with timeout             */
-/* ---------------------------------------------------------------- */
 
 int test_sigtimedwait(void) {
     sigset_t set;
@@ -212,10 +184,6 @@ int test_sigtimedwait(void) {
 }
 REGISTER_TEST(sigtimedwait, "Phase 4: Signal Handling");
 
-/* ---------------------------------------------------------------- */
-/*  4.6  rt_sigreturn — via normal handler return (handled by libc) */
-/* ---------------------------------------------------------------- */
-
 int test_sigreturn(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -231,10 +199,6 @@ int test_sigreturn(void) {
     return 1;
 }
 REGISTER_TEST(sigreturn, "Phase 4: Signal Handling");
-
-/* ---------------------------------------------------------------- */
-/*  4.7  sigaltstack — alternate signal stack                        */
-/* ---------------------------------------------------------------- */
 
 static volatile sig_atomic_t alt_stack_used = 0;
 static void handler_altstack(int sig) {
@@ -273,10 +237,6 @@ int test_sigaltstack(void) {
 }
 REGISTER_TEST(sigaltstack, "Phase 4: Signal Handling");
 
-/* ---------------------------------------------------------------- */
-/*  4.8  tkill / tgkill — send signal to specific thread/task       */
-/* ---------------------------------------------------------------- */
-
 int test_tkill_tgkill(void) {
     pid_t tid = gettid();
     struct sigaction sa;
@@ -301,10 +261,6 @@ int test_tkill_tgkill(void) {
 }
 REGISTER_TEST(tkill_tgkill, "Phase 4: Signal Handling");
 
-/* ---------------------------------------------------------------- */
-/*  4.9  kill — signal another process, signal self, signal 0       */
-/* ---------------------------------------------------------------- */
-
 int test_kill_basic(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -327,10 +283,6 @@ int test_kill_basic(void) {
     return 1;
 }
 REGISTER_TEST(kill_basic, "Phase 4: Signal Handling");
-
-/* ---------------------------------------------------------------- */
-/*  4.10  pause — interrupted by signal                             */
-/* ---------------------------------------------------------------- */
 
 int test_pause(void) {
     struct sigaction sa;
@@ -359,10 +311,6 @@ int test_pause(void) {
 }
 REGISTER_TEST(pause, "Phase 4: Signal Handling");
 
-/* ---------------------------------------------------------------- */
-/*  4.11  alarm — set alarm, SIGALRM delivery                       */
-/* ---------------------------------------------------------------- */
-
 static volatile sig_atomic_t sigalrm_caught = 0;
 
 static void handler_alarm(int sig) {
@@ -388,10 +336,6 @@ int test_alarm(void) {
     return 1;
 }
 REGISTER_TEST(alarm, "Phase 4: Signal Handling");
-
-/* ---------------------------------------------------------------- */
-/*  4.12  Signal-on-child — waitpid interrupted by signal           */
-/* ---------------------------------------------------------------- */
 
 int test_waitpid_interrupted(void) {
     struct sigaction sa;
@@ -440,10 +384,6 @@ int test_waitpid_interrupted(void) {
 }
 REGISTER_TEST(waitpid_interrupted, "Phase 4: Signal Handling");
 
-/* ---------------------------------------------------------------- */
-/*  4.13  Signal safety in fork — signal mask inheritance           */
-/* ---------------------------------------------------------------- */
-
 int test_fork_sigmask(void) {
     sigset_t mask, child_mask;
     sigemptyset(&mask);
@@ -479,10 +419,6 @@ int test_fork_sigmask(void) {
     return 1;
 }
 REGISTER_TEST(fork_sigmask, "Phase 4: Signal Handling");
-
-/* ---------------------------------------------------------------- */
-/*  4.14  SIGCHLD handling: default, ignored, caught               */
-/* ---------------------------------------------------------------- */
 
 static volatile sig_atomic_t sigchld_caught = 0;
 

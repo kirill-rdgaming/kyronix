@@ -8,18 +8,20 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <poll.h>
 #include <sched.h>
 #include <signal.h>
-#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
+#include <sys/reboot.h>
 #include <sys/resource.h>
 #include <sys/sendfile.h>
 #include <sys/shm.h>
@@ -42,16 +44,17 @@
 #include <utime.h>
 
 /* asm/prctl.h for ARCH_GET_FS etc. — may live under asm/ or linux/ */
+/* reboot() command constant (musl may not define it) */
+#ifndef LINUX_REBOOT_CMD_RESTART
+#define LINUX_REBOOT_CMD_RESTART 0x01234567
+#endif
+
 #ifndef ARCH_GET_FS
 #define ARCH_GET_FS 0x1003
 #endif
 #ifndef ARCH_SET_FS
 #define ARCH_SET_FS 0x1002
 #endif
-
-/* ------------------------------------------------------------------ */
-/*  Futex opcodes (if not provided by libc)                            */
-/* ------------------------------------------------------------------ */
 
 #ifndef FUTEX_WAIT
 #define FUTEX_WAIT 0
@@ -66,33 +69,15 @@
 #define FUTEX_CMP_REQUEUE 4
 #endif
 
-/* ------------------------------------------------------------------ */
-/*  ANSI color helpers                                                 */
-/* ------------------------------------------------------------------ */
-
 #define ANSI_GREEN "\033[32m"
 #define ANSI_RED "\033[31m"
-#define ANSI_YELLOW "\033[33m"
 #define ANSI_CYAN "\033[36m"
 #define ANSI_RESET "\033[0m"
 
-/* ------------------------------------------------------------------ */
-/*  Test result codes                                                  */
-/* ------------------------------------------------------------------ */
-
 #define TEST_PASS 1
 #define TEST_FAIL 0
-#define TEST_SKIP 0 /* treated as FAIL */
-
-/* ------------------------------------------------------------------ */
-/*  Failure pipe (child→parent, for summary)                         */
-/* ------------------------------------------------------------------ */
 
 extern int failure_pipe[2];
-
-/* ------------------------------------------------------------------ */
-/*  Assertion helpers (with diagnostics on failure)                   */
-/* ------------------------------------------------------------------ */
 
 #define ASSERT(cond)                                                                               \
     do {                                                                                           \
@@ -118,20 +103,6 @@ extern int failure_pipe[2];
 #define ASSERT_TRUE(c) ASSERT((c) != 0)
 #define ASSERT_FALSE(c) ASSERT((c) == 0)
 #define ASSERT_ERRNO(e) ASSERT(errno == (e))
-
-/* ------------------------------------------------------------------ */
-/*  SKIP helper                                                        */
-/* ------------------------------------------------------------------ */
-
-#define SKIP(reason)                                                                               \
-    do {                                                                                           \
-        fprintf(stderr, ANSI_YELLOW "SKIP" ANSI_RESET " (%s)\n", reason);                          \
-        return TEST_SKIP;                                                                          \
-    } while (0)
-
-/* ------------------------------------------------------------------ */
-/*  Temp directory / file helpers                                      */
-/* ------------------------------------------------------------------ */
 
 extern char tmpdir[256];
 
@@ -179,10 +150,6 @@ static inline ssize_t read_file(const char *path, char *buf, size_t bufsz) {
     if (n >= 0) buf[n] = '\0';
     return n;
 }
-
-/* ------------------------------------------------------------------ */
-/*  Process helpers                                                    */
-/* ------------------------------------------------------------------ */
 
 static inline int run_cmd(char *const argv[]) {
     pid_t pid = fork();
@@ -245,10 +212,6 @@ static inline int wait_for(pid_t pid) {
     return -1;
 }
 
-/* ------------------------------------------------------------------ */
-/*  mkdir -p helper                                                    */
-/* ------------------------------------------------------------------ */
-
 static inline int mkdir_p(const char *path) {
     char tmp[PATH_MAX];
     size_t len = strlen(path);
@@ -264,10 +227,6 @@ static inline int mkdir_p(const char *path) {
     if (mkdir(tmp, 0777) < 0 && errno != EEXIST) return -1;
     return 0;
 }
-
-/* ------------------------------------------------------------------ */
-/*  Test auto-registration via constructor                            */
-/* ------------------------------------------------------------------ */
 
 typedef struct {
     const char *name;

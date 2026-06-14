@@ -1,12 +1,5 @@
 #include "test_harness.h"
 
-/* ================================================================== */
-/*  Phase 2 — File System Syscalls                                    */
-/* ================================================================== */
-
-/* ---------------------------------------------------------------- */
-/*  2.1  open / close                                               */
-/* ---------------------------------------------------------------- */
 int test_open_close(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "open_close_test");
@@ -39,9 +32,6 @@ int test_open_close(void) {
 }
 REGISTER_TEST(open_close, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.2  read / write                                               */
-/* ---------------------------------------------------------------- */
 int test_read_write(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "rw_test");
@@ -84,9 +74,6 @@ int test_read_write(void) {
 }
 REGISTER_TEST(read_write, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.3  lseek                                                      */
-/* ---------------------------------------------------------------- */
 int test_lseek(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "lseek_test");
@@ -127,9 +114,6 @@ int test_lseek(void) {
 }
 REGISTER_TEST(lseek, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.4  stat / fstat / lstat                                       */
-/* ---------------------------------------------------------------- */
 int test_stat_fstat_lstat(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "stat_test");
@@ -166,9 +150,6 @@ int test_stat_fstat_lstat(void) {
 }
 REGISTER_TEST(stat_fstat_lstat, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.5  access                                                     */
-/* ---------------------------------------------------------------- */
 int test_access(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "access_test");
@@ -196,9 +177,6 @@ int test_access(void) {
 }
 REGISTER_TEST(access, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.6  creat                                                      */
-/* ---------------------------------------------------------------- */
 int test_creat(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "creat_test");
@@ -226,9 +204,6 @@ int test_creat(void) {
 }
 REGISTER_TEST(creat, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.7  truncate / ftruncate                                       */
-/* ---------------------------------------------------------------- */
 int test_truncate(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "trunc_test");
@@ -253,9 +228,6 @@ int test_truncate(void) {
 }
 REGISTER_TEST(truncate, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.8  link / unlink                                              */
-/* ---------------------------------------------------------------- */
 int test_link_unlink(void) {
     char src[PATH_MAX], dst[PATH_MAX], dir[PATH_MAX];
     tmpfile_path(src, sizeof(src), "link_src");
@@ -291,9 +263,6 @@ int test_link_unlink(void) {
 }
 REGISTER_TEST(link_unlink, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.9  symlink / readlink                                         */
-/* ---------------------------------------------------------------- */
 int test_symlink_readlink(void) {
     char target[PATH_MAX], linkpath[PATH_MAX];
     tmpfile_path(target, sizeof(target), "sym_target");
@@ -327,9 +296,6 @@ int test_symlink_readlink(void) {
 }
 REGISTER_TEST(symlink_readlink, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.10  rename                                                    */
-/* ---------------------------------------------------------------- */
 int test_rename(void) {
     char src[PATH_MAX], dst[PATH_MAX], sub[PATH_MAX];
     tmpfile_path(src, sizeof(src), "rename_src");
@@ -362,9 +328,6 @@ int test_rename(void) {
 }
 REGISTER_TEST(rename, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.11  chdir / fchdir / getcwd                                   */
-/* ---------------------------------------------------------------- */
 int test_chdir_getcwd(void) {
     char tmp_sub[PATH_MAX], cwd[PATH_MAX];
 
@@ -404,9 +367,6 @@ int test_chdir_getcwd(void) {
 }
 REGISTER_TEST(chdir_getcwd, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.12  mkdir / rmdir                                             */
-/* ---------------------------------------------------------------- */
 int test_mkdir_rmdir(void) {
     char dir[PATH_MAX], subdir[PATH_MAX];
     tmpfile_path(dir, sizeof(dir), "mkdir_test");
@@ -441,9 +401,6 @@ int test_mkdir_rmdir(void) {
 }
 REGISTER_TEST(mkdir_rmdir, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.13  getdents (via ls or opendir/readdir)                      */
-/* ---------------------------------------------------------------- */
 int test_getdents(void) {
     /* Use libc opendir/readdir which calls getdents64 under the hood */
     DIR *d = opendir("/");
@@ -462,9 +419,6 @@ int test_getdents(void) {
 }
 REGISTER_TEST(getdents, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.14  chmod / fchmod                                            */
-/* ---------------------------------------------------------------- */
 int test_chmod_fchmod(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "chmod_test");
@@ -490,9 +444,6 @@ int test_chmod_fchmod(void) {
 }
 REGISTER_TEST(chmod_fchmod, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.15  chown / fchown / lchown                                   */
-/* ---------------------------------------------------------------- */
 int test_chown_fchown(void) {
     char path[PATH_MAX], linkpath[PATH_MAX];
     tmpfile_path(path, sizeof(path), "chown_test");
@@ -517,9 +468,6 @@ int test_chown_fchown(void) {
 }
 REGISTER_TEST(chown_fchown, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.16  umask                                                     */
-/* ---------------------------------------------------------------- */
 int test_umask(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "umask_test");
@@ -540,9 +488,6 @@ int test_umask(void) {
 }
 REGISTER_TEST(umask, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.17  fcntl                                                     */
-/* ---------------------------------------------------------------- */
 int test_fcntl(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "fcntl_test");
@@ -576,9 +521,6 @@ int test_fcntl(void) {
 }
 REGISTER_TEST(fcntl, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.18  mknod                                                     */
-/* ---------------------------------------------------------------- */
 int test_mknod(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "mknod_test");
@@ -596,9 +538,6 @@ int test_mknod(void) {
 }
 REGISTER_TEST(mknod, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.19  statfs / fstatfs                                          */
-/* ---------------------------------------------------------------- */
 int test_statfs(void) {
     struct statvfs buf;
     int ret = statvfs("/", &buf);
@@ -620,9 +559,6 @@ int test_statfs(void) {
 }
 REGISTER_TEST(statfs, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.20  openat / fstatat (via AT_FDCWD)                          */
-/* ---------------------------------------------------------------- */
 int test_openat_mkdirat(void) {
     char path[PATH_MAX];
 
@@ -642,9 +578,6 @@ int test_openat_mkdirat(void) {
 }
 REGISTER_TEST(openat_mkdirat, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.21  fstatat / unlinkat (via AT_FDCWD)                        */
-/* ---------------------------------------------------------------- */
 int test_fstatat_unlinkat(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "fstatat_file");
@@ -668,9 +601,6 @@ int test_fstatat_unlinkat(void) {
 }
 REGISTER_TEST(fstatat_unlinkat, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.22  renameat / linkat (via AT_FDCWD)                         */
-/* ---------------------------------------------------------------- */
 int test_renameat_linkat(void) {
     char src[PATH_MAX], dst[PATH_MAX];
     tmpfile_path(src, sizeof(src), "ren_src");
@@ -696,9 +626,6 @@ int test_renameat_linkat(void) {
 }
 REGISTER_TEST(renameat_linkat, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.23  symlinkat / readlinkat (via AT_FDCWD)                    */
-/* ---------------------------------------------------------------- */
 int test_symlinkat_readlinkat(void) {
     char target[PATH_MAX], link[PATH_MAX];
     tmpfile_path(target, sizeof(target), "sla_target");
@@ -731,9 +658,6 @@ int test_symlinkat_readlinkat(void) {
 }
 REGISTER_TEST(symlinkat_readlinkat, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.24  fchmodat / faccessat (via AT_FDCWD)                      */
-/* ---------------------------------------------------------------- */
 int test_fchmodat_faccessat(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "fchmodat_file");
@@ -758,9 +682,6 @@ int test_fchmodat_faccessat(void) {
 }
 REGISTER_TEST(fchmodat_faccessat, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.25  pread / pwrite                                            */
-/* ---------------------------------------------------------------- */
 int test_pread_pwrite(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "pread_test");
@@ -796,9 +717,6 @@ int test_pread_pwrite(void) {
 }
 REGISTER_TEST(pread_pwrite, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.26  readv / writev                                            */
-/* ---------------------------------------------------------------- */
 int test_readv_writev(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "rv_test");
@@ -831,9 +749,6 @@ int test_readv_writev(void) {
 }
 REGISTER_TEST(readv_writev, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.27  copy_file_range                                           */
-/* ---------------------------------------------------------------- */
 int test_copy_file_range(void) {
     char src[PATH_MAX], dst[PATH_MAX];
     tmpfile_path(src, sizeof(src), "cfr_src");
@@ -863,9 +778,6 @@ cfr_done:
 }
 REGISTER_TEST(copy_file_range, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.28  memfd_create                                              */
-/* ---------------------------------------------------------------- */
 int test_memfd_create(void) {
     int fd = memfd_create("test_mem", 0);
     if (fd < 0 && errno == ENOSYS) return 1;
@@ -885,9 +797,6 @@ int test_memfd_create(void) {
 }
 REGISTER_TEST(memfd_create, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.29  sendfile                                                  */
-/* ---------------------------------------------------------------- */
 int test_sendfile(void) {
     char src[PATH_MAX], dst[PATH_MAX];
     tmpfile_path(src, sizeof(src), "sf_src");
@@ -919,9 +828,6 @@ sf_done:
 }
 REGISTER_TEST(sendfile, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.30  flock                                                     */
-/* ---------------------------------------------------------------- */
 int test_flock(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "flock_test");
@@ -948,9 +854,6 @@ int test_flock(void) {
 }
 REGISTER_TEST(flock, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.31  fsync / fdatasync                                         */
-/* ---------------------------------------------------------------- */
 int test_fsync_fdatasync(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "fsync_test");
@@ -971,9 +874,6 @@ int test_fsync_fdatasync(void) {
 }
 REGISTER_TEST(fsync_fdatasync, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.32  fallocate                                                 */
-/* ---------------------------------------------------------------- */
 int test_fallocate(void) {
     /* ramfs: fallocate is a no-op, should succeed */
     char path[PATH_MAX];
@@ -990,9 +890,6 @@ int test_fallocate(void) {
 }
 REGISTER_TEST(fallocate, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.33  utime / utimensat                                         */
-/* ---------------------------------------------------------------- */
 int test_utime_utimensat(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "utime_test");
@@ -1022,9 +919,6 @@ int test_utime_utimensat(void) {
 }
 REGISTER_TEST(utime_utimensat, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.34  statx                                                     */
-/* ---------------------------------------------------------------- */
 int test_statx(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "statx_test");
@@ -1067,9 +961,6 @@ int test_statx(void) {
 }
 REGISTER_TEST(statx, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.35  pipe2                                                     */
-/* ---------------------------------------------------------------- */
 int test_pipe2(void) {
     int p[2];
 
@@ -1103,9 +994,6 @@ int test_pipe2(void) {
 }
 REGISTER_TEST(pipe2, "Phase 2: File System");
 
-/* ---------------------------------------------------------------- */
-/*  2.36  sendfile with NULL offset                                 */
-/* ---------------------------------------------------------------- */
 int test_sendfile_noffset(void) {
     char src[PATH_MAX], dst[PATH_MAX];
     tmpfile_path(src, sizeof(src), "sfn_src");
