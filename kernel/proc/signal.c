@@ -45,6 +45,12 @@ static void setup_sigframe(proc_t* p, int sig, syscall_frame_t* f)
     uint64_t sp = user_rsp - 128 - sizeof(rt_sigframe_t);
     sp = ((sp - 8) & ~(uint64_t) 0xF) + 8;
 
+    /* the frame is written from CPL0, so an unchecked user RSP would let a
+       process steer kernel writes anywhere. Validate before touching it; a bad
+       stack means we cannot deliver, so kill the process like a real kernel. */
+    if (!uptr_ok_w((void*) sp, sizeof(rt_sigframe_t)))
+        proc_do_exit(-SIGSEGV);
+
     rt_sigframe_t* frame = (rt_sigframe_t*) sp;
     memset(frame, 0, sizeof(*frame));
 

@@ -156,9 +156,10 @@ void sched_yield_blocking(void)
     vfs_set_fdtable(next->fds);
     g_current_space = next->space;
     cpu_set_kernel_stack(next->kstack_top);
-    sti();
+    /* Keep the state mutation + switch atomic (IF=0): an IRQ here would run a
+       handler against a half-updated current-proc/space. next restores its own
+       IF when it returns to userspace; the idle path below re-enables for wakeups. */
     sched_switch(next);
-    cli();
 
     p->state = PROC_RUNNING;
     vfs_set_fdtable(p->fds);

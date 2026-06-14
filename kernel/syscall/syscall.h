@@ -2,7 +2,9 @@
 #include "mm/vmm.h"
 #include <stdbool.h>
 #include <stdint.h>
+#ifndef USER_LIMIT
 #define USER_LIMIT 0x800000000000ULL
+#endif
 
 extern vmm_space_t* g_current_space;
 

@@ -77,6 +77,7 @@ struct linux_dirent64
 #define VFS_TYPE_SOCK 5
 
 #define S_IFSOCK 0140000U
+#define S_ISVTX  0001000U /* sticky bit: restrict deletion in a shared dir */
 
 typedef struct vfs_node
 {
@@ -145,6 +146,7 @@ vfs_file_t** vfs_get_fdtable(void);
 void vfs_copy_fdtable(vfs_file_t** dst, vfs_file_t** src);
 void vfs_free_fdtable(vfs_file_t** fds);
 
+const char* vfs_copy_user_path(const char* path, char* kbuf);
 int fd_open(const char* path, int flags, int mode);
 int fd_openat(int dirfd, const char* path, int flags, int mode);
 int fd_close(int fd);

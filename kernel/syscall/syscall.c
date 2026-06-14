@@ -541,21 +541,44 @@ static int64_t sys_clone(uint64_t flags, uint64_t child_stack, uint32_t* ptid,
     return (int64_t) child->pid;
 }
 
-static void path_abs(char* out, const char* in)
+/* Copy a NUL-terminated user string into out[512], page-validating as we go.
+   Returns false on a bad/unmapped user pointer instead of faulting in-kernel. */
+static bool copy_user_path(char* out, const char* in)
 {
-    if (!in || in[0] == '/') {
-        strncpy(out, in ? in : "", 511);
-        out[511] = '\0';
-        return;
+    if (!in) return false;
+    for (size_t i = 0; i < 511; i++) {
+        const char* a = in + i;
+        if (i == 0 || ((uint64_t)(uintptr_t) a & 0xFFF) == 0) {
+            if (!uptr_ok(a, 1)) return false;
+        }
+        char c = *a;
+        out[i] = c;
+        if (!c) return true;
+    }
+    out[511] = '\0';
+    return true;
+}
+
+/* resolve a user path to an absolute one in out[512]. returns false
+                if the user pointer is invalid; on success out is always non-empty */
+static bool path_abs(char* out, const char* in)
+{
+    char tmp[512];
+    if (!copy_user_path(tmp, in))
+        return false;
+    if (tmp[0] == '/') {
+        memcpy(out, tmp, sizeof(tmp));
+        return true;
     }
     proc_t* p = cur();
     const char* cwd = (p && p->cwd[0]) ? p->cwd : "/";
     size_t cl = strlen(cwd);
-    if (cl >= 511) { out[0] = '/'; out[1] = '\0'; return; }
+    if (cl >= 511) { out[0] = '/'; out[1] = '\0'; return true; }
     memcpy(out, cwd, cl);
     if (out[cl - 1] != '/') out[cl++] = '/';
-    strncpy(out + cl, in, 511 - cl);
+    strncpy(out + cl, tmp, 511 - cl);
     out[511] = '\0';
+    return true;
 }
 
 #define MAX_EXEC_ARGS 32
@@ -566,8 +589,9 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
         return -(int64_t) EFAULT;
 
     char abs[512];
-    path_abs(abs, path);
-    const char* exec_path = abs[0] ? abs : path;
+    if (!path_abs(abs, path))
+        return -(int64_t) EFAULT;
+    const char* exec_path = abs;
 
     vfs_node_t* node = vfs_lookup(exec_path);
     if (!node || node->type != VFS_TYPE_REG || !node->data) {
@@ -933,9 +957,8 @@ static int64_t sys_wait4(int pid, int* wstatus, int options, void* rusage)
         vfs_set_fdtable(next->fds);
         g_current_space = next->space;
         cpu_set_kernel_stack(next->kstack_top);
-        sti();
+        /* IF=0 across the switch: keep current-proc/space updates atomic. */
         sched_switch(next);
-        cli();
 
         parent->state = PROC_RUNNING;
         vfs_set_fdtable(parent->fds);
@@ -1013,8 +1036,8 @@ static int64_t sys_chdir(const char* path)
 {
     if (!path) return -(int64_t)EFAULT;
     char abs[512];
-    path_abs(abs, path);
-    const char* rp = abs[0] ? abs : path;
+    if (!path_abs(abs, path)) return -(int64_t)EFAULT;
+    const char* rp = abs;
     vfs_node_t* n = vfs_lookup(rp);
     if (!n) return -(int64_t)ENOENT;
     if (n->type != VFS_TYPE_DIR) { vfs_node_unref_internal(n); return -(int64_t)ENOTDIR; }
@@ -1375,9 +1398,8 @@ static int64_t sys_pause(void)
         vfs_set_fdtable(next->fds);
         g_current_space = next->space;
         cpu_set_kernel_stack(next->kstack_top);
-        sti();
+        /* IF=0 across the switch: keep current-proc/space updates atomic. */
         sched_switch(next);
-        cli();
         p->state = PROC_RUNNING;
         vfs_set_fdtable(p->fds);
         g_current_space = p->space;
@@ -1416,9 +1438,8 @@ static int64_t sys_rt_sigsuspend(const uint64_t* mask, uint64_t sigsetsize)
         vfs_set_fdtable(next->fds);
         g_current_space = next->space;
         cpu_set_kernel_stack(next->kstack_top);
-        sti();
+        /* IF=0 across the switch: keep current-proc/space updates atomic. */
         sched_switch(next);
-        cli();
         p->state = PROC_RUNNING;
         vfs_set_fdtable(p->fds);
         g_current_space = p->space;
@@ -1432,7 +1453,7 @@ static int64_t sys_mkdir(const char* path, uint32_t mode)
 {
     if (!path) return -(int64_t) EINVAL;
     char abs[512];
-    path_abs(abs, path);
+    if (!path_abs(abs, path)) return -(int64_t) EFAULT;
     return (int64_t) vfs_mkdir(abs, mode);
 }
 
@@ -1440,7 +1461,7 @@ static int64_t sys_rmdir(const char* path)
 {
     if (!path) return -(int64_t) EINVAL;
     char abs[512];
-    path_abs(abs, path);
+    if (!path_abs(abs, path)) return -(int64_t) EFAULT;
     return (int64_t) vfs_rmdir(abs);
 }
 
@@ -1448,7 +1469,7 @@ static int64_t sys_unlink(const char* path)
 {
     if (!path) return -(int64_t) EINVAL;
     char abs[512];
-    path_abs(abs, path);
+    if (!path_abs(abs, path)) return -(int64_t) EFAULT;
     return (int64_t) vfs_unlink(abs);
 }
 
@@ -1456,8 +1477,8 @@ static int64_t sys_rename(const char* oldpath, const char* newpath)
 {
     if (!oldpath || !newpath) return -(int64_t) EINVAL;
     char abs_old[512], abs_new[512];
-    path_abs(abs_old, oldpath);
-    path_abs(abs_new, newpath);
+    if (!path_abs(abs_old, oldpath) || !path_abs(abs_new, newpath))
+        return -(int64_t) EFAULT;
     return (int64_t) vfs_rename(abs_old, abs_new);
 }
 
@@ -1671,16 +1692,16 @@ static int64_t sys_truncate(const char* path, uint64_t len)
 {
     if (!path) return -(int64_t) EFAULT;
     char abs[512];
-    path_abs(abs, path);
-    return (int64_t)vfs_truncate(abs[0] ? abs : path, len);
+    if (!path_abs(abs, path)) return -(int64_t) EFAULT;
+    return (int64_t)vfs_truncate(abs, len);
 }
 
 static int64_t sys_symlink(const char* target, const char* linkpath)
 {
     if (!target || !linkpath) return -(int64_t) EFAULT;
     char abs[512];
-    path_abs(abs, linkpath);
-    vfs_node_t* n = vfs_create_symlink(abs[0] ? abs : linkpath, target);
+    if (!path_abs(abs, linkpath)) return -(int64_t) EFAULT;
+    vfs_node_t* n = vfs_create_symlink(abs, target);
     return n ? 0 : -(int64_t) EEXIST;
 }
 
@@ -1723,8 +1744,8 @@ static int64_t sys_access(const char* p, int m)
 {
     if (!p) return -(int64_t)EFAULT;
     char abs[512];
-    path_abs(abs, p);
-    return (int64_t)vfs_access(abs[0] ? abs : p, m);
+    if (!path_abs(abs, p)) return -(int64_t)EFAULT;
+    return (int64_t)vfs_access(abs, m);
 }
 
 #define MREMAP_MAYMOVE 1
@@ -1834,7 +1855,8 @@ static int64_t sys_link(const char* old, const char* lnew)
 {
     if (!old || !lnew) return -(int64_t)EFAULT;
     char abs_old[512], abs_new[512];
-    path_abs(abs_old, old); path_abs(abs_new, lnew);
+    if (!path_abs(abs_old, old) || !path_abs(abs_new, lnew))
+        return -(int64_t)EFAULT;
     return (int64_t)vfs_link(abs_old, abs_new);
 }
 
@@ -2096,15 +2118,15 @@ void syscall_dispatch(syscall_frame_t* f)
     case 89:
         ret = fd_readlink((const char*)a1, (char*)a2, a3);
         break;
-    case 90: { char abs[512]; path_abs(abs, (const char*)a1); ret = (int64_t)vfs_chmod(abs[0] ? abs : (const char*)a1, (uint32_t)a2); break; }
+    case 90: { char abs[512]; if (!path_abs(abs, (const char*)a1)) { ret = -(int64_t)EFAULT; break; } ret = (int64_t)vfs_chmod(abs, (uint32_t)a2); break; }
     case 91:
         ret = (int64_t)vfs_fchmod((int)a1, (uint32_t)a2);
         break;
-    case 92: { char abs[512]; path_abs(abs, (const char*)a1); ret = (int64_t)vfs_chown(abs[0] ? abs : (const char*)a1, (uint32_t)a2, (uint32_t)a3); break; }
+    case 92: { char abs[512]; if (!path_abs(abs, (const char*)a1)) { ret = -(int64_t)EFAULT; break; } ret = (int64_t)vfs_chown(abs, (uint32_t)a2, (uint32_t)a3); break; }
     case 93:
         ret = (int64_t)vfs_fchown((int)a1, (uint32_t)a2, (uint32_t)a3);
         break;
-    case 94: { char abs[512]; path_abs(abs, (const char*)a1); ret = (int64_t)vfs_lchown(abs[0] ? abs : (const char*)a1, (uint32_t)a2, (uint32_t)a3); break; }
+    case 94: { char abs[512]; if (!path_abs(abs, (const char*)a1)) { ret = -(int64_t)EFAULT; break; } ret = (int64_t)vfs_lchown(abs, (uint32_t)a2, (uint32_t)a3); break; }
     case 95:
         ret = sys_umask(a1);
         break;
@@ -2222,7 +2244,7 @@ void syscall_dispatch(syscall_frame_t* f)
     case 131:
         ret = sys_sigaltstack((const void*) a1, (void*) a2);
         break;
-    case 133: { char abs[512]; if (!a1) { ret = -(int64_t)EFAULT; break; } path_abs(abs, (const char*)a1); ret = (int64_t)vfs_mknod(abs[0] ? abs : (const char*)a1, (uint32_t)a2, a3); break; }
+    case 133: { char abs[512]; if (!a1 || !path_abs(abs, (const char*)a1)) { ret = -(int64_t)EFAULT; break; } ret = (int64_t)vfs_mknod(abs, (uint32_t)a2, a3); break; }
     case 135: ret = 0; break; /* personality */
     case 139: ret = -(int64_t)ENOSYS; break; /* sysfs */
     case 140: ret = 0; break; /* getpriority */

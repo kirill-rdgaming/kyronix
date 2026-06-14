@@ -33,6 +33,11 @@ int elf_load_into(vmm_space_t* space, const void* data, uint64_t size,
     out->interp[0] = '\0';
     uint64_t brk = 0, phdr_va = 0;
 
+    /* The phdr array itself is attacker-controlled: bound it against the file. */
+    uint64_t ph_total = (uint64_t) eh->e_phnum * eh->e_phentsize;
+    if (eh->e_phoff > size || ph_total > size - eh->e_phoff)
+        return -1;
+
     for (uint16_t i = 0; i < eh->e_phnum; i++)
     {
         const Elf64_Phdr* ph = (const Elf64_Phdr*)
@@ -40,6 +45,9 @@ int elf_load_into(vmm_space_t* space, const void* data, uint64_t size,
 
         if (ph->p_type == PT_INTERP && ph->p_filesz > 0 && ph->p_filesz < 255)
         {
+            /* p_offset is from the file: validate the source range first. */
+            if (ph->p_offset > size || ph->p_filesz > size - ph->p_offset)
+                return -1;
             memcpy(out->interp, (const uint8_t*) data + ph->p_offset, ph->p_filesz);
             out->interp[ph->p_filesz] = '\0';
             size_t n = strlen(out->interp);
@@ -53,13 +61,19 @@ int elf_load_into(vmm_space_t* space, const void* data, uint64_t size,
         }
 
         if (ph->p_type != PT_LOAD || !ph->p_memsz) continue;
-        if (ph->p_offset + ph->p_filesz > size) return -1;
+        /* Overflow-safe source bounds, and file part must fit the mem part. */
+        if (ph->p_offset > size || ph->p_filesz > size - ph->p_offset) return -1;
+        if (ph->p_filesz > ph->p_memsz) return -1;
 
         uint64_t vflags = VMM_PRESENT | VMM_USER;
         if (ph->p_flags & PF_W) vflags |= VMM_WRITE | VMM_NX;
         if (!(ph->p_flags & PF_X)) vflags |= VMM_NX;
 
         uint64_t vaddr = bias + ph->p_vaddr;
+        /* Reject wrap and any segment that would touch the kernel half. */
+        if (vaddr < bias) return -1;                       /* bias + p_vaddr overflow */
+        if (vaddr + ph->p_memsz < vaddr) return -1;        /* vaddr + memsz overflow */
+        if (vaddr + ph->p_memsz > USER_LIMIT) return -1;   /* maps into kernel half */
         uint64_t page_base = PAGE_ALIGN_DOWN(vaddr);
         uint64_t page_end  = PAGE_ALIGN_UP(vaddr + ph->p_memsz);
 

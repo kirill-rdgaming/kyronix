@@ -48,6 +48,12 @@ void vmm_init(void)
 
 int vmm_map(vmm_space_t* sp, uint64_t virt, uint64_t phys, uint64_t flags)
 {
+    /* a user-accessible mapping must never land in the kernel half (pml4 256+).
+       this is the single chokepoint that neutralizes a crafted elf p_vaddr or a
+       bogus shmat()/mmap() target from aliasing kernel memory with user access. */
+    if ((flags & VMM_USER) && virt >= USER_LIMIT)
+        return -1;
+
     uint64_t* pml4 = (uint64_t*) phys_to_virt(sp->pml4_phys);
 
     uint64_t* pdpt = descend(pml4, PML4_IDX(virt));
@@ -244,7 +250,7 @@ int vmm_fork_user(vmm_space_t* dst, vmm_space_t* src)
 {
     vma_copy(dst, src); /* VMA metadata; pages copied by the page-table walk below */
 
-    /* Walk the actual page tables so we copy every mapped user page, including
+    /* walk the actual page tables so we copy every mapped user page, including
        demand-grown stack pages that have no VMA record. */
     uint64_t* src_pml4 = (uint64_t*) phys_to_virt(src->pml4_phys);
 

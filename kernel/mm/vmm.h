@@ -17,6 +17,11 @@
 
 #define VMM_VMA_MAX 512
 
+/* Top of the user address half; everything >= this is the shared kernel half. */
+#ifndef USER_LIMIT
+#define USER_LIMIT 0x800000000000ULL
+#endif
+
 typedef struct
 {
     uint64_t start;
