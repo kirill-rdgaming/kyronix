@@ -97,13 +97,14 @@ int fd_bind_unix(int fd, const char* path)
     if (!*leaf) return -(int)EINVAL;
     *slash = '\0';
     vfs_node_t* parent = vfs_lookup(ppath[0] ? ppath : "/");
-    if (!parent || parent->type != VFS_TYPE_DIR) return -(int)ENOENT;
-    if (!vfs_may_create_in_internal(parent)) return -(int)EACCES;
-    if (vfs_dir_find_internal(parent, leaf)) return -(int)EEXIST;
+    if (!parent || parent->type != VFS_TYPE_DIR) { vfs_node_unref_internal(parent); return -(int)ENOENT; }
+    if (!vfs_may_create_in_internal(parent)) { vfs_node_unref_internal(parent); return -(int)EACCES; }
+    if (vfs_dir_find_internal(parent, leaf)) { vfs_node_unref_internal(parent); return -(int)EEXIST; }
     vfs_node_t* bn = vfs_node_alloc_internal(leaf, VFS_TYPE_SOCK, S_IFSOCK | 0666);
-    if (!bn) return -(int)ENOMEM;
+    if (!bn) { vfs_node_unref_internal(parent); return -(int)ENOMEM; }
     bn->data = (uint8_t*)s;
     vfs_dir_insert_internal(parent, bn);
+    vfs_node_unref_internal(parent);
     strncpy(s->path, path, sizeof(s->path) - 1);
     s->state = SOCK_BOUND;
     return 0;
@@ -187,9 +188,9 @@ int fd_connect_unix(int fd, const char* path)
     } else {
         sn = vfs_lookup(path);
     }
-    if (!sn || sn->type != VFS_TYPE_SOCK) return -(int)ECONNREFUSED;
+    if (!sn || sn->type != VFS_TYPE_SOCK) { vfs_node_unref_internal(sn); return -(int)ECONNREFUSED; }
     unix_sock_t* srv = (unix_sock_t*)sn->data;
-    if (!srv || srv->state != SOCK_LISTENING) return -(int)ECONNREFUSED;
+    if (!srv || srv->state != SOCK_LISTENING) { vfs_node_unref_internal(sn); return -(int)ECONNREFUSED; }
     pipe_t* cli_rx = pipe_alloc();
     pipe_t* srv_rx = pipe_alloc();
     if (!cli_rx || !srv_rx) { pipe_free(cli_rx); pipe_free(srv_rx); return -(int)ENOMEM; }
@@ -212,9 +213,7 @@ int fd_connect_unix(int fd, const char* path)
     sn->sock_backlog++;
     if (srv->accept_waiter && srv->accept_waiter->state == PROC_WAITING)
         srv->accept_waiter->state = PROC_READY;
-    for (int i = 0; i < PROC_MAX; i++)
-        if (g_proctable[i].state == PROC_WAITING)
-            g_proctable[i].state = PROC_READY;
+    vfs_node_unref_internal(sn);
     unix_sock_t* cs = (unix_sock_t*)f->node->data;
     kfree(cs);
     vfs_node_mark_deleted_internal(f->node);

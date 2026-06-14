@@ -7,6 +7,7 @@
 #include "lib/string.h"
 #include "mm/heap.h"
 #include "mm/pmm.h"
+#include "mm/vma.h"
 #include "mm/vmm.h"
 #include "proc/proc.h"
 #include "syscall/syscall.h"
@@ -75,6 +76,9 @@ uint64_t setup_user_stack(vmm_space_t* space, const elf_load_result_t* elf, int 
             return 0;
         }
     }
+
+    vma_add(space, stack_base, (uint64_t) USER_STACK_PAGES * PAGE_SIZE,
+            PROT_READ | PROT_WRITE, 0, true);
 
     uint64_t* env_uva = envc ? (uint64_t*) kmalloc((uint64_t) envc * 8) : NULL;
     uint64_t* arg_uva =        (uint64_t*) kmalloc((uint64_t) (argc + 1) * 8);

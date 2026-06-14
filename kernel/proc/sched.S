@@ -72,7 +72,7 @@ sched_switch:
     popq    %r12
     popq    %rbp
     popq    %rbx
-    retq                            /* retjrn into next's context */
+    retq                            /* retjrn into nexts context */
 
 
 .global proc_resume_frame

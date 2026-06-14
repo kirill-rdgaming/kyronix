@@ -4,10 +4,6 @@
 #define ENOMEM 12
 #define EINVAL 22
 
-#define PROT_READ  0x1
-#define PROT_WRITE 0x2
-#define PROT_EXEC  0x4
-
 static bool range_end(uint64_t start, uint64_t len, uint64_t* end)
 {
     if (!len)

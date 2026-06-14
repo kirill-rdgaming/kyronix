@@ -2,6 +2,7 @@
 #include "lib/log.h"
 #include "lib/string.h"
 #include "mm/pmm.h"
+#include "mm/vma.h"
 #include "mm/vmm.h"
 
 #define PIE_BASE    0x400000ULL
@@ -82,6 +83,12 @@ int elf_load_into(vmm_space_t* space, const void* data, uint64_t size,
                        (const uint8_t*) data + soff, ce - cs);
             }
         }
+        uint32_t prot = 0;
+        if (ph->p_flags & PF_R) prot |= PROT_READ;
+        if (ph->p_flags & PF_W) prot |= PROT_WRITE;
+        if (ph->p_flags & PF_X) prot |= PROT_EXEC;
+        vma_add(space, page_base, page_end - page_base, prot, 0, true);
+
         uint64_t end = PAGE_ALIGN_UP(vaddr + ph->p_memsz);
         if (end > brk) brk = end;
     }

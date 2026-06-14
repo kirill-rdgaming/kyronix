@@ -3,6 +3,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define PROT_READ  0x1
+#define PROT_WRITE 0x2
+#define PROT_EXEC  0x4
+
 void vma_reset(vmm_space_t* sp);
 void vma_copy(vmm_space_t* dst, const vmm_space_t* src);
 bool vma_conflicts(vmm_space_t* sp, uint64_t start, uint64_t len);

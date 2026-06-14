@@ -127,6 +127,17 @@ INLINE uint64_t read_cr4(void)
     return val;
 }
 
+INLINE uint64_t irq_save(void)
+{
+    uint64_t flags;
+    __asm__ volatile("pushfq; popq %0; cli" : "=r"(flags) :: "memory");
+    return flags;
+}
+INLINE void irq_restore(uint64_t flags)
+{
+    __asm__ volatile("pushq %0; popfq" :: "r"(flags) : "memory", "cc");
+}
+
 INLINE void write_cr4(uint64_t val)
 {
     __asm__ volatile("mov %0, %%cr4" ::"r"(val) : "memory");

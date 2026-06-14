@@ -7,6 +7,7 @@
 #define KBD_DATA 0x60
 #define KBD_STAT 0x64
 #define KBS_OBF (1u << 0)
+#define KBS_IBF (1u << 1) /* input buffer full: controller not ready for a write */
 #define KBS_AUXB (1u << 5) /* output byte is from the aux (mouse) port */
 
 /* scancode set 1 -> Linux keycode (0 = no mapping) */
@@ -88,22 +89,79 @@ static void kbd_irq1(int irq, void* arg)
     tty_process_input(); /* drain kbd port into tty buffer (feeds evdev hook too) */
 }
 
+/* wait until the controller can accept a write (input buffer empty) */
+static void kbd_wait_write(void)
+{
+    int t = 100000;
+    while ((inb(KBD_STAT) & KBS_IBF) && t-- > 0)
+        cpu_relax();
+}
+
+/* wait until the controller has a byte for us (output buffer full) */
+static bool kbd_wait_read(void)
+{
+    int t = 100000;
+    while (!(inb(KBD_STAT) & KBS_OBF) && t-- > 0)
+        cpu_relax();
+    return (inb(KBD_STAT) & KBS_OBF) != 0;
+}
+
+static void kbd_flush(void)
+{
+    int t = 1000;
+    while ((inb(KBD_STAT) & KBS_OBF) && t-- > 0)
+        inb(KBD_DATA);
+}
+
+/* send a command byte to the keyboard device, returning its ACK/resend result */
+static int kbd_dev_cmd(uint8_t cmd)
+{
+    for (int attempt = 0; attempt < 3; attempt++)
+    {
+        kbd_wait_write();
+        outb(KBD_DATA, cmd);
+        if (!kbd_wait_read())
+            return -1;
+        uint8_t r = inb(KBD_DATA);
+        if (r == 0xFA) return 0;  /* ACK */
+        if (r == 0xFE) continue;  /* resend */
+        return -1;
+    }
+    return -1;
+}
+
 void kbd_init(void)
 {
-    while (inb(KBD_STAT) & 2)
-        cpu_relax();
-    outb(KBD_STAT, 0xAE);
+    /* Quiesce the controller before reconfiguring it: real 8042s carry stale
+       firmware bytes and depend on an explicit config byte (QEMU does not). */
+    kbd_wait_write(); outb(KBD_STAT, 0xAD); /* disable keyboard port */
+    kbd_wait_write(); outb(KBD_STAT, 0xA7); /* disable aux port (mouse_init re-enables) */
+    kbd_flush();
 
-    /* flush any leftover data */
-    while (inb(KBD_STAT) & KBS_OBF)
-        inb(KBD_DATA);
+    /* program the controller config byte */
+    kbd_wait_write(); outb(KBD_STAT, 0x20); /* read config */
+    uint8_t cfg = kbd_wait_read() ? inb(KBD_DATA) : 0;
+    cfg |= 0x01;  /* enable keyboard IRQ1 */
+    cfg |= 0x40;  /* enable scancode translation -> set 1 (decoder assumes set 1) */
+    cfg &= ~0x10; /* clear keyboard clock-disable bit */
+    kbd_wait_write(); outb(KBD_STAT, 0x60); /* write config */
+    kbd_wait_write(); outb(KBD_DATA, cfg);
+
+    kbd_wait_write(); outb(KBD_STAT, 0xAE); /* enable keyboard port */
+
+    /* reset the keyboard to a known state, then (re)enable scanning */
+    if (kbd_dev_cmd(0xFF) == 0)
+        kbd_wait_read(), inb(KBD_DATA); /* consume 0xAA self-test result */
+    kbd_dev_cmd(0xF4);
+
+    kbd_flush();
 
     g_ext_seq = NULL;
     g_ext_seq_idx = -1;
 
     /* irq1 handler: pumps kbd data even when no process reads /dev/tty */
     request_irq(1, kbd_irq1, NULL);
-    log_info("PS/2 keyboard: enabled");
+    log_info("PS/2 keyboard: enabled (cfg=0x%02x)", cfg);
 }
 
 int kbd_getchar(void)
@@ -237,5 +295,10 @@ int kbd_getchar(void)
 
 bool kbd_data_ready(void)
 {
-    return g_ext_seq_idx >= 0 || (inb(KBD_STAT) & KBS_OBF) != 0;
+    if (g_ext_seq_idx >= 0)
+        return true;
+    uint8_t st = inb(KBD_STAT);
+    /* a pending aux (mouse) byte is not keyboard input: leave it for IRQ12 so
+       the tty input loop never spins on a byte kbd_getchar refuses to drain */
+    return (st & KBS_OBF) && !(st & KBS_AUXB);
 }

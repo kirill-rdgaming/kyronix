@@ -57,7 +57,7 @@ static int64_t evdev_read(vfs_node_t* n, char* buf, uint64_t len, uint64_t off)
     (void)off;
     int dev = (int)(uintptr_t)n->data;
     if ((unsigned)dev >= INPUT_NDEVS || len < sizeof(input_event_t)) return -EINVAL;
-    if (dev == INPUT_DEV_KBD) g_evdev_kbd_open = 1; /* X grabbed kbd — mute tty echo */
+    if (dev == INPUT_DEV_KBD) g_evdev_kbd_open = 1; /* X grabbed kbd - mute tty echo */
 
     evdev_t* e = &g_evdev[dev];
     e->waiter = g_current_proc;

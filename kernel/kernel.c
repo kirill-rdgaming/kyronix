@@ -22,6 +22,7 @@
 #include "exec/process.h"
 #include "fs/cpio.h"
 #include "fs/vfs.h"
+#include "fs/vfs_internal.h"
 #include "lib/log.h"
 #include "lib/printf.h"
 #include "lib/string.h"
@@ -174,19 +175,23 @@ void kmain(void)
     proc_init();
     kstatus("Initialising scheduler", true);
     vfs_init();
-    kstatus("Mounting /proc", vfs_lookup("/proc") != NULL);
-    kstatus("Mounting /sys", vfs_lookup("/sys") != NULL);
-    kstatus("Mounting /dev/pts", vfs_lookup("/dev/pts") != NULL);
+    { vfs_node_t* _n = vfs_lookup("/proc"); kstatus("Mounting /proc", _n != NULL); vfs_node_unref_internal(_n); }
+    { vfs_node_t* _n = vfs_lookup("/sys"); kstatus("Mounting /sys", _n != NULL); vfs_node_unref_internal(_n); }
+    { vfs_node_t* _n = vfs_lookup("/dev/pts"); kstatus("Mounting /dev/pts", _n != NULL); vfs_node_unref_internal(_n); }
     pci_enumerate();
     kstatus("Enumerating PCI", true);
     uio_init();
     kstatus("Initialising UIO", true);
     fbdev_init();
-    kstatus("Registering framebuffer", vfs_lookup("/dev/fb0") != NULL);
+    { vfs_node_t* _n = vfs_lookup("/dev/fb0"); kstatus("Registering framebuffer", _n != NULL); vfs_node_unref_internal(_n); }
 
     input_init();
-    kstatus("Initialising evdev", vfs_lookup("/dev/input/event0") != NULL &&
-                                 vfs_lookup("/dev/input/event1") != NULL);
+    {
+        vfs_node_t* _n0 = vfs_lookup("/dev/input/event0");
+        vfs_node_t* _n1 = vfs_lookup("/dev/input/event1");
+        kstatus("Initialising evdev", _n0 != NULL && _n1 != NULL);
+        vfs_node_unref_internal(_n0); vfs_node_unref_internal(_n1);
+    }
     vt_init();
     kstatus("Initialising virtual tty", true);
     pit_init();
@@ -345,6 +350,7 @@ void kmain(void)
         {
             kprintf("  FATAL: /init not found in initrd\n");
         }
+        vfs_node_unref_internal(init_node);
     }
 
     fb_set_color(COLOR_GRAY, COLOR_BG);

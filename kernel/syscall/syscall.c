@@ -12,6 +12,7 @@
 #include "exec/elf.h"
 #include "exec/process.h"
 #include "fs/vfs.h"
+#include "fs/vfs_internal.h"
 #include "lib/log.h"
 #include "lib/printf.h"
 #include "lib/string.h"
@@ -95,14 +96,19 @@ static int64_t sys_brk(uint64_t addr)
         return (int64_t) p->brk;
 
     if (addr <= p->brk) {
-        uint64_t new = PAGE_ALIGN_UP(addr);
-        uint64_t old = PAGE_ALIGN_UP(p->brk);
-        for (uint64_t va = new; va < old; va += PAGE_SIZE) {
+        uint64_t new_end = PAGE_ALIGN_UP(addr);
+        uint64_t old_end = PAGE_ALIGN_UP(p->brk);
+        for (uint64_t va = new_end; va < old_end; va += PAGE_SIZE) {
             uint64_t phys = vmm_virt_to_phys(p->space, va);
             vmm_unmap(p->space, va);
             if (phys)
                 pmm_free((void*) phys);
         }
+        if (old_end > p->brk_base)
+            vma_remove_overlaps(p->space, p->brk_base, old_end - p->brk_base);
+        if (new_end > p->brk_base)
+            vma_add(p->space, p->brk_base, new_end - p->brk_base,
+                    PROT_READ | PROT_WRITE, 0, true);
         p->brk = addr;
         return (int64_t) p->brk;
     }
@@ -133,6 +139,9 @@ static int64_t sys_brk(uint64_t addr)
             return (int64_t) p->brk;
         }
     }
+    if (old > p->brk_base)
+        vma_remove_overlaps(p->space, p->brk_base, old - p->brk_base);
+    vma_add(p->space, p->brk_base, new - p->brk_base, PROT_READ | PROT_WRITE, 0, true);
     p->brk = addr;
     return (int64_t) addr;
 }
@@ -561,11 +570,12 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
     const char* exec_path = abs[0] ? abs : path;
 
     vfs_node_t* node = vfs_lookup(exec_path);
-    if (!node || node->type != VFS_TYPE_REG || !node->data)
+    if (!node || node->type != VFS_TYPE_REG || !node->data) {
+        vfs_node_unref_internal(node);
         return -(int64_t) ENOENT;
+    }
     int exec_perm = vfs_access(exec_path, 1);
-    if (exec_perm < 0)
-        return (int64_t)exec_perm;
+    if (exec_perm < 0) { vfs_node_unref_internal(node); return (int64_t)exec_perm; }
 
     char shebang_interp[512] = {0};
     char shebang_arg[256] = {0};
@@ -587,14 +597,12 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
         char* p2 = line;
         while (*p2 == ' ' || *p2 == '\t')
             p2++;
-        if (!*p2)
-            return -(int64_t) ENOEXEC;
+        if (!*p2) { vfs_node_unref_internal(node); return -(int64_t) ENOEXEC; }
         char* istart = p2;
         while (*p2 && *p2 != ' ' && *p2 != '\t')
             p2++;
         size_t ilen = (size_t) (p2 - istart);
-        if (!ilen || ilen >= sizeof(shebang_interp))
-            return -(int64_t) ENOEXEC;
+        if (!ilen || ilen >= sizeof(shebang_interp)) { vfs_node_unref_internal(node); return -(int64_t) ENOEXEC; }
         memcpy(shebang_interp, istart, ilen);
         while (*p2 == ' ' || *p2 == '\t')
             p2++;
@@ -606,12 +614,14 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
                 *e-- = '\0';
         }
         strncpy(script_path, exec_path, sizeof(script_path) - 1);
+        vfs_node_unref_internal(node);
         node = vfs_lookup(shebang_interp);
-        if (!node || node->type != VFS_TYPE_REG || !node->data)
+        if (!node || node->type != VFS_TYPE_REG || !node->data) {
+            vfs_node_unref_internal(node);
             return -(int64_t) ENOENT;
+        }
         exec_perm = vfs_access(shebang_interp, 1);
-        if (exec_perm < 0)
-            return (int64_t)exec_perm;
+        if (exec_perm < 0) { vfs_node_unref_internal(node); return (int64_t)exec_perm; }
         exec_path = shebang_interp;
         is_shebang = true;
     }
@@ -653,6 +663,7 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
             argv_mem[argc] = kmalloc(n);
             if (!argv_mem[argc])
             {
+                vfs_node_unref_internal(node);
                 FREE_EXEC_STRS();
                 return -(int64_t) ENOMEM;
             }
@@ -672,6 +683,7 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
                 argv_mem[argc] = kmalloc(n);
                 if (!argv_mem[argc])
                 {
+                    vfs_node_unref_internal(node);
                     FREE_EXEC_STRS();
                     return -(int64_t) ENOMEM;
                 }
@@ -686,6 +698,7 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
             argv_mem[0] = kmalloc(n);
             if (!argv_mem[0])
             {
+                vfs_node_unref_internal(node);
                 FREE_EXEC_STRS();
                 return -(int64_t) ENOMEM;
             }
@@ -704,6 +717,7 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
             envp_mem[envc] = kmalloc(n);
             if (!envp_mem[envc])
             {
+                vfs_node_unref_internal(node);
                 FREE_EXEC_STRS();
                 return -(int64_t) ENOMEM;
             }
@@ -717,15 +731,19 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
     elf_load_result_t res;
     if (elf_load(node->data, node->size, &res) < 0)
     {
+        vfs_node_unref_internal(node);
         FREE_EXEC_STRS();
         return -(int64_t) ENOEXEC;
     }
+    vfs_node_unref_internal(node);  /* data is now mapped; release our ref */
+    node = NULL;
 
     if (res.interp[0])
     {
         vfs_node_t* inode = vfs_lookup(res.interp);
         if (!inode || inode->type != VFS_TYPE_REG || !inode->data)
         {
+            vfs_node_unref_internal(inode);
             vmm_space_free(res.space);
             FREE_EXEC_STRS();
             return -(int64_t) ENOENT;
@@ -734,10 +752,12 @@ static int64_t sys_execve(const char* path, const char** uargv, const char** uen
         memset(&ires, 0, sizeof(ires));
         if (elf_load_into(res.space, inode->data, inode->size, 0x7f0000000000ULL, &ires) < 0)
         {
+            vfs_node_unref_internal(inode);
             vmm_space_free(res.space);
             FREE_EXEC_STRS();
             return -(int64_t) ENOEXEC;
         }
+        vfs_node_unref_internal(inode);
         res.entry       = ires.prog_entry;
         res.interp_base = 0x7f0000000000ULL;
     }
@@ -913,7 +933,9 @@ static int64_t sys_wait4(int pid, int* wstatus, int options, void* rusage)
         vfs_set_fdtable(next->fds);
         g_current_space = next->space;
         cpu_set_kernel_stack(next->kstack_top);
+        sti();
         sched_switch(next);
+        cli();
 
         parent->state = PROC_RUNNING;
         vfs_set_fdtable(parent->fds);
@@ -995,9 +1017,10 @@ static int64_t sys_chdir(const char* path)
     const char* rp = abs[0] ? abs : path;
     vfs_node_t* n = vfs_lookup(rp);
     if (!n) return -(int64_t)ENOENT;
-    if (n->type != VFS_TYPE_DIR) return -(int64_t)ENOTDIR;
+    if (n->type != VFS_TYPE_DIR) { vfs_node_unref_internal(n); return -(int64_t)ENOTDIR; }
     proc_t* p = cur();
     if (p) strncpy(p->cwd, rp, sizeof(p->cwd) - 1);
+    vfs_node_unref_internal(n);
     return 0;
 }
 
@@ -1344,6 +1367,7 @@ static int64_t sys_pause(void)
             cpu_set_kernel_stack(p->kstack_top);
             sti();
             hlt();
+            cli();
             continue;
         }
         p->state = PROC_WAITING;
@@ -1351,7 +1375,9 @@ static int64_t sys_pause(void)
         vfs_set_fdtable(next->fds);
         g_current_space = next->space;
         cpu_set_kernel_stack(next->kstack_top);
+        sti();
         sched_switch(next);
+        cli();
         p->state = PROC_RUNNING;
         vfs_set_fdtable(p->fds);
         g_current_space = p->space;
@@ -1382,7 +1408,7 @@ static int64_t sys_rt_sigsuspend(const uint64_t* mask, uint64_t sigsetsize)
         if (!next)
         {
             cpu_set_kernel_stack(p->kstack_top);
-            sti(); hlt();
+            sti(); hlt(); cli();
             continue;
         }
         p->state = PROC_WAITING;
@@ -1390,7 +1416,9 @@ static int64_t sys_rt_sigsuspend(const uint64_t* mask, uint64_t sigsetsize)
         vfs_set_fdtable(next->fds);
         g_current_space = next->space;
         cpu_set_kernel_stack(next->kstack_top);
+        sti();
         sched_switch(next);
+        cli();
         p->state = PROC_RUNNING;
         vfs_set_fdtable(p->fds);
         g_current_space = p->space;

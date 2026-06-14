@@ -37,7 +37,7 @@ static uint64_t* descend(uint64_t* parent, uint64_t idx)
 void vmm_init(void)
 {
     uint64_t efer = rdmsr(0xC0000080);
-    wrmsr(0xC0000080, efer | (1ULL << 11)); /* enable NX (EFER.NXE) */
+    wrmsr(0xC0000080, efer | (1ULL << 11)); /* enable NX  */
 
     uint64_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
@@ -242,8 +242,11 @@ void vmm_switch(vmm_space_t* sp)
 
 int vmm_fork_user(vmm_space_t* dst, vmm_space_t* src)
 {
+    vma_copy(dst, src); /* VMA metadata; pages copied by the page-table walk below */
+
+    /* Walk the actual page tables so we copy every mapped user page, including
+       demand-grown stack pages that have no VMA record. */
     uint64_t* src_pml4 = (uint64_t*) phys_to_virt(src->pml4_phys);
-    vma_copy(dst, src);
 
     for (int i = 0; i < 256; i++)
     {
@@ -275,11 +278,10 @@ int vmm_fork_user(vmm_space_t* dst, vmm_space_t* src)
                     void* new_phys = pmm_alloc();
                     if (!new_phys)
                         return -1;
-                    memcpy(phys_to_virt((uint64_t) new_phys), phys_to_virt(pte_addr(pte)),
-                           PAGE_SIZE);
+                    memcpy(phys_to_virt((uint64_t) new_phys),
+                           phys_to_virt(pte_addr(pte)), PAGE_SIZE);
 
-                    uint64_t flags = pte & PTE_FLAGS_MASK;
-                    if (vmm_map(dst, va, (uint64_t) new_phys, flags) < 0)
+                    if (vmm_map(dst, va, (uint64_t) new_phys, pte & PTE_FLAGS_MASK) < 0)
                     {
                         pmm_free(new_phys);
                         return -1;

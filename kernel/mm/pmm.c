@@ -7,7 +7,7 @@ uint64_t g_hhdm_offset;
 
 typedef struct
 {
-    uint64_t* words; /* bit=1 -> page FREE, bit=0 -> page USED */
+    uint64_t* words; /* bit=1 -> page free, bit=0 -> page used */
     uint64_t total_pages;
     uint64_t free_pages;
 } pmm_t;

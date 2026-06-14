@@ -1,6 +1,7 @@
 #include "file.h"
 #include "syscall/syscall.h"
 #include "fs/vfs.h"
+#include "fs/vfs_internal.h"
 #include "lib/printf.h"
 #include "lib/string.h"
 
@@ -153,5 +154,6 @@ int64_t sys_statx(int dirfd, const char* path, int flags, uint32_t mask, struct 
     sx->stx_size = n->size;
     sx->stx_blocks = (n->size + 511) / 512;
     sx->stx_dev_major = 1;
+    vfs_node_unref_internal(n);
     return 0;
 }

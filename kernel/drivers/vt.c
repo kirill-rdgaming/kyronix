@@ -2,6 +2,7 @@
 #include "fb.h"
 #include "tty.h"
 #include "../fs/vfs.h"
+#include "../fs/vfs_internal.h"
 #include "../lib/string.h"
 #include "../lib/printf.h"
 #include "../syscall/syscall.h"
@@ -210,5 +211,5 @@ void vt_init(void)
 
     /* attach vt_ioctl to /dev/tty so VT/KD ioctls work on the controlling terminal too */
     vfs_node_t* tty = vfs_lookup("/dev/tty");
-    if (tty) tty->chr_ioctl = vt_ioctl;
+    if (tty) { tty->chr_ioctl = vt_ioctl; vfs_node_unref_internal(tty); }
 }

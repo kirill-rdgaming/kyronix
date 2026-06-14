@@ -28,7 +28,7 @@ typedef struct proc
     uint64_t kstack_rsp;             /* 40 */
     uint64_t user_rsp;               /* 48 */
     int exit_code;                   /* 56 */
-    int wait_for;                    /* 60 — pid to wait for (-1 = any) */
+    int wait_for;                    /* 60 - pid to wait for (-1 = any) */
     uint64_t brk;                    /* 64 */
     uint64_t brk_base;               /* 72 */
     uint64_t mmap_bump;              /* 80 */

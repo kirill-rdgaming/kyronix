@@ -10,7 +10,7 @@ extern const uint8_t g_psf_font[];
 #define FONT_W 8
 #define FONT_H 16
 
-/* PSF1: 4-byte header, then 256 glyphs × FONT_H bytes each */
+/* PSF1: 4-byte header, then 256 glyphs * FONT_H bytes each */
 #define PSF1_HDR 4
 
 static bool g_cursor_enabled;
