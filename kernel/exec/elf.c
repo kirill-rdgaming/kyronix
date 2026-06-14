@@ -100,15 +100,9 @@ int elf_load_into(vmm_space_t *space, const void *data, uint64_t size, uint64_t 
 }
 
 int elf_load(const void *data, uint64_t size, elf_load_result_t *out) {
-    if (!data || size < sizeof(Elf64_Ehdr)) {
-        log_error("ELF: too small");
-        return -1;
-    }
+    if (!data || size < sizeof(Elf64_Ehdr)) { return -1; }
     const Elf64_Ehdr *eh = (const Elf64_Ehdr *) data;
-    if (!elf_valid(eh, size)) {
-        log_error("ELF: invalid header");
-        return -1;
-    }
+    if (!elf_valid(eh, size)) { return -1; }
 
     vmm_space_t *space = vmm_space_new();
     if (!space) {

@@ -1751,7 +1751,10 @@ void syscall_dispatch(syscall_frame_t *f) {
     case 90: {
         char abs[512];
         int _r = copy_user_path((const char *) a1, abs, sizeof(abs));
-        if (_r < 0) { ret = (int64_t) _r; break; }
+        if (_r < 0) {
+            ret = (int64_t) _r;
+            break;
+        }
         ret = (int64_t) vfs_chmod(abs, (uint32_t) a2);
         break;
     }
@@ -1761,7 +1764,10 @@ void syscall_dispatch(syscall_frame_t *f) {
     case 92: {
         char abs[512];
         int _r = copy_user_path((const char *) a1, abs, sizeof(abs));
-        if (_r < 0) { ret = (int64_t) _r; break; }
+        if (_r < 0) {
+            ret = (int64_t) _r;
+            break;
+        }
         ret = (int64_t) vfs_chown(abs, (uint32_t) a2, (uint32_t) a3);
         break;
     }
@@ -1771,7 +1777,10 @@ void syscall_dispatch(syscall_frame_t *f) {
     case 94: {
         char abs[512];
         int _r = copy_user_path((const char *) a1, abs, sizeof(abs));
-        if (_r < 0) { ret = (int64_t) _r; break; }
+        if (_r < 0) {
+            ret = (int64_t) _r;
+            break;
+        }
         ret = (int64_t) vfs_lchown(abs, (uint32_t) a2, (uint32_t) a3);
         break;
     }
@@ -2415,7 +2424,10 @@ void syscall_dispatch(syscall_frame_t *f) {
     case 133: {
         char abs[512];
         int _r = copy_user_path((const char *) a1, abs, sizeof(abs));
-        if (_r < 0) { ret = (int64_t) _r; break; }
+        if (_r < 0) {
+            ret = (int64_t) _r;
+            break;
+        }
         ret = (int64_t) vfs_mknod(abs, (uint32_t) a2, a3);
         break;
     }
