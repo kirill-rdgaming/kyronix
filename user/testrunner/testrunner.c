@@ -7,7 +7,6 @@
 static int total = 0;
 static int passed = 0;
 static int failed = 0;
-static int skipped = 0;
 
 char tmpdir[256];
 
@@ -25,6 +24,9 @@ static struct {
 } failures[MAX_FAILURES];
 static int nfailures = 0;
 
+/* Timeout guard: parent kills child if it hangs (no alarm/timer needed) */
+#define TEST_TIMEOUT 10
+
 /* ------------------------------------------------------------------ */
 /*  Test registry (populated by constructor REGISTER_TEST calls)      */
 /* ------------------------------------------------------------------ */
@@ -40,17 +42,16 @@ static const char *cur_phase = NULL;
 static int ph_total = 0;
 static int ph_passed = 0;
 static int ph_failed = 0;
-static int ph_skipped = 0;
 
 static void phase_summary(void) {
-    fprintf(stderr, "  " ANSI_CYAN "--- %s: %d/%d PASS, %d FAIL, %d SKIP" ANSI_RESET "\n",
-            cur_phase, ph_passed, ph_total, ph_failed, ph_skipped);
+    fprintf(stderr, "  " ANSI_CYAN "--- %s: %d/%d PASS, %d FAIL" ANSI_RESET "\n", cur_phase,
+            ph_passed, ph_total, ph_failed);
 }
 
 static void phase_begin(const char *phase) {
     if (cur_phase) phase_summary();
     cur_phase = phase;
-    ph_total = ph_passed = ph_failed = ph_skipped = 0;
+    ph_total = ph_passed = ph_failed = 0;
     fprintf(stderr, "\n" ANSI_CYAN "[%s]" ANSI_RESET "\n", phase);
 }
 
@@ -80,7 +81,6 @@ static int run_sandbox(const char *test_name, int (*test_fn)(void)) {
 
     if (pid == 0) {
         close(p[0]);
-        signal(SIGALRM, SIG_DFL);
         if (!setup_tmpdir()) _exit(TEST_FAIL);
 
         int null_fd = open("/dev/null", O_RDWR);
@@ -90,9 +90,7 @@ static int run_sandbox(const char *test_name, int (*test_fn)(void)) {
             close(null_fd);
         }
 
-        alarm(5);
         int r = test_fn();
-        alarm(0);
         cleanup_tmpdir();
         close(p[1]);
         _exit(r);
@@ -101,8 +99,20 @@ static int run_sandbox(const char *test_name, int (*test_fn)(void)) {
     close(p[1]);
     failure_pipe[1] = -1;
 
-    int status;
-    waitpid(pid, &status, 0);
+    /* Poll-based timeout (no dependency on alarm/timers) */
+    time_t deadline = time(NULL) + TEST_TIMEOUT;
+    int status = 0;
+    while (1) {
+        pid_t ret = waitpid(pid, &status, WNOHANG);
+        if (ret == pid) break;
+        if (ret < 0) break;
+        if (time(NULL) >= deadline) {
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            break;
+        }
+        sched_yield();
+    }
 
     char buf[256];
     ssize_t n = read(p[0], buf, sizeof(buf) - 1);
@@ -345,10 +355,6 @@ int main(void) {
             passed++;
             ph_passed++;
             fprintf(stderr, ANSI_GREEN "PASS" ANSI_RESET "\n");
-        } else if (result == TEST_SKIP) {
-            skipped++;
-            ph_skipped++;
-            fprintf(stderr, ANSI_YELLOW "SKIP" ANSI_RESET "\n");
         } else {
             failed++;
             ph_failed++;
@@ -359,8 +365,8 @@ int main(void) {
 
     if (cur_phase) phase_summary();
 
-    fprintf(stderr, "\n" ANSI_CYAN "RESULT:" ANSI_RESET " %d/%d PASS, %d FAIL, %d SKIP\n", passed,
-            total, failed, skipped);
+    fprintf(stderr, "\n" ANSI_CYAN "RESULT:" ANSI_RESET " %d/%d PASS, %d FAIL\n", passed, total,
+            failed);
 
     if (nfailures > 0) {
         fprintf(stderr, "\n" ANSI_RED "FAILED TESTS:" ANSI_RESET "\n");
@@ -370,10 +376,8 @@ int main(void) {
 
     cleanup_tmpdir();
 
-    if (failed == 0 && skipped == 0) {
+    if (failed == 0) {
         fprintf(stderr, ANSI_GREEN "ALL TESTS PASSED" ANSI_RESET "\n");
-    } else if (failed == 0) {
-        fprintf(stderr, ANSI_YELLOW "ALL TESTS PASSED (with skips)" ANSI_RESET "\n");
     } else {
         fprintf(stderr, ANSI_RED "SOME TESTS FAILED" ANSI_RESET "\n");
     }

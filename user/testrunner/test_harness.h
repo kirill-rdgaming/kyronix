@@ -15,19 +15,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/eventfd.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/sendfile.h>
+#include <sys/shm.h>
+#include <sys/signalfd.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <sys/sysinfo.h>
 #include <sys/time.h>
+#include <sys/times.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/utsname.h>
 #include <sys/vfs.h>
 #include <sys/wait.h>
@@ -41,6 +47,23 @@
 #endif
 #ifndef ARCH_SET_FS
 #define ARCH_SET_FS 0x1002
+#endif
+
+/* ------------------------------------------------------------------ */
+/*  Futex opcodes (if not provided by libc)                            */
+/* ------------------------------------------------------------------ */
+
+#ifndef FUTEX_WAIT
+#define FUTEX_WAIT 0
+#endif
+#ifndef FUTEX_WAKE
+#define FUTEX_WAKE 1
+#endif
+#ifndef FUTEX_REQUEUE
+#define FUTEX_REQUEUE 3
+#endif
+#ifndef FUTEX_CMP_REQUEUE
+#define FUTEX_CMP_REQUEUE 4
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -59,7 +82,7 @@
 
 #define TEST_PASS 1
 #define TEST_FAIL 0
-#define TEST_SKIP 2
+#define TEST_SKIP 0 /* treated as FAIL */
 
 /* ------------------------------------------------------------------ */
 /*  Failure pipe (child→parent, for summary)                         */
