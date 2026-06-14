@@ -3,6 +3,7 @@
 #include "lib/log.h"
 #include "lib/string.h"
 #include "pmm.h"
+#include "syscall/syscall.h"
 #include "vma.h"
 
 vmm_space_t g_kernel_space;
@@ -40,6 +41,7 @@ void vmm_init(void) {
 }
 
 int vmm_map(vmm_space_t *sp, uint64_t virt, uint64_t phys, uint64_t flags) {
+    if ((flags & VMM_USER) && virt >= USER_LIMIT) return -1;
     uint64_t *pml4 = (uint64_t *) phys_to_virt(sp->pml4_phys);
 
     uint64_t *pdpt = descend(pml4, PML4_IDX(virt));

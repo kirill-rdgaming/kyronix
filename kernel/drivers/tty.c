@@ -111,6 +111,7 @@ static void tty_input_char(uint8_t c) {
 }
 
 void tty_process_input(void) {
+    uint64_t _f = irq_save();
     if (serial_data_ready(COM1)) {
         uint8_t c = serial_getchar(COM1);
         tty_input_char(c);
@@ -120,6 +121,7 @@ void tty_process_input(void) {
         int c = kbd_getchar(); /* always drain PS/2 buffer; evdev hook fires inside */
         if (c > 0 && !g_evdev_kbd_open) tty_input_char((uint8_t) c);
     }
+    irq_restore(_f);
 }
 
 int64_t tty_read(char *buf, uint64_t len) {

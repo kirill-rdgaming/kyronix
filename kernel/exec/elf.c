@@ -4,6 +4,7 @@
 #include "mm/pmm.h"
 #include "mm/vma.h"
 #include "mm/vmm.h"
+#include "syscall/syscall.h"
 
 #define PIE_BASE 0x400000ULL
 #define INTERP_BASE 0x7f0000000000ULL
@@ -18,6 +19,7 @@ static int elf_valid(const Elf64_Ehdr *eh, uint64_t size) {
     if (eh->e_type != ET_EXEC && eh->e_type != ET_DYN) return 0;
     if (eh->e_machine != EM_X86_64) return 0;
     if (eh->e_phentsize < sizeof(Elf64_Phdr) || eh->e_phnum == 0) return 0;
+    if (eh->e_phoff + (uint64_t) eh->e_phnum * sizeof(Elf64_Phdr) > size) return 0;
     return 1;
 }
 
@@ -34,7 +36,10 @@ int elf_load_into(vmm_space_t *space, const void *data, uint64_t size, uint64_t 
         const Elf64_Phdr *ph = (const Elf64_Phdr *) ((const uint8_t *) data + eh->e_phoff +
                                                      (uint64_t) i * eh->e_phentsize);
 
-        if (ph->p_type == PT_INTERP && ph->p_filesz > 0 && ph->p_filesz < 255) {
+        if ((uintptr_t) (ph + 1) > (uintptr_t) ((const uint8_t *) data + size)) return -1;
+
+        if (ph->p_type == PT_INTERP && ph->p_filesz > 0 && ph->p_filesz < 255 &&
+            ph->p_offset + ph->p_filesz <= size) {
             memcpy(out->interp, (const uint8_t *) data + ph->p_offset, ph->p_filesz);
             out->interp[ph->p_filesz] = '\0';
             size_t n = strlen(out->interp);
@@ -42,7 +47,8 @@ int elf_load_into(vmm_space_t *space, const void *data, uint64_t size, uint64_t 
         }
 
         if (ph->p_type == PT_LOAD && !phdr_va) {
-            if (eh->e_phoff >= ph->p_offset && eh->e_phoff < ph->p_offset + ph->p_filesz)
+            if (eh->e_phoff >= ph->p_offset && eh->e_phoff < ph->p_offset + ph->p_filesz &&
+                ph->p_offset + ph->p_filesz <= size)
                 phdr_va = bias + ph->p_vaddr + (eh->e_phoff - ph->p_offset);
         }
 
@@ -54,6 +60,7 @@ int elf_load_into(vmm_space_t *space, const void *data, uint64_t size, uint64_t 
         if (!(ph->p_flags & PF_X)) vflags |= VMM_NX;
 
         uint64_t vaddr = bias + ph->p_vaddr;
+        if (vaddr + ph->p_memsz > USER_LIMIT) return -1;
         uint64_t page_base = PAGE_ALIGN_DOWN(vaddr);
         uint64_t page_end = PAGE_ALIGN_UP(vaddr + ph->p_memsz);
 

@@ -138,9 +138,7 @@ void sched_yield_blocking(void) {
     vfs_set_fdtable(next->fds);
     g_current_space = next->space;
     cpu_set_kernel_stack(next->kstack_top);
-    sti();
     sched_switch(next);
-    cli();
 
     p->state = PROC_RUNNING;
     vfs_set_fdtable(p->fds);

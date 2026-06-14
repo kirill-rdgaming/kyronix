@@ -41,6 +41,7 @@ struct linux_dirent64 {
 #define S_IFLNK 0120000U
 #define S_IFCHR 0020000U
 #define S_IFIFO 0010000U
+#define S_ISVTX 0001000U
 
 #define DT_UNKNOWN 0
 #define DT_CHR 2
@@ -203,6 +204,7 @@ int vfs_mkdir(const char *path, uint32_t mode);
 int vfs_unlink(const char *path);
 int vfs_rmdir(const char *path);
 int vfs_rename(const char *oldpath, const char *newpath);
+int may_delete_in(vfs_node_t *dir, vfs_node_t *node);
 int vfs_link(const char *oldpath, const char *newpath);
 int vfs_chmod(const char *path, uint32_t mode);
 int vfs_fchmod(int fd, uint32_t mode);

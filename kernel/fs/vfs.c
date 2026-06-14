@@ -179,6 +179,14 @@ static bool may_create_in(vfs_node_t *dir) {
     return dir && dir->type == VFS_TYPE_DIR && may_access(dir, 3u);
 }
 
+int may_delete_in(vfs_node_t *dir, vfs_node_t *node) {
+    if (!dir || !node) return -EPERM;
+    if (cred_is_root()) return 0;
+    if (!(dir->mode & S_ISVTX)) return may_create_in(dir) ? 0 : -EACCES;
+    if (node->uid == cred_fsuid()) return 0;
+    return -EPERM;
+}
+
 bool vfs_may_create_in_internal(vfs_node_t *dir) { return may_create_in(dir); }
 
 static uint32_t mode_without_priv_bits(uint32_t mode) {
@@ -214,6 +222,24 @@ static void vfs_abs_path(char *out, size_t sz, const char *in) {
     if (out[cl - 1] != '/') out[cl++] = '/';
     strncpy(out + cl, in, sz - cl - 1);
     out[sz - 1] = '\0';
+}
+
+static int vfs_copy_user_path(const char *upath, char *abspath, size_t sz) {
+    if (!upath) return -EFAULT;
+    if (!uptr_ok(upath, 1)) return -EFAULT;
+    size_t plen = 0;
+    while (plen < sz && upath[plen]) plen++;
+    if (plen >= sz) return -ENAMETOOLONG;
+    char tmp[512];
+    memcpy(tmp, upath, plen);
+    tmp[plen] = '\0';
+    if (tmp[0] != '/') {
+        vfs_abs_path(abspath, sz, tmp);
+    } else {
+        strncpy(abspath, tmp, sz - 1);
+        abspath[sz - 1] = '\0';
+    }
+    return 0;
 }
 
 static int vfs_node_path(vfs_node_t *n, char *buf, size_t sz) {
@@ -529,9 +555,10 @@ int vfs_unlink(const char *path) {
         node_unref(n);
         return -(int) EINVAL;
     }
-    if (!may_create_in(n->parent)) {
+    int md = may_delete_in(n->parent, n);
+    if (md < 0) {
         node_unref(n);
-        return -(int) EACCES;
+        return md;
     }
     dir_remove(n->parent, n);
     node_unlink_or_destroy(n);
@@ -554,9 +581,10 @@ int vfs_rmdir(const char *path) {
         node_unref(n);
         return -(int) EINVAL;
     }
-    if (!may_create_in(n->parent)) {
+    int md = may_delete_in(n->parent, n);
+    if (md < 0) {
         node_unref(n);
-        return -(int) EACCES;
+        return md;
     }
     dir_remove(n->parent, n);
     node_unlink_or_destroy(n);
@@ -582,7 +610,13 @@ int vfs_rename(const char *oldpath, const char *newpath) {
         node_unref(new_parent);
         return -(int) EINVAL;
     }
-    if (!may_create_in(n->parent) || !may_create_in(new_parent)) {
+    int md = may_delete_in(n->parent, n);
+    if (md < 0) {
+        node_unref(n);
+        node_unref(new_parent);
+        return md;
+    }
+    if (!may_create_in(new_parent)) {
         node_unref(n);
         node_unref(new_parent);
         return -(int) EACCES;
@@ -810,9 +844,9 @@ static void file_close(vfs_file_t *f) {
     }
     if (f->node) {
         vfs_node_t *n = f->node;
-        void (*cc)(vfs_node_t *) = (n->type == VFS_TYPE_CHR) ? n->chr_close : NULL;
+        bool last_ref = (n->refcnt == 1);
+        if (n->type == VFS_TYPE_CHR && n->chr_close && last_ref) n->chr_close(n);
         node_unref(n);
-        if (cc && n->refcnt == 0) cc(n);
     }
     f->magic = 0;
     kfree(f);
