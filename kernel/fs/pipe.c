@@ -158,10 +158,6 @@ int64_t pipe_write(pipe_t* p, const void* buf, uint64_t len)
             if (reader->state == PROC_WAITING)
                 reader->state = PROC_READY;
         }
-        /* also wake any process in select/poll watching this pipe */
-        for (int _i = 0; _i < PROC_MAX; _i++)
-            if (g_proctable[_i].state == PROC_WAITING)
-                g_proctable[_i].state = PROC_READY;
     }
 
     return (int64_t) done;
