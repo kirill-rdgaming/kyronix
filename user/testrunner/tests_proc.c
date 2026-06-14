@@ -22,6 +22,7 @@ int test_fork_basic(void) {
     ASSERT_EQ(42, WEXITSTATUS(status));
     return 1;
 }
+REGISTER_TEST(fork_basic, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.2  fork — child gets correct PID values                       */
@@ -59,6 +60,7 @@ int test_fork_pid(void) {
     waitpid(pid, &status, 0);
     return 1;
 }
+REGISTER_TEST(fork_pid, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.3  fork — COW semantics (write in child)                     */
@@ -82,6 +84,7 @@ int test_fork_cow(void) {
     ASSERT_EQ(42, shared);
     return 1;
 }
+REGISTER_TEST(fork_cow, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.4  fork — shared fd table before fork vs separate after       */
@@ -119,6 +122,7 @@ int test_fork_fdtable(void) {
     unlink(path);
     return 1;
 }
+REGISTER_TEST(fork_fdtable, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.5  vfork                                                      */
@@ -147,6 +151,7 @@ int test_vfork(void) {
     unlink(path);
     return 1;
 }
+REGISTER_TEST(vfork, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.6  execve                                                     */
@@ -168,6 +173,7 @@ int test_execve(void) {
     ASSERT_EQ(0, WEXITSTATUS(status));
     return 1;
 }
+REGISTER_TEST(execve, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.7  execve — bad binary (ENOEXEC)                              */
@@ -195,6 +201,7 @@ int test_execve_bad(void) {
     unlink(path);
     return 1;
 }
+REGISTER_TEST(execve_bad, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.8  exit status (WEXITSTATUS)                                  */
@@ -211,6 +218,7 @@ int test_exit_status(void) {
     ASSERT_EQ(42, WEXITSTATUS(status));
     return 1;
 }
+REGISTER_TEST(exit_status, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.9  wait — WNOHANG                                             */
@@ -234,6 +242,7 @@ int test_wait_nohang(void) {
     ASSERT_TRUE(WIFEXITED(status));
     return 1;
 }
+REGISTER_TEST(wait_nohang, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.10  wait — specific PID                                       */
@@ -260,6 +269,7 @@ int test_wait_specific(void) {
     ASSERT_EQ(10, WEXITSTATUS(status));
     return 1;
 }
+REGISTER_TEST(wait_specific, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.11  wait — ECHILD (no children)                               */
@@ -270,6 +280,7 @@ int test_wait_echild(void) {
     ASSERT(errno == ECHILD);
     return 1;
 }
+REGISTER_TEST(wait_echild, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.12  getpid / getppid / gettid                                 */
@@ -288,6 +299,7 @@ int test_getpid_getppid(void) {
 
     return 1;
 }
+REGISTER_TEST(getpid_getppid, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.13  getuid / geteuid / getgid / getegid                       */
@@ -305,6 +317,7 @@ int test_getuid_getgid(void) {
     ASSERT_EQ(0, egid);
     return 1;
 }
+REGISTER_TEST(getuid_getgid, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.14  setuid / setgid                                           */
@@ -318,6 +331,7 @@ int test_setuid_setgid(void) {
     ASSERT_EQ(0, getgid());
     return 1;
 }
+REGISTER_TEST(setuid_setgid, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.15  setreuid / setregid                                       */
@@ -329,6 +343,7 @@ int test_setreuid_setregid(void) {
     ASSERT_EQ(0, geteuid());
     return 1;
 }
+REGISTER_TEST(setreuid_setregid, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.16  setresuid / setresgid / getresuid / getresgid              */
@@ -349,6 +364,7 @@ int test_setresuid_setresgid(void) {
     ASSERT_EQ(0, sgid);
     return 1;
 }
+REGISTER_TEST(setresuid_setresgid, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.17  setpgid / getpgid / getpgrp                               */
@@ -369,6 +385,7 @@ int test_setpgid_getpgid(void) {
     ASSERT_EQ(pid, new_pgrp);
     return 1;
 }
+REGISTER_TEST(setpgid_getpgid, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.18  setsid / getsid                                           */
@@ -394,6 +411,7 @@ int test_setsid_getsid(void) {
     ASSERT_EQ(0, WEXITSTATUS(status));
     return 1;
 }
+REGISTER_TEST(setsid_getsid, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.19  getgroups / setgroups                                     */
@@ -412,6 +430,7 @@ int test_getgroups_setgroups(void) {
     ASSERT_EQ(0, list[0]);
     return 1;
 }
+REGISTER_TEST(getgroups_setgroups, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.20  setfsuid / setfsgid                                       */
@@ -424,6 +443,7 @@ int test_setfsuid_setfsgid(void) {
     ASSERT_EQ(0, syscall(SYS_setfsgid, 0));
     return 1;
 }
+REGISTER_TEST(setfsuid_setfsgid, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.21  sched_yield                                               */
@@ -433,6 +453,7 @@ int test_sched_yield(void) {
     ASSERT_EQ(0, sched_yield());
     return 1;
 }
+REGISTER_TEST(sched_yield, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.22  prctl                                                     */
@@ -451,6 +472,7 @@ int test_prctl(void) {
     ASSERT_STREQ("testrunner", name);
     return 1;
 }
+REGISTER_TEST(prctl, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.23  arch_prctl                                                */
@@ -464,6 +486,7 @@ int test_arch_prctl(void) {
     ASSERT_NE(fs_base, 0);
     return 1;
 }
+REGISTER_TEST(arch_prctl, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.24  uname                                                     */
@@ -477,6 +500,7 @@ int test_uname(void) {
     ASSERT_GT(strlen(buf.machine), 0);
     return 1;
 }
+REGISTER_TEST(uname, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.25  sysinfo                                                   */
@@ -490,6 +514,7 @@ int test_sysinfo(void) {
     ASSERT_GT(info.procs, 0);
     return 1;
 }
+REGISTER_TEST(sysinfo, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.26  brk — heap growth                                         */
@@ -516,6 +541,7 @@ int test_brk(void) {
     ASSERT_EQ(after, cur);
     return 1;
 }
+REGISTER_TEST(brk, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.27  mmap / munmap                                             */
@@ -543,6 +569,7 @@ int test_mmap_munmap(void) {
 
     return 1;
 }
+REGISTER_TEST(mmap_munmap, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.28  mprotect                                                  */
@@ -567,6 +594,7 @@ int test_mprotect(void) {
     munmap(p, sz);
     return 1;
 }
+REGISTER_TEST(mprotect, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.29  mremap                                                    */
@@ -592,6 +620,7 @@ int test_mremap(void) {
     munmap(q, new_sz);
     return 1;
 }
+REGISTER_TEST(mremap, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.30  msync / mincore                                           */
@@ -615,6 +644,7 @@ int test_msync_mincore(void) {
     munmap(p, sz);
     return 1;
 }
+REGISTER_TEST(msync_mincore, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.31  madvise                                                   */
@@ -633,6 +663,7 @@ int test_madvise(void) {
     munmap(p, sz);
     return 1;
 }
+REGISTER_TEST(madvise, "Phase 3: Process & Scheduling");
 
 /* ---------------------------------------------------------------- */
 /*  3.32  iopl / ioperm                                            */
@@ -655,3 +686,4 @@ int test_iopl_ioperm(void) {
 
     return 1;
 }
+REGISTER_TEST(iopl_ioperm, "Phase 3: Process & Scheduling");

@@ -44,12 +44,42 @@
 #endif
 
 /* ------------------------------------------------------------------ */
-/*  Assertion helpers                                                  */
+/*  ANSI color helpers                                                 */
+/* ------------------------------------------------------------------ */
+
+#define ANSI_GREEN "\033[32m"
+#define ANSI_RED "\033[31m"
+#define ANSI_YELLOW "\033[33m"
+#define ANSI_CYAN "\033[36m"
+#define ANSI_RESET "\033[0m"
+
+/* ------------------------------------------------------------------ */
+/*  Test result codes                                                  */
+/* ------------------------------------------------------------------ */
+
+#define TEST_PASS 1
+#define TEST_FAIL 0
+#define TEST_SKIP 2
+
+/* ------------------------------------------------------------------ */
+/*  Failure pipe (child→parent, for summary)                         */
+/* ------------------------------------------------------------------ */
+
+extern int failure_pipe[2];
+
+/* ------------------------------------------------------------------ */
+/*  Assertion helpers (with diagnostics on failure)                   */
 /* ------------------------------------------------------------------ */
 
 #define ASSERT(cond)                                                                               \
     do {                                                                                           \
-        if (!(cond)) return 0;                                                                     \
+        if (!(cond)) {                                                                             \
+            fprintf(stderr, "\n  " ANSI_RED "!" ANSI_RESET " %s:%d: %s\n", __FILE__, __LINE__,     \
+                    #cond);                                                                        \
+            if (failure_pipe[1] >= 0)                                                              \
+                dprintf(failure_pipe[1], "%s:%d: %s\n", __FILE__, __LINE__, #cond);                \
+            return TEST_FAIL;                                                                      \
+        }                                                                                          \
     } while (0)
 #define ASSERT_EQ(a, b) ASSERT((a) == (b))
 #define ASSERT_NE(a, b) ASSERT((a) != (b))
@@ -65,6 +95,16 @@
 #define ASSERT_TRUE(c) ASSERT((c) != 0)
 #define ASSERT_FALSE(c) ASSERT((c) == 0)
 #define ASSERT_ERRNO(e) ASSERT(errno == (e))
+
+/* ------------------------------------------------------------------ */
+/*  SKIP helper                                                        */
+/* ------------------------------------------------------------------ */
+
+#define SKIP(reason)                                                                               \
+    do {                                                                                           \
+        fprintf(stderr, ANSI_YELLOW "SKIP" ANSI_RESET " (%s)\n", reason);                          \
+        return TEST_SKIP;                                                                          \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /*  Temp directory / file helpers                                      */
@@ -201,5 +241,30 @@ static inline int mkdir_p(const char *path) {
     if (mkdir(tmp, 0777) < 0 && errno != EEXIST) return -1;
     return 0;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Test auto-registration via constructor                            */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    const char *name;
+    const char *phase;
+    int (*func)(void);
+} test_entry_t;
+
+#define MAX_TESTS 256
+
+extern test_entry_t test_registry[MAX_TESTS];
+extern int test_count;
+
+#define REGISTER_TEST(tname, phase_name)                                                           \
+    static void __attribute__((constructor)) __reg_##tname(void) {                                 \
+        if (test_count < MAX_TESTS) {                                                              \
+            test_registry[test_count].name = #tname;                                               \
+            test_registry[test_count].phase = phase_name;                                          \
+            test_registry[test_count].func = test_##tname;                                         \
+            test_count++;                                                                          \
+        }                                                                                          \
+    }
 
 #endif /* TEST_HARNESS_H */
