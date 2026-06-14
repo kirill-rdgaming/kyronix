@@ -21,12 +21,17 @@ typedef struct block_hdr
 static block_hdr_t* g_head = NULL;
 static uint64_t g_brk = HEAP_START;
 
-static block_hdr_t* heap_grow(void)
+static block_hdr_t* heap_grow(uint64_t min_payload)
 {
-    if (g_brk + GROW_BYTES > HEAP_MAX)
+    uint64_t need = min_payload + HDR_SIZE;
+    if (need < GROW_BYTES)
+        need = GROW_BYTES;
+    need = (need + (PAGE_SIZE - 1)) & ~(uint64_t)(PAGE_SIZE - 1);
+
+    if (g_brk + need > HEAP_MAX)
         return NULL;
 
-    for (uint64_t va = g_brk; va < g_brk + GROW_BYTES; va += PAGE_SIZE)
+    for (uint64_t va = g_brk; va < g_brk + need; va += PAGE_SIZE)
     {
         void* phys = pmm_alloc();
         if (!phys)
@@ -39,7 +44,7 @@ static block_hdr_t* heap_grow(void)
     }
 
     block_hdr_t* blk = (block_hdr_t*) g_brk;
-    g_brk += GROW_BYTES;
+    g_brk += need;
 
     if (g_head)
     {
@@ -49,10 +54,10 @@ static block_hdr_t* heap_grow(void)
 
         if (last->free)
         {
-            last->size += GROW_BYTES;
+            last->size += need;
             return last;
         }
-        blk->size = GROW_BYTES - HDR_SIZE;
+        blk->size = need - HDR_SIZE;
         blk->free = 1;
         blk->prev = last;
         blk->next = NULL;
@@ -60,7 +65,7 @@ static block_hdr_t* heap_grow(void)
     }
     else
     {
-        blk->size = GROW_BYTES - HDR_SIZE;
+        blk->size = need - HDR_SIZE;
         blk->free = 1;
         blk->prev = NULL;
         blk->next = NULL;
@@ -71,7 +76,7 @@ static block_hdr_t* heap_grow(void)
 
 void heap_init(void)
 {
-    heap_grow();
+    heap_grow(0);
     log_info("Heap: base=0x%016lx  initial=%lu KiB", (uint64_t) HEAP_START,
              (uint64_t) (GROW_BYTES >> 10));
 }
@@ -93,11 +98,9 @@ void* kmalloc(uint64_t size)
 
     while (!blk || !blk->free || blk->size < size)
     {
-        blk = heap_grow();
+        blk = heap_grow(size);
         if (!blk)
             return NULL;
-        if (blk->size >= size)
-            break;
     }
 
     if (blk->size >= size + MIN_SPLIT)
