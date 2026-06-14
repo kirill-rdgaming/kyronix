@@ -786,6 +786,18 @@ __attribute__((noreturn)) void proc_do_exit(int code)
 {
     proc_t* p = cur();
     log_info("[pid %u] exit(%d)", p->pid, code);
+
+    /* clear stale pipe waiting pointer before slot is reused */
+    if (p->blocked_pipe) {
+        pipe_t* bp = (pipe_t*)p->blocked_pipe;
+        if (p->blocked_pipe_read) {
+            if (bp->waiting_reader == p) bp->waiting_reader = NULL;
+        } else {
+            if (bp->waiting_writer == p) bp->waiting_writer = NULL;
+        }
+        p->blocked_pipe = NULL;
+    }
+
     shm_proc_exit(p->pid);
     proc_release_fdtable(p);
 

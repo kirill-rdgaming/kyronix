@@ -53,6 +53,8 @@ typedef struct proc
     uint64_t itimer_value_ms;
     uint64_t itimer_interval_ms;
     uint64_t itimer_next_tick;
+    void*    blocked_pipe;       /* pipe_t* this proc is sleeping on, NULL ifnone */
+    int      blocked_pipe_read;  /* 1 = waiting_reader, 0 = waiting_writer */
     uint8_t fpu_state[512] __attribute__((aligned(16)));
 } proc_t;
 

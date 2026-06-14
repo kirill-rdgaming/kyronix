@@ -49,20 +49,27 @@ int64_t pipe_read(pipe_t* p, void* buf, uint64_t len)
                 break;
             if (done > 0)
                 break; /* return data already available
-                            don't wait to fill buf */
+                            dont wait to fill buf */
             proc_t* _rp = g_current_proc;
-            if (_rp) _rp->wakeup_tick = g_ticks + 10;
+            if (_rp) {
+                _rp->wakeup_tick      = g_ticks + 10;
+                _rp->blocked_pipe      = p;
+                _rp->blocked_pipe_read = 1;
+            }
             p->waiting_reader = _rp;
             sched_yield_blocking();
             p->waiting_reader = NULL;
-            if (_rp) _rp->wakeup_tick = 0;
+            if (_rp) {
+                _rp->blocked_pipe  = NULL;
+                _rp->wakeup_tick   = 0;
+            }
             continue;
         }
         out[done++] = p->buf[p->rpos];
         p->rpos = (p->rpos + 1) % PIPE_BUFSZ;
         p->count--;
     }
-
+    // fixed slots reuse
     /* wake writer that was blocked on full buffer */
     if (p->waiting_writer) {
         proc_t* writer = (proc_t*) p->waiting_writer;
@@ -89,11 +96,18 @@ int64_t pipe_peek(pipe_t* p, void* buf, uint64_t len, uint64_t skip)
             if (done > 0)
                 break;
             proc_t* _rp = g_current_proc;
-            if (_rp) _rp->wakeup_tick = g_ticks + 10;
+            if (_rp) {
+                _rp->wakeup_tick      = g_ticks + 10;
+                _rp->blocked_pipe      = p;
+                _rp->blocked_pipe_read = 1;
+            }
             p->waiting_reader = _rp;
             sched_yield_blocking();
             p->waiting_reader = NULL;
-            if (_rp) _rp->wakeup_tick = 0;
+            if (_rp) {
+                _rp->blocked_pipe = NULL;
+                _rp->wakeup_tick  = 0;
+            }
             continue;
         }
 
@@ -125,9 +139,15 @@ int64_t pipe_write(pipe_t* p, const void* buf, uint64_t len)
                 proc_send_signal(g_current_proc, SIGPIPE);
                 return done ? (int64_t)done : -(int64_t)EPIPE;
             }
-            p->waiting_writer = g_current_proc;
+            proc_t* _wp = g_current_proc;
+            if (_wp) {
+                _wp->blocked_pipe      = p;
+                _wp->blocked_pipe_read = 0;
+            }
+            p->waiting_writer = _wp;
             sched_yield_blocking();
             p->waiting_writer = NULL;
+            if (_wp) _wp->blocked_pipe = NULL;
         }
         uint32_t wpos = (p->rpos + p->count) % PIPE_BUFSZ;
         p->buf[wpos] = in[done++];
