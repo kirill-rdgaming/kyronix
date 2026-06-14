@@ -1,9 +1,7 @@
 #include "common.h"
-int main(int argc, char** argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "cmp";
-    if (argc != 3)
-        kx_die("usage: cmp FILE1 FILE2");
+    if (argc != 3) kx_die("usage: cmp FILE1 FILE2");
     FILE *a = fopen(argv[1], "rb"), *b = fopen(argv[2], "rb");
     if (!a) {
         kx_warn(argv[1]);

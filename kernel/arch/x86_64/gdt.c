@@ -36,8 +36,7 @@ typedef struct {
 static gdt_t g_gdt;
 static tss_t g_tss __attribute__((aligned(16)));
 
-void gdt_init(void)
-{
+void gdt_init(void) {
     g_gdt.null = 0ULL;
     g_gdt.kernel_code = 0x00AF9A000000FFFFULL;
     g_gdt.kernel_data = 0x00CF92000000FFFFULL;
@@ -88,7 +87,4 @@ void gdt_init(void)
                      : "rax", "memory");
 }
 
-void gdt_set_kernel_stack(uint64_t rsp0)
-{
-    g_tss.rsp0 = rsp0;
-}
+void gdt_set_kernel_stack(uint64_t rsp0) { g_tss.rsp0 = rsp0; }

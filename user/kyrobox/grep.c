@@ -1,8 +1,7 @@
 #include "common.h"
 #include <string.h>
 #include <unistd.h>
-int main(int argc, char** argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "grep";
     bool only_matching = false;
     int first = 1;
@@ -10,24 +9,22 @@ int main(int argc, char** argv)
         only_matching = true;
         first = 2;
     }
-    if (argc < first + 1)
-        kx_die("usage: grep [-o] PATTERN [FILE...]");
-    const char* pat = argv[first];
+    if (argc < first + 1) kx_die("usage: grep [-o] PATTERN [FILE...]");
+    const char *pat = argv[first];
     first++;
-    if (first == argc)
-        argv[argc++] = NULL;
+    if (first == argc) argv[argc++] = NULL;
     int matched = 0, rc = 1;
     for (int a = first; a < argc; a++) {
-        FILE* f = argv[a] ? fopen(argv[a], "r") : stdin;
+        FILE *f = argv[a] ? fopen(argv[a], "r") : stdin;
         if (!f) {
             kx_warn(argv[a]);
             rc = 2;
             continue;
         }
-        char* line = NULL;
+        char *line = NULL;
         size_t cap = 0;
         while (getline(&line, &cap, f) >= 0) {
-            char* hit = strstr(line, pat);
+            char *hit = strstr(line, pat);
             if (hit) {
                 if (only_matching) {
                     fputs(pat, stdout);
@@ -39,8 +36,7 @@ int main(int argc, char** argv)
             }
         }
         free(line);
-        if (argv[a])
-            fclose(f);
+        if (argv[a]) fclose(f);
     }
     return matched ? 0 : rc;
 }

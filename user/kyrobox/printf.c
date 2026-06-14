@@ -1,11 +1,9 @@
 #include "common.h"
-int main(int argc, char** argv)
-{
-    if (argc < 2)
-        return 0;
-    const char* fmt = argv[1];
+int main(int argc, char **argv) {
+    if (argc < 2) return 0;
+    const char *fmt = argv[1];
     int arg = 2;
-    for (const char* p = fmt; *p; p++) {
+    for (const char *p = fmt; *p; p++) {
         if (*p != '\\' && *p != '%') {
             putchar(*p);
             continue;
@@ -33,8 +31,7 @@ int main(int argc, char** argv)
             printf("%ld", arg < argc ? strtol(argv[arg++], NULL, 10) : 0L);
         else {
             putchar('%');
-            if (*p)
-                putchar(*p);
+            if (*p) putchar(*p);
         }
     }
     return 0;

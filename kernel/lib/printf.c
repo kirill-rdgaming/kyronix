@@ -5,51 +5,42 @@
 #include <stdint.h>
 
 static printf_putchar_fn g_putchar = NULL;
-static void* g_putchar_ctx = NULL;
+static void *g_putchar_ctx = NULL;
 
-void printf_set_putchar(printf_putchar_fn fn, void* ctx)
-{
+void printf_set_putchar(printf_putchar_fn fn, void *ctx) {
     g_putchar = fn;
     g_putchar_ctx = ctx;
 }
 
 typedef struct {
-    char* buf;
+    char *buf;
     size_t size;
     size_t pos;
 } buf_ctx_t;
 
-static void buf_putchar(char c, void* ctx)
-{
-    buf_ctx_t* b = ctx;
-    if (b->pos + 1 < b->size)
-        b->buf[b->pos++] = c;
+static void buf_putchar(char c, void *ctx) {
+    buf_ctx_t *b = ctx;
+    if (b->pos + 1 < b->size) b->buf[b->pos++] = c;
 }
 
-static void emit(printf_putchar_fn fn, void* ctx, char c, int* count)
-{
+static void emit(printf_putchar_fn fn, void *ctx, char c, int *count) {
     fn(c, ctx);
     (*count)++;
 }
 
-static void emit_str(printf_putchar_fn fn, void* ctx, const char* s, int width, bool left,
-                     int* count)
-{
+static void emit_str(printf_putchar_fn fn, void *ctx, const char *s, int width, bool left,
+                     int *count) {
     int len = (int) strlen(s);
     if (!left)
-        for (int i = len; i < width; i++)
-            emit(fn, ctx, ' ', count);
-    while (*s)
-        emit(fn, ctx, *s++, count);
+        for (int i = len; i < width; i++) emit(fn, ctx, ' ', count);
+    while (*s) emit(fn, ctx, *s++, count);
     if (left)
-        for (int i = len; i < width; i++)
-            emit(fn, ctx, ' ', count);
+        for (int i = len; i < width; i++) emit(fn, ctx, ' ', count);
 }
 
-static void emit_uint(printf_putchar_fn fn, void* ctx, uint64_t val, int base, bool upper,
-                      int width, bool left, bool zero_pad, int* count)
-{
-    const char* digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+static void emit_uint(printf_putchar_fn fn, void *ctx, uint64_t val, int base, bool upper,
+                      int width, bool left, bool zero_pad, int *count) {
+    const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
     char buf[64];
     int len = 0;
     if (val == 0) {
@@ -69,17 +60,13 @@ static void emit_uint(printf_putchar_fn fn, void* ctx, uint64_t val, int base, b
 
     char pad = zero_pad ? '0' : ' ';
     if (!left)
-        for (int i = len; i < width; i++)
-            emit(fn, ctx, pad, count);
-    for (int i = 0; i < len; i++)
-        emit(fn, ctx, buf[i], count);
+        for (int i = len; i < width; i++) emit(fn, ctx, pad, count);
+    for (int i = 0; i < len; i++) emit(fn, ctx, buf[i], count);
     if (left)
-        for (int i = len; i < width; i++)
-            emit(fn, ctx, ' ', count);
+        for (int i = len; i < width; i++) emit(fn, ctx, ' ', count);
 }
 
-int vprintf_cb(printf_putchar_fn fn, void* ctx, const char* fmt, va_list ap)
-{
+int vprintf_cb(printf_putchar_fn fn, void *ctx, const char *fmt, va_list ap) {
     int count = 0;
 
     while (*fmt) {
@@ -95,18 +82,14 @@ int vprintf_cb(printf_putchar_fn fn, void* ctx, const char* fmt, va_list ap)
 
         // flags
         while (*fmt == '-' || *fmt == '0') {
-            if (*fmt == '-')
-                left = true;
-            if (*fmt == '0')
-                zero_pad = true;
+            if (*fmt == '-') left = true;
+            if (*fmt == '0') zero_pad = true;
             fmt++;
         }
-        if (left)
-            zero_pad = false;
+        if (left) zero_pad = false;
 
         // width
-        while (*fmt >= '0' && *fmt <= '9')
-            width = width * 10 + (*fmt++ - '0');
+        while (*fmt >= '0' && *fmt <= '9') width = width * 10 + (*fmt++ - '0');
 
         // lmod
         bool is_long = false;
@@ -114,16 +97,14 @@ int vprintf_cb(printf_putchar_fn fn, void* ctx, const char* fmt, va_list ap)
             is_long = true;
             fmt++;
         }
-        if (*fmt == 'l') {
-            fmt++;
-        }
+        if (*fmt == 'l') { fmt++; }
 
         switch (*fmt++) {
         case 'c':
             emit(fn, ctx, (char) va_arg(ap, int), &count);
             break;
         case 's': {
-            const char* s = va_arg(ap, const char*);
+            const char *s = va_arg(ap, const char *);
             emit_str(fn, ctx, s ? s : "(null)", width, left, &count);
             break;
         }
@@ -154,7 +135,7 @@ int vprintf_cb(printf_putchar_fn fn, void* ctx, const char* fmt, va_list ap)
                       width, left, zero_pad, &count);
             break;
         case 'p': {
-            uintptr_t p = (uintptr_t) va_arg(ap, void*);
+            uintptr_t p = (uintptr_t) va_arg(ap, void *);
             emit(fn, ctx, '0', &count);
             emit(fn, ctx, 'x', &count);
             emit_uint(fn, ctx, p, 16, false, 16, false, true, &count);
@@ -171,17 +152,14 @@ int vprintf_cb(printf_putchar_fn fn, void* ctx, const char* fmt, va_list ap)
     return count;
 }
 
-int vsnprintf(char* buf, size_t size, const char* fmt, va_list ap)
-{
-    buf_ctx_t ctx = {buf, size, 0};
+int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
+    buf_ctx_t ctx = { buf, size, 0 };
     int n = vprintf_cb(buf_putchar, &ctx, fmt, ap);
-    if (size)
-        buf[ctx.pos] = '\0';
+    if (size) buf[ctx.pos] = '\0';
     return n;
 }
 
-int snprintf(char* buf, size_t size, const char* fmt, ...)
-{
+int snprintf(char *buf, size_t size, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     int n = vsnprintf(buf, size, fmt, ap);
@@ -189,10 +167,8 @@ int snprintf(char* buf, size_t size, const char* fmt, ...)
     return n;
 }
 
-int kprintf(const char* fmt, ...)
-{
-    if (!g_putchar)
-        return 0;
+int kprintf(const char *fmt, ...) {
+    if (!g_putchar) return 0;
     va_list ap;
     va_start(ap, fmt);
     int n = vprintf_cb(g_putchar, g_putchar_ctx, fmt, ap);
@@ -200,14 +176,12 @@ int kprintf(const char* fmt, ...)
     return n;
 }
 
-static void serial_putchar_cb(char c, void* ctx)
-{
+static void serial_putchar_cb(char c, void *ctx) {
     (void) ctx;
     serial_putchar(COM1, c);
 }
 
-int kdbg(const char* fmt, ...)
-{
+int kdbg(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     int n = vprintf_cb(serial_putchar_cb, NULL, fmt, ap);

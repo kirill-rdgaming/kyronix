@@ -1,6 +1,5 @@
 #include "common.h"
-int main(int argc, char** argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "mkdir";
     bool parents = false;
     int first = 1;
@@ -8,8 +7,7 @@ int main(int argc, char** argv)
         parents = true;
         first = 2;
     }
-    if (first == argc)
-        kx_die("missing operand");
+    if (first == argc) kx_die("missing operand");
     int rc = 0;
     for (int i = first; i < argc; i++) {
         int r = parents ? kx_mkdir_p(argv[i], 0777) : mkdir(argv[i], 0777);

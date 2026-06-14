@@ -1,9 +1,7 @@
 #include "common.h"
-int main(int argc, char** argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "touch";
-    if (argc < 2)
-        kx_die("missing operand");
+    if (argc < 2) kx_die("missing operand");
     int rc = 0;
     for (int i = 1; i < argc; i++) {
         int fd = open(argv[i], O_WRONLY | O_CREAT, 0666);

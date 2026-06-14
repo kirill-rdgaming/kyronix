@@ -1,6 +1,5 @@
 #include "common.h"
-int main(int argc, char** argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "dd";
     const char *ifile = NULL, *ofile = NULL;
     size_t bs = 512;
@@ -15,21 +14,19 @@ int main(int argc, char** argv)
         else if (strncmp(argv[i], "count=", 6) == 0)
             count = strtol(argv[i] + 6, NULL, 10);
     }
-    FILE* in = ifile ? fopen(ifile, "rb") : stdin;
-    FILE* out = ofile ? fopen(ofile, "wb") : stdout;
+    FILE *in = ifile ? fopen(ifile, "rb") : stdin;
+    FILE *out = ofile ? fopen(ofile, "wb") : stdout;
     if (!in) {
         kx_warn(ifile);
         return 1;
     }
     if (!out) {
         kx_warn(ofile);
-        if (ifile)
-            fclose(in);
+        if (ifile) fclose(in);
         return 1;
     }
-    char* buf = malloc(bs);
-    if (!buf)
-        return 1;
+    char *buf = malloc(bs);
+    if (!buf) return 1;
     long blocks = 0;
     size_t n;
     while ((count < 0 || blocks < count) && (n = fread(buf, 1, bs, in)) > 0) {
@@ -40,9 +37,7 @@ int main(int argc, char** argv)
         blocks++;
     }
     free(buf);
-    if (ifile)
-        fclose(in);
-    if (ofile)
-        fclose(out);
+    if (ifile) fclose(in);
+    if (ofile) fclose(out);
     return 0;
 }

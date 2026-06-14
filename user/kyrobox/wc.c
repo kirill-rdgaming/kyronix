@@ -1,15 +1,12 @@
 #include "common.h"
-int main(int argc, char** argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "wc";
     int first = 1;
-    if (argc > 1 && argv[1][0] == '-')
-        first = 2;
-    if (first == argc)
-        argv[argc++] = NULL;
+    if (argc > 1 && argv[1][0] == '-') first = 2;
+    if (first == argc) argv[argc++] = NULL;
     int rc = 0;
     for (int a = first; a < argc; a++) {
-        FILE* f = argv[a] ? fopen(argv[a], "r") : stdin;
+        FILE *f = argv[a] ? fopen(argv[a], "r") : stdin;
         if (!f) {
             kx_warn(argv[a]);
             rc = 1;
@@ -19,8 +16,7 @@ int main(int argc, char** argv)
         int inword = 0, c;
         while ((c = fgetc(f)) != EOF) {
             bytes++;
-            if (c == '\n')
-                lines++;
+            if (c == '\n') lines++;
             if (isspace(c))
                 inword = 0;
             else if (!inword) {
@@ -29,11 +25,9 @@ int main(int argc, char** argv)
             }
         }
         printf("%ld %ld %ld", lines, words, bytes);
-        if (argv[a])
-            printf(" %s", argv[a]);
+        if (argv[a]) printf(" %s", argv[a]);
         putchar('\n');
-        if (argv[a])
-            fclose(f);
+        if (argv[a]) fclose(f);
     }
     return rc;
 }

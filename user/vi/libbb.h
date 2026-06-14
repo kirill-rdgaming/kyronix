@@ -114,20 +114,14 @@ typedef signed char smallint;
 #define BB_BT "kyronix"
 
 struct globals;
-extern struct globals* ptr_to_globals;
+extern struct globals *ptr_to_globals;
 #define SET_PTR_TO_GLOBALS(p)                                                                      \
-    do {                                                                                           \
-        ptr_to_globals = (p);                                                                      \
-    } while (0)
+    do { ptr_to_globals = (p); } while (0)
 #define MAIN_EXTERNALLY_VISIBLE
 
-static inline int bb_putchar(int c)
-{
-    return putchar(c);
-}
+static inline int bb_putchar(int c) { return putchar(c); }
 
-static inline void bb_error_msg_and_die(const char* s, ...)
-{
+static inline void bb_error_msg_and_die(const char *s, ...) {
     va_list ap;
     va_start(ap, s);
     vfprintf(stderr, s, ap);
@@ -136,15 +130,13 @@ static inline void bb_error_msg_and_die(const char* s, ...)
     exit(1);
 }
 
-static inline void bb_show_usage(void)
-{
+static inline void bb_show_usage(void) {
     fprintf(stderr, "Usage: vi [OPTIONS] [FILE]...\n");
     exit(1);
 }
 
-static inline void* xmalloc(size_t size)
-{
-    void* p = malloc(size);
+static inline void *xmalloc(size_t size) {
+    void *p = malloc(size);
     if (!p) {
         fprintf(stderr, "Out of memory\n");
         exit(1);
@@ -152,9 +144,8 @@ static inline void* xmalloc(size_t size)
     return p;
 }
 
-static inline void* xzalloc(size_t size)
-{
-    void* p = calloc(1, size);
+static inline void *xzalloc(size_t size) {
+    void *p = calloc(1, size);
     if (!p) {
         fprintf(stderr, "Out of memory\n");
         exit(1);
@@ -162,9 +153,8 @@ static inline void* xzalloc(size_t size)
     return p;
 }
 
-static inline void* xrealloc(void* p, size_t size)
-{
-    void* q = realloc(p, size);
+static inline void *xrealloc(void *p, size_t size) {
+    void *q = realloc(p, size);
     if (!q) {
         fprintf(stderr, "Out of memory\n");
         exit(1);
@@ -172,9 +162,8 @@ static inline void* xrealloc(void* p, size_t size)
     return q;
 }
 
-static inline char* xstrdup(const char* s)
-{
-    char* p = strdup(s);
+static inline char *xstrdup(const char *s) {
+    char *p = strdup(s);
     if (!p) {
         fprintf(stderr, "Out of memory\n");
         exit(1);
@@ -182,9 +171,8 @@ static inline char* xstrdup(const char* s)
     return p;
 }
 
-static inline char* xstrndup(const char* s, size_t n)
-{
-    char* p = strndup(s, n);
+static inline char *xstrndup(const char *s, size_t n) {
+    char *p = strndup(s, n);
     if (!p) {
         fprintf(stderr, "Out of memory\n");
         exit(1);
@@ -192,34 +180,28 @@ static inline char* xstrndup(const char* s, size_t n)
     return p;
 }
 
-static inline char* skip_whitespace(const char* s)
-{
-    while (*s == ' ' || *s == '\t')
-        s++;
-    return (char*) s;
+static inline char *skip_whitespace(const char *s) {
+    while (*s == ' ' || *s == '\t') s++;
+    return (char *) s;
 }
 
-static inline char* skip_non_whitespace(const char* s)
-{
-    while (*s && *s != ' ' && *s != '\t')
-        s++;
-    return (char*) s;
+static inline char *skip_non_whitespace(const char *s) {
+    while (*s && *s != ' ' && *s != '\t') s++;
+    return (char *) s;
 }
 
-static inline char* last_char_is(const char* s, int c)
-{
-    if (!s || !*s)
-        return NULL;
+static inline char *last_char_is(const char *s, int c) {
+    if (!s || !*s) return NULL;
     size_t sz = strlen(s) - 1;
-    return (s[sz] == (char) c) ? (char*) (s + sz) : NULL;
+    return (s[sz] == (char) c) ? (char *) (s + sz) : NULL;
 }
 
-int get_terminal_width_height(int, unsigned*, unsigned*);
-void tcsetattr_stdin_TCSANOW(const struct termios*);
+int get_terminal_width_height(int, unsigned *, unsigned *);
+void tcsetattr_stdin_TCSANOW(const struct termios *);
 void fflush_all(void);
-ssize_t full_read(int, void*, size_t);
-ssize_t full_write(int, const void*, size_t);
-int safe_poll(struct pollfd*, nfds_t, int);
-int32_t read_key(int, char*, int);
+ssize_t full_read(int, void *, size_t);
+ssize_t full_write(int, const void *, size_t);
+int safe_poll(struct pollfd *, nfds_t, int);
+int32_t read_key(int, char *, int);
 
 #endif

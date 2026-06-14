@@ -17,7 +17,7 @@
 #define COLOR_BG RGB(0, 0, 0)          // #000000
 
 typedef struct {
-    void* addr;
+    void *addr;
     uint64_t phys_addr;
     uint64_t width;
     uint64_t height;
@@ -30,13 +30,13 @@ typedef struct {
 
 extern fb_t g_fb;
 
-void fb_init(struct limine_framebuffer* fb);
+void fb_init(struct limine_framebuffer *fb);
 void fb_clear(uint32_t color);
 void fb_put_pixel(uint32_t x, uint32_t y, uint32_t color);
 void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color);
 
 void fb_putchar(char c);
-void fb_write(const char* s);
+void fb_write(const char *s);
 void fb_set_color(uint32_t fg, uint32_t bg);
 void fb_cursor_enable(int enable);
 void fb_cursor_update(void);

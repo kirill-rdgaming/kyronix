@@ -49,29 +49,26 @@ typedef struct {
 #define FBIOBLANK 0x4611
 #define EPERM 1
 
-static int64_t fb0_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
-{
+static int64_t fb0_ioctl(vfs_node_t *n, uint64_t req, uint64_t arg) {
     (void) n;
     switch (req) {
     case FBIOGET_VSCREENINFO: {
-        fb_var_t* v = (fb_var_t*) (uintptr_t) arg;
-        if (!v)
-            return -22;
-        if (!uptr_ok_w(v, sizeof(*v)))
-            return -14;
+        fb_var_t *v = (fb_var_t *) (uintptr_t) arg;
+        if (!v) return -22;
+        if (!uptr_ok_w(v, sizeof(*v))) return -14;
         memset(v, 0, sizeof(*v));
         v->xres = v->xres_virtual = (uint32_t) g_fb.width;
         v->yres = v->yres_virtual = (uint32_t) g_fb.height;
         v->bits_per_pixel = g_fb.bpp;
         if (g_fb.bpp == 32) {
-            v->red = (fb_bitfield_t) {16, 8, 0};
-            v->green = (fb_bitfield_t) {8, 8, 0};
-            v->blue = (fb_bitfield_t) {0, 8, 0};
-            v->transp = (fb_bitfield_t) {24, 8, 0};
+            v->red = (fb_bitfield_t) { 16, 8, 0 };
+            v->green = (fb_bitfield_t) { 8, 8, 0 };
+            v->blue = (fb_bitfield_t) { 0, 8, 0 };
+            v->transp = (fb_bitfield_t) { 24, 8, 0 };
         } else if (g_fb.bpp == 24) {
-            v->red = (fb_bitfield_t) {16, 8, 0};
-            v->green = (fb_bitfield_t) {8, 8, 0};
-            v->blue = (fb_bitfield_t) {0, 8, 0};
+            v->red = (fb_bitfield_t) { 16, 8, 0 };
+            v->green = (fb_bitfield_t) { 8, 8, 0 };
+            v->blue = (fb_bitfield_t) { 0, 8, 0 };
         }
         v->activate = 0;
         v->height = v->width = 0xFFFFFFFF; /* unknown physical size */
@@ -80,11 +77,9 @@ static int64_t fb0_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
     case FBIOPUT_VSCREENINFO:
         return 0; /* accept but ignore mode changes */
     case FBIOGET_FSCREENINFO: {
-        fb_fix_t* f = (fb_fix_t*) (uintptr_t) arg;
-        if (!f)
-            return -22;
-        if (!uptr_ok_w(f, sizeof(*f)))
-            return -14;
+        fb_fix_t *f = (fb_fix_t *) (uintptr_t) arg;
+        if (!f) return -22;
+        if (!uptr_ok_w(f, sizeof(*f))) return -14;
         memset(f, 0, sizeof(*f));
         memcpy(f->id, "kyronixfb", 9);
         f->smem_start = g_fb.phys_addr;
@@ -101,39 +96,31 @@ static int64_t fb0_ioctl(vfs_node_t* n, uint64_t req, uint64_t arg)
     }
 }
 
-static int64_t fb0_mmap(vfs_node_t* n, uint64_t off, uint64_t len, uint64_t va, uint64_t vflags)
-{
+static int64_t fb0_mmap(vfs_node_t *n, uint64_t off, uint64_t len, uint64_t va, uint64_t vflags) {
     (void) n;
     (void) off;
-    proc_t* p = g_current_proc;
-    if (!p || !p->space)
-        return -22;
-    if (p->euid != 0)
-        return -(int64_t) EPERM;
+    proc_t *p = g_current_proc;
+    if (!p || !p->space) return -22;
+    if (p->euid != 0) return -(int64_t) EPERM;
     fb_cursor_enable(0);
     uint64_t phys = g_fb.phys_addr;
     uint64_t flags = vflags | VMM_PRESENT | VMM_USER | VMM_WRITE;
-    for (uint64_t o = 0; o < len; o += 0x1000)
-        vmm_map(p->space, va + o, phys + o, flags);
+    for (uint64_t o = 0; o < len; o += 0x1000) vmm_map(p->space, va + o, phys + o, flags);
     return (int64_t) va;
 }
 
-static int64_t fb0_read(vfs_node_t* n, char* buf, uint64_t len, uint64_t off)
-{
+static int64_t fb0_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
     (void) n;
     uint64_t fb_size = g_fb.pitch * g_fb.height;
-    if (off >= fb_size)
-        return 0;
+    if (off >= fb_size) return 0;
     uint64_t r = fb_size - off < len ? fb_size - off : len;
-    __builtin_memcpy(buf, (uint8_t*) g_fb.addr + off, r);
+    __builtin_memcpy(buf, (uint8_t *) g_fb.addr + off, r);
     return (int64_t) r;
 }
 
-void fbdev_init(void)
-{
-    vfs_node_t* n = vfs_create_chr("/dev/fb0", fb0_read, NULL);
-    if (!n)
-        return;
+void fbdev_init(void) {
+    vfs_node_t *n = vfs_create_chr("/dev/fb0", fb0_read, NULL);
+    if (!n) return;
     n->mode = S_IFCHR | 0600;
     n->chr_ioctl = fb0_ioctl;
     n->chr_mmap = fb0_mmap;

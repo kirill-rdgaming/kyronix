@@ -20,36 +20,28 @@
 
 struct service {
     char name[64];
-    char* argv[MAX_ARGS];
+    char *argv[MAX_ARGS];
 };
 
 static struct service services[MAX_SERVICES];
 static int nservices;
 
-static char* trim(char* s)
-{
-    while (*s && isspace(*s))
-        s++;
-    char* e = s + strlen(s);
-    while (e > s && isspace(*(e - 1)))
-        e--;
+static char *trim(char *s) {
+    while (*s && isspace(*s)) s++;
+    char *e = s + strlen(s);
+    while (e > s && isspace(*(e - 1))) e--;
     *e = '\0';
     return s;
 }
 
-static void status(const char* msg, int ok)
-{
+static void status(const char *msg, int ok) {
     fprintf(stderr, COL_GRN " *" COL_RST " %s ...\033[%dG[ %s%s" COL_RST " ]\n", msg, STATUS_COL,
             ok ? COL_GRN : COL_RED, ok ? "ok" : "!!");
 }
 
-static void info(const char* msg)
-{
-    fprintf(stderr, "%s\n", msg);
-}
+static void info(const char *msg) { fprintf(stderr, "%s\n", msg); }
 
-static void spawn(struct service* svc)
-{
+static void spawn(struct service *svc) {
     pid_t pid = fork();
     if (pid == 0) {
         signal(SIGCHLD, SIG_DFL);
@@ -61,9 +53,8 @@ static void spawn(struct service* svc)
     }
 }
 
-static void read_rc_conf(void)
-{
-    FILE* f = fopen("/etc/rc.conf", "r");
+static void read_rc_conf(void) {
+    FILE *f = fopen("/etc/rc.conf", "r");
     if (!f) {
         status("Reading /etc/rc.conf", 0);
         return;
@@ -73,33 +64,28 @@ static void read_rc_conf(void)
     int in_services = 0;
 
     while (fgets(line, sizeof(line), f)) {
-        char* p = trim(line);
-        if (!*p || *p == '#' || *p == ';')
-            continue;
+        char *p = trim(line);
+        if (!*p || *p == '#' || *p == ';') continue;
         if (*p == '[') {
-            char* end = strchr(p + 1, ']');
-            if (!end)
-                continue;
+            char *end = strchr(p + 1, ']');
+            if (!end) continue;
             *end = '\0';
             in_services = (strcmp(p + 1, "services") == 0);
             continue;
         }
-        if (!in_services || nservices >= MAX_SERVICES)
-            continue;
+        if (!in_services || nservices >= MAX_SERVICES) continue;
 
-        char* colon = strchr(p, ':');
-        if (!colon)
-            continue;
+        char *colon = strchr(p, ':');
+        if (!colon) continue;
         *colon++ = '\0';
 
-        char* name = trim(p);
-        char* cmd = trim(colon);
-        if (!*name || !*cmd)
-            continue;
+        char *name = trim(p);
+        char *cmd = trim(colon);
+        if (!*name || !*cmd) continue;
 
         strncpy(services[nservices].name, name, sizeof(services[nservices].name) - 1);
 
-        char* token = strtok(cmd, " ");
+        char *token = strtok(cmd, " ");
         int argc = 0;
         while (token && argc < MAX_ARGS - 1) {
             services[nservices].argv[argc++] = strdup(token);
@@ -113,15 +99,13 @@ static void read_rc_conf(void)
     status("Reading /etc/rc.conf", 1);
 }
 
-int main(void)
-{
+int main(void) {
     int fd = open("/dev/tty", O_RDWR);
     if (fd >= 0) {
         dup2(fd, STDIN_FILENO);
         dup2(fd, STDOUT_FILENO);
         dup2(fd, STDERR_FILENO);
-        if (fd > STDERR_FILENO)
-            close(fd);
+        if (fd > STDERR_FILENO) close(fd);
     }
 
     signal(SIGCHLD, SIG_IGN);
@@ -147,6 +131,5 @@ int main(void)
 
     fprintf(stderr, "\n");
 
-    for (;;)
-        pause();
+    for (;;) pause();
 }

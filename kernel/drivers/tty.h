@@ -66,15 +66,15 @@ struct termios_s {
     uint8_t c_cc[NCCS];
 };
 
-int64_t tty_read(char* buf, uint64_t len);
-int64_t tty_write(const char* buf, uint64_t len);
+int64_t tty_read(char *buf, uint64_t len);
+int64_t tty_write(const char *buf, uint64_t len);
 bool tty_data_ready(void);
 void tty_putchar(char c);
 int tty_get_fg_pgid(void);
 void tty_set_fg_pgid(int pgid);
 uint32_t tty_get_lflag(void);
 void tty_set_lflag(uint32_t lflag);
-void tty_get_termios(struct termios_s* t);
-void tty_set_termios(const struct termios_s* t);
+void tty_get_termios(struct termios_s *t);
+void tty_set_termios(const struct termios_s *t);
 void tty_process_input(void);
 void tty_check_signals(void);

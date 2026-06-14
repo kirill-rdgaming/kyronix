@@ -1,6 +1,5 @@
 #include "common.h"
-int main(int argc, char** argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "ln";
     bool sym = false;
     int first = 1;
@@ -8,8 +7,7 @@ int main(int argc, char** argv)
         sym = true;
         first = 2;
     }
-    if (argc - first != 2)
-        kx_die("usage: ln [-s] TARGET LINK");
+    if (argc - first != 2) kx_die("usage: ln [-s] TARGET LINK");
     if ((sym ? symlink(argv[first], argv[first + 1]) : link(argv[first], argv[first + 1])) < 0) {
         kx_warn(argv[first + 1]);
         return 1;

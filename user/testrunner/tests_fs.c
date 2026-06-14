@@ -7,8 +7,7 @@
 /* ---------------------------------------------------------------- */
 /*  2.1  open / close                                               */
 /* ---------------------------------------------------------------- */
-int test_open_close(void)
-{
+int test_open_close(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "open_close_test");
 
@@ -42,8 +41,7 @@ int test_open_close(void)
 /* ---------------------------------------------------------------- */
 /*  2.2  read / write                                               */
 /* ---------------------------------------------------------------- */
-int test_read_write(void)
-{
+int test_read_write(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "rw_test");
     const char *data = "hello world\n";
@@ -53,14 +51,14 @@ int test_read_write(void)
     /* write */
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     ASSERT_GE(fd, 0);
-    ASSERT_EQ((ssize_t)len, write(fd, data, len));
+    ASSERT_EQ((ssize_t) len, write(fd, data, len));
     close(fd);
 
     /* read back */
     fd = open(path, O_RDONLY);
     ASSERT_GE(fd, 0);
     ssize_t n = read(fd, buf, sizeof(buf));
-    ASSERT_EQ((ssize_t)len, n);
+    ASSERT_EQ((ssize_t) len, n);
     buf[n] = '\0';
     ASSERT_STREQ(data, buf);
     close(fd);
@@ -69,7 +67,7 @@ int test_read_write(void)
     fd = open(path, O_RDONLY);
     ASSERT_GE(fd, 0);
     n = read(fd, buf, sizeof(buf));
-    ASSERT_EQ((ssize_t)len, n);
+    ASSERT_EQ((ssize_t) len, n);
     n = read(fd, buf, sizeof(buf));
     ASSERT_EQ(n, 0);
     close(fd);
@@ -87,8 +85,7 @@ int test_read_write(void)
 /* ---------------------------------------------------------------- */
 /*  2.3  lseek                                                      */
 /* ---------------------------------------------------------------- */
-int test_lseek(void)
-{
+int test_lseek(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "lseek_test");
     const char *data = "0123456789";
@@ -130,8 +127,7 @@ int test_lseek(void)
 /* ---------------------------------------------------------------- */
 /*  2.4  stat / fstat / lstat                                       */
 /* ---------------------------------------------------------------- */
-int test_stat_fstat_lstat(void)
-{
+int test_stat_fstat_lstat(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "stat_test");
     struct stat st;
@@ -169,8 +165,7 @@ int test_stat_fstat_lstat(void)
 /* ---------------------------------------------------------------- */
 /*  2.5  access                                                     */
 /* ---------------------------------------------------------------- */
-int test_access(void)
-{
+int test_access(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "access_test");
 
@@ -199,15 +194,14 @@ int test_access(void)
 /* ---------------------------------------------------------------- */
 /*  2.6  creat                                                      */
 /* ---------------------------------------------------------------- */
-int test_creat(void)
-{
+int test_creat(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "creat_test");
 
     int fd = creat(path, 0644);
     ASSERT_GE(fd, 0);
     const char *data = "creat data";
-    ASSERT_EQ((ssize_t)strlen(data), write(fd, data, strlen(data)));
+    ASSERT_EQ((ssize_t) strlen(data), write(fd, data, strlen(data)));
     close(fd);
 
     /* overwrite */
@@ -229,8 +223,7 @@ int test_creat(void)
 /* ---------------------------------------------------------------- */
 /*  2.7  truncate / ftruncate                                       */
 /* ---------------------------------------------------------------- */
-int test_truncate(void)
-{
+int test_truncate(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "trunc_test");
 
@@ -256,8 +249,7 @@ int test_truncate(void)
 /* ---------------------------------------------------------------- */
 /*  2.8  link / unlink                                              */
 /* ---------------------------------------------------------------- */
-int test_link_unlink(void)
-{
+int test_link_unlink(void) {
     char src[PATH_MAX], dst[PATH_MAX], dir[PATH_MAX];
     tmpfile_path(src, sizeof(src), "link_src");
     tmpfile_path(dst, sizeof(dst), "link_dst");
@@ -294,8 +286,7 @@ int test_link_unlink(void)
 /* ---------------------------------------------------------------- */
 /*  2.9  symlink / readlink                                         */
 /* ---------------------------------------------------------------- */
-int test_symlink_readlink(void)
-{
+int test_symlink_readlink(void) {
     char target[PATH_MAX], linkpath[PATH_MAX];
     tmpfile_path(target, sizeof(target), "sym_target");
     tmpfile_path(linkpath, sizeof(linkpath), "sym_link");
@@ -330,8 +321,7 @@ int test_symlink_readlink(void)
 /* ---------------------------------------------------------------- */
 /*  2.10  rename                                                    */
 /* ---------------------------------------------------------------- */
-int test_rename(void)
-{
+int test_rename(void) {
     char src[PATH_MAX], dst[PATH_MAX], sub[PATH_MAX];
     tmpfile_path(src, sizeof(src), "rename_src");
     tmpfile_path(dst, sizeof(dst), "rename_dst");
@@ -365,8 +355,7 @@ int test_rename(void)
 /* ---------------------------------------------------------------- */
 /*  2.11  chdir / fchdir / getcwd                                   */
 /* ---------------------------------------------------------------- */
-int test_chdir_getcwd(void)
-{
+int test_chdir_getcwd(void) {
     char tmp_sub[PATH_MAX], cwd[PATH_MAX];
 
     /* chdir to our tmpdir (always exists) */
@@ -407,8 +396,7 @@ int test_chdir_getcwd(void)
 /* ---------------------------------------------------------------- */
 /*  2.12  mkdir / rmdir                                             */
 /* ---------------------------------------------------------------- */
-int test_mkdir_rmdir(void)
-{
+int test_mkdir_rmdir(void) {
     char dir[PATH_MAX], subdir[PATH_MAX];
     tmpfile_path(dir, sizeof(dir), "mkdir_test");
     tmpfile_path(subdir, sizeof(subdir), "mkdir_test/sub");
@@ -444,15 +432,13 @@ int test_mkdir_rmdir(void)
 /* ---------------------------------------------------------------- */
 /*  2.13  getdents (via ls or opendir/readdir)                      */
 /* ---------------------------------------------------------------- */
-int test_getdents(void)
-{
+int test_getdents(void) {
     /* Use libc opendir/readdir which calls getdents64 under the hood */
     DIR *d = opendir("/");
     ASSERT_NOTNULL(d);
     int count = 0;
     struct dirent *ent;
-    while ((ent = readdir(d)) != NULL)
-        count++;
+    while ((ent = readdir(d)) != NULL) count++;
     closedir(d);
     ASSERT_GT(count, 0);
 
@@ -466,8 +452,7 @@ int test_getdents(void)
 /* ---------------------------------------------------------------- */
 /*  2.14  chmod / fchmod                                            */
 /* ---------------------------------------------------------------- */
-int test_chmod_fchmod(void)
-{
+int test_chmod_fchmod(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "chmod_test");
     write_file(path, "data");
@@ -478,7 +463,7 @@ int test_chmod_fchmod(void)
     /* change mode */
     ASSERT_EQ(0, chmod(path, 0600));
     ASSERT_EQ(0, stat(path, &st));
-    ASSERT_EQ(st.st_mode & 0777, (mode_t)0600);
+    ASSERT_EQ(st.st_mode & 0777, (mode_t) 0600);
 
     /* fchmod */
     int fd = open(path, O_RDONLY);
@@ -486,7 +471,7 @@ int test_chmod_fchmod(void)
     ASSERT_EQ(0, fchmod(fd, 0644));
     close(fd);
     ASSERT_EQ(0, stat(path, &st));
-    ASSERT_EQ(st.st_mode & 0777, (mode_t)0644);
+    ASSERT_EQ(st.st_mode & 0777, (mode_t) 0644);
 
     return 1;
 }
@@ -494,8 +479,7 @@ int test_chmod_fchmod(void)
 /* ---------------------------------------------------------------- */
 /*  2.15  chown / fchown / lchown                                   */
 /* ---------------------------------------------------------------- */
-int test_chown_fchown(void)
-{
+int test_chown_fchown(void) {
     char path[PATH_MAX], linkpath[PATH_MAX];
     tmpfile_path(path, sizeof(path), "chown_test");
     tmpfile_path(linkpath, sizeof(linkpath), "chown_link");
@@ -521,8 +505,7 @@ int test_chown_fchown(void)
 /* ---------------------------------------------------------------- */
 /*  2.16  umask                                                     */
 /* ---------------------------------------------------------------- */
-int test_umask(void)
-{
+int test_umask(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "umask_test");
 
@@ -534,7 +517,7 @@ int test_umask(void)
     struct stat st;
     ASSERT_EQ(0, stat(path, &st));
     /* with umask 0077, 0666 -> 0600 */
-    ASSERT_EQ(st.st_mode & 0777, (mode_t)0600);
+    ASSERT_EQ(st.st_mode & 0777, (mode_t) 0600);
 
     umask(old);
     unlink(path);
@@ -544,8 +527,7 @@ int test_umask(void)
 /* ---------------------------------------------------------------- */
 /*  2.17  fcntl                                                     */
 /* ---------------------------------------------------------------- */
-int test_fcntl(void)
-{
+int test_fcntl(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "fcntl_test");
     write_file(path, "data");
@@ -580,8 +562,7 @@ int test_fcntl(void)
 /* ---------------------------------------------------------------- */
 /*  2.18  mknod                                                     */
 /* ---------------------------------------------------------------- */
-int test_mknod(void)
-{
+int test_mknod(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "mknod_test");
 
@@ -600,12 +581,10 @@ int test_mknod(void)
 /* ---------------------------------------------------------------- */
 /*  2.19  statfs / fstatfs                                          */
 /* ---------------------------------------------------------------- */
-int test_statfs(void)
-{
+int test_statfs(void) {
     struct statvfs buf;
     int ret = statvfs("/", &buf);
-    if (ret < 0 && (errno == ENOSYS || errno == ENOTSUP))
-        return 1;
+    if (ret < 0 && (errno == ENOSYS || errno == ENOTSUP)) return 1;
     ASSERT_EQ(0, ret);
     ASSERT_GT(buf.f_blocks, 0);
     ASSERT_GT(buf.f_bsize, 0);
@@ -614,8 +593,7 @@ int test_statfs(void)
     ASSERT_GE(fd, 0);
     memset(&buf, 0, sizeof(buf));
     ret = fstatvfs(fd, &buf);
-    if (ret < 0 && (errno == ENOSYS || errno == ENOTSUP))
-        return 1;
+    if (ret < 0 && (errno == ENOSYS || errno == ENOTSUP)) return 1;
     ASSERT_EQ(0, ret);
     ASSERT_GT(buf.f_blocks, 0);
     close(fd);
@@ -626,8 +604,7 @@ int test_statfs(void)
 /* ---------------------------------------------------------------- */
 /*  2.20  openat / fstatat (via AT_FDCWD)                          */
 /* ---------------------------------------------------------------- */
-int test_openat_mkdirat(void)
-{
+int test_openat_mkdirat(void) {
     char path[PATH_MAX];
 
     /* openat with AT_FDCWD + absolute path */
@@ -648,8 +625,7 @@ int test_openat_mkdirat(void)
 /* ---------------------------------------------------------------- */
 /*  2.21  fstatat / unlinkat (via AT_FDCWD)                        */
 /* ---------------------------------------------------------------- */
-int test_fstatat_unlinkat(void)
-{
+int test_fstatat_unlinkat(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "fstatat_file");
 
@@ -674,8 +650,7 @@ int test_fstatat_unlinkat(void)
 /* ---------------------------------------------------------------- */
 /*  2.22  renameat / linkat (via AT_FDCWD)                         */
 /* ---------------------------------------------------------------- */
-int test_renameat_linkat(void)
-{
+int test_renameat_linkat(void) {
     char src[PATH_MAX], dst[PATH_MAX];
     tmpfile_path(src, sizeof(src), "ren_src");
     tmpfile_path(dst, sizeof(dst), "ren_dst");
@@ -702,8 +677,7 @@ int test_renameat_linkat(void)
 /* ---------------------------------------------------------------- */
 /*  2.23  symlinkat / readlinkat (via AT_FDCWD)                    */
 /* ---------------------------------------------------------------- */
-int test_symlinkat_readlinkat(void)
-{
+int test_symlinkat_readlinkat(void) {
     char target[PATH_MAX], link[PATH_MAX];
     tmpfile_path(target, sizeof(target), "sla_target");
     tmpfile_path(link, sizeof(link), "sla_link");
@@ -737,8 +711,7 @@ int test_symlinkat_readlinkat(void)
 /* ---------------------------------------------------------------- */
 /*  2.24  fchmodat / faccessat (via AT_FDCWD)                      */
 /* ---------------------------------------------------------------- */
-int test_fchmodat_faccessat(void)
-{
+int test_fchmodat_faccessat(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "fchmodat_file");
     write_file(path, "data");
@@ -747,7 +720,7 @@ int test_fchmodat_faccessat(void)
     ASSERT_EQ(0, fchmodat(AT_FDCWD, path, 0600, 0));
     struct stat st;
     ASSERT_EQ(0, stat(path, &st));
-    ASSERT_EQ(st.st_mode & 0777, (mode_t)0600);
+    ASSERT_EQ(st.st_mode & 0777, (mode_t) 0600);
 
     /* faccessat */
     ASSERT_EQ(0, faccessat(AT_FDCWD, path, F_OK, 0));
@@ -764,8 +737,7 @@ int test_fchmodat_faccessat(void)
 /* ---------------------------------------------------------------- */
 /*  2.25  pread / pwrite                                            */
 /* ---------------------------------------------------------------- */
-int test_pread_pwrite(void)
-{
+int test_pread_pwrite(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "pread_test");
     write_file(path, "hello world");
@@ -802,8 +774,7 @@ int test_pread_pwrite(void)
 /* ---------------------------------------------------------------- */
 /*  2.26  readv / writev                                            */
 /* ---------------------------------------------------------------- */
-int test_readv_writev(void)
-{
+int test_readv_writev(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "rv_test");
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -837,8 +808,7 @@ int test_readv_writev(void)
 /* ---------------------------------------------------------------- */
 /*  2.27  copy_file_range                                           */
 /* ---------------------------------------------------------------- */
-int test_copy_file_range(void)
-{
+int test_copy_file_range(void) {
     char src[PATH_MAX], dst[PATH_MAX];
     tmpfile_path(src, sizeof(src), "cfr_src");
     tmpfile_path(dst, sizeof(dst), "cfr_dst");
@@ -851,8 +821,7 @@ int test_copy_file_range(void)
 
     off_t off_in = 0, off_out = 0;
     ssize_t ret = copy_file_range(fd_in, &off_in, fd_out, &off_out, 14, 0);
-    if (ret < 0 && (errno == ENOSYS || errno == EINVAL))
-        goto cfr_done;
+    if (ret < 0 && (errno == ENOSYS || errno == EINVAL)) goto cfr_done;
     ASSERT_EQ(ret, 14);
 
     char buf[32];
@@ -870,19 +839,17 @@ cfr_done:
 /* ---------------------------------------------------------------- */
 /*  2.28  memfd_create                                              */
 /* ---------------------------------------------------------------- */
-int test_memfd_create(void)
-{
+int test_memfd_create(void) {
     int fd = memfd_create("test_mem", 0);
-    if (fd < 0 && errno == ENOSYS)
-        return 1;
+    if (fd < 0 && errno == ENOSYS) return 1;
     ASSERT_GE(fd, 0);
 
     const char *data = "memfd data";
-    ASSERT_EQ((ssize_t)strlen(data), write(fd, data, strlen(data)));
+    ASSERT_EQ((ssize_t) strlen(data), write(fd, data, strlen(data)));
 
     char buf[32];
     ASSERT_EQ(0, lseek(fd, 0, SEEK_SET));
-    ASSERT_EQ((ssize_t)strlen(data), read(fd, buf, sizeof(buf)));
+    ASSERT_EQ((ssize_t) strlen(data), read(fd, buf, sizeof(buf)));
     buf[strlen(data)] = '\0';
     ASSERT_STREQ(data, buf);
 
@@ -893,8 +860,7 @@ int test_memfd_create(void)
 /* ---------------------------------------------------------------- */
 /*  2.29  sendfile                                                  */
 /* ---------------------------------------------------------------- */
-int test_sendfile(void)
-{
+int test_sendfile(void) {
     char src[PATH_MAX], dst[PATH_MAX];
     tmpfile_path(src, sizeof(src), "sf_src");
     tmpfile_path(dst, sizeof(dst), "sf_dst");
@@ -907,8 +873,7 @@ int test_sendfile(void)
 
     off_t off = 0;
     ssize_t ret = sendfile(fd_out, fd_in, &off, 13);
-    if (ret < 0 && (errno == ENOSYS || errno == EINVAL))
-        goto sf_done;
+    if (ret < 0 && (errno == ENOSYS || errno == EINVAL)) goto sf_done;
     ASSERT_EQ(ret, 13);
     close(fd_in);
     close(fd_out);
@@ -928,8 +893,7 @@ sf_done:
 /* ---------------------------------------------------------------- */
 /*  2.30  flock                                                     */
 /* ---------------------------------------------------------------- */
-int test_flock(void)
-{
+int test_flock(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "flock_test");
     write_file(path, "data");
@@ -957,8 +921,7 @@ int test_flock(void)
 /* ---------------------------------------------------------------- */
 /*  2.31  fsync / fdatasync                                         */
 /* ---------------------------------------------------------------- */
-int test_fsync_fdatasync(void)
-{
+int test_fsync_fdatasync(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "fsync_test");
     write_file(path, "data");
@@ -980,8 +943,7 @@ int test_fsync_fdatasync(void)
 /* ---------------------------------------------------------------- */
 /*  2.32  fallocate                                                 */
 /* ---------------------------------------------------------------- */
-int test_fallocate(void)
-{
+int test_fallocate(void) {
     /* ramfs: fallocate is a no-op, should succeed */
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "falloc_test");
@@ -990,8 +952,7 @@ int test_fallocate(void)
     ASSERT_GE(fd, 0);
     int ret = fallocate(fd, 0, 0, 4096);
     /* may be ENOSYS or ENOTSUP on ramfs */
-    if (ret < 0)
-        ASSERT(errno == ENOSYS || errno == ENOTSUP);
+    if (ret < 0) ASSERT(errno == ENOSYS || errno == ENOTSUP);
     close(fd);
     unlink(path);
     return 1;
@@ -1000,16 +961,14 @@ int test_fallocate(void)
 /* ---------------------------------------------------------------- */
 /*  2.33  utime / utimensat                                         */
 /* ---------------------------------------------------------------- */
-int test_utime_utimensat(void)
-{
+int test_utime_utimensat(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "utime_test");
     write_file(path, "data");
 
     struct utimbuf times = { 1000000, 1000000 };
     int ret = utime(path, &times);
-    if (ret < 0 && errno == ENOSYS)
-        return 1;
+    if (ret < 0 && errno == ENOSYS) return 1;
 
     /* timestamps may be stubbed; just verify the call doesn't crash */
     struct stat st;
@@ -1022,8 +981,7 @@ int test_utime_utimensat(void)
     ts[1].tv_sec = 2000000;
     ts[1].tv_nsec = 0;
     ret = utimensat(AT_FDCWD, path, ts, 0);
-    if (ret < 0 && (errno == ENOSYS || errno == ENOTSUP))
-        return 1;
+    if (ret < 0 && (errno == ENOSYS || errno == ENOTSUP)) return 1;
 
     ASSERT_EQ(0, stat(path, &st));
 
@@ -1034,8 +992,7 @@ int test_utime_utimensat(void)
 /* ---------------------------------------------------------------- */
 /*  2.34  statx                                                     */
 /* ---------------------------------------------------------------- */
-int test_statx(void)
-{
+int test_statx(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "statx_test");
     write_file(path, "statx data");
@@ -1060,8 +1017,7 @@ int test_statx(void)
     } sx;
 
     int ret = syscall(SYS_statx, AT_FDCWD, path, 0, 0xfff, &sx);
-    if (ret < 0 && (errno == ENOSYS || errno == ENOTSUP))
-        return 1;
+    if (ret < 0 && (errno == ENOSYS || errno == ENOTSUP)) return 1;
     ASSERT_EQ(0, ret);
     ASSERT_TRUE(sx.stx_mode & S_IFREG);
     ASSERT_EQ(sx.stx_size, 10);
@@ -1069,8 +1025,7 @@ int test_statx(void)
 
     /* statx directory */
     ret = syscall(SYS_statx, AT_FDCWD, "/", 0, 0xfff, &sx);
-    if (ret < 0 && (errno == ENOSYS || errno == ENOTSUP))
-        return 1;
+    if (ret < 0 && (errno == ENOSYS || errno == ENOTSUP)) return 1;
     ASSERT_EQ(0, ret);
     ASSERT_TRUE(sx.stx_mode & S_IFDIR);
 
@@ -1081,8 +1036,7 @@ int test_statx(void)
 /* ---------------------------------------------------------------- */
 /*  2.35  pipe2                                                     */
 /* ---------------------------------------------------------------- */
-int test_pipe2(void)
-{
+int test_pipe2(void) {
     int p[2];
 
     /* default (same as pipe) */
@@ -1117,8 +1071,7 @@ int test_pipe2(void)
 /* ---------------------------------------------------------------- */
 /*  2.36  sendfile with NULL offset                                 */
 /* ---------------------------------------------------------------- */
-int test_sendfile_noffset(void)
-{
+int test_sendfile_noffset(void) {
     char src[PATH_MAX], dst[PATH_MAX];
     tmpfile_path(src, sizeof(src), "sfn_src");
     tmpfile_path(dst, sizeof(dst), "sfn_dst");
