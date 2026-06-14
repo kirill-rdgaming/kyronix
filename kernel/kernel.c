@@ -12,16 +12,17 @@
 
 #include "drivers/fbdev.h"
 #include "drivers/input.h"
+#include "drivers/vt.h"
 #include "drivers/kbd.h"
 #include "drivers/pci.h"
 #include "drivers/ps2mouse.h"
 #include "drivers/serial.h"
 #include "drivers/tty.h"
 #include "drivers/uio.h"
-#include "drivers/vt.h"
 #include "exec/process.h"
 #include "fs/cpio.h"
 #include "fs/vfs.h"
+#include "fs/vfs_internal.h"
 #include "lib/log.h"
 #include "lib/printf.h"
 #include "lib/string.h"
@@ -31,10 +32,10 @@
 #include "proc/proc.h"
 
 #define STATUS_COL 72
-#define COL_GRN "\033[0;32m"
-#define COL_RED "\033[0;31m"
+#define COL_GRN  "\033[0;32m"
+#define COL_RED  "\033[0;31m"
 #define COL_BOLD "\033[1m"
-#define COL_RST "\033[0m"
+#define COL_RST  "\033[0m"
 
 LIMINE_REQUESTS_START_MARKER;
 LIMINE_BASE_REVISION(3);
@@ -75,13 +76,14 @@ static void kernel_putchar(char c, void* ctx)
 
 static void kstatus(const char* msg, bool ok)
 {
-    kprintf(COL_GRN " *" COL_RST " %s ...\033[%dG[ %s%s" COL_RST " ]\n", msg, STATUS_COL,
-            ok ? COL_GRN : COL_RED, ok ? "ok" : "!!");
+    kprintf(COL_GRN " *" COL_RST " %s ...\033[%dG[ %s%s" COL_RST " ]\n",
+            msg, STATUS_COL, ok ? COL_GRN : COL_RED, ok ? "ok" : "!!");
 }
 
 static const char* memmap_type_name(uint64_t type)
 {
-    switch (type) {
+    switch (type)
+    {
     case LIMINE_MEMMAP_USABLE:
         return "Usable";
     case LIMINE_MEMMAP_RESERVED:
@@ -105,7 +107,8 @@ static const char* memmap_type_name(uint64_t type)
 
 static void print_memmap(void)
 {
-    if (!mmap_req.response) {
+    if (!mmap_req.response)
+    {
         log_warn("no memory map");
         return;
     }
@@ -114,7 +117,8 @@ static void print_memmap(void)
 
     log_info("Memory map (%lu entries):", resp->entry_count);
 
-    for (uint64_t i = 0; i < resp->entry_count; i++) {
+    for (uint64_t i = 0; i < resp->entry_count; i++)
+    {
         struct limine_memmap_entry* e = resp->entries[i];
         log_info("  %016lx-%016lx  %s", e->base, e->base + e->length, memmap_type_name(e->type));
         if (e->type == LIMINE_MEMMAP_USABLE)
@@ -132,7 +136,8 @@ void kmain(void)
     idt_init();
     kbd_init();
 
-    if (!mmap_req.response || !hhdm_req.response) {
+    if (!mmap_req.response || !hhdm_req.response)
+    {
         kprintf("FATAL: no memory map or HHDM from bootloader\n");
         cpu_halt();
     }
@@ -145,8 +150,8 @@ void kmain(void)
     fb_init(lfb);
     fb_clear(COLOR_BG);
 
-    kprintf(COL_BOLD "KyronixOS" COL_RST " kernel is starting up " COL_GRN
-                     "kyronixos-0.0.1 (x86_64)" COL_RST "\n\n");
+    kprintf(COL_BOLD "KyronixOS" COL_RST
+            " kernel is starting up " COL_GRN "kyronixos-0.0.1 (x86_64)" COL_RST "\n\n");
 
     kstatus("Initialising PMM", true);
     vmm_init();
@@ -159,7 +164,7 @@ void kmain(void)
             uint64_t cr4;
             __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
             cr4 |= (1UL << 20);
-            __asm__ volatile("mov %0, %%cr4" ::"r"(cr4) : "memory");
+            __asm__ volatile("mov %0, %%cr4" :: "r"(cr4) : "memory");
         }
     }
     kstatus("Enabling CPU protections", true);
@@ -170,19 +175,23 @@ void kmain(void)
     proc_init();
     kstatus("Initialising scheduler", true);
     vfs_init();
-    kstatus("Mounting /proc", vfs_lookup("/proc") != NULL);
-    kstatus("Mounting /sys", vfs_lookup("/sys") != NULL);
-    kstatus("Mounting /dev/pts", vfs_lookup("/dev/pts") != NULL);
+    { vfs_node_t* _n = vfs_lookup("/proc"); kstatus("Mounting /proc", _n != NULL); vfs_node_unref_internal(_n); }
+    { vfs_node_t* _n = vfs_lookup("/sys"); kstatus("Mounting /sys", _n != NULL); vfs_node_unref_internal(_n); }
+    { vfs_node_t* _n = vfs_lookup("/dev/pts"); kstatus("Mounting /dev/pts", _n != NULL); vfs_node_unref_internal(_n); }
     pci_enumerate();
     kstatus("Enumerating PCI", true);
     uio_init();
     kstatus("Initialising UIO", true);
     fbdev_init();
-    kstatus("Registering framebuffer", vfs_lookup("/dev/fb0") != NULL);
+    { vfs_node_t* _n = vfs_lookup("/dev/fb0"); kstatus("Registering framebuffer", _n != NULL); vfs_node_unref_internal(_n); }
 
     input_init();
-    kstatus("Initialising evdev",
-            vfs_lookup("/dev/input/event0") != NULL && vfs_lookup("/dev/input/event1") != NULL);
+    {
+        vfs_node_t* _n0 = vfs_lookup("/dev/input/event0");
+        vfs_node_t* _n1 = vfs_lookup("/dev/input/event1");
+        kstatus("Initialising evdev", _n0 != NULL && _n1 != NULL);
+        vfs_node_unref_internal(_n0); vfs_node_unref_internal(_n1);
+    }
     vt_init();
     kstatus("Initialising virtual tty", true);
     pit_init();
@@ -195,22 +204,26 @@ void kmain(void)
     {
         void* p[4];
         bool pmm_ok = true;
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 4; i++)
+        {
             p[i] = pmm_alloc();
-            if (!p[i]) {
+            if (!p[i])
+            {
                 pmm_ok = false;
                 break;
             }
             volatile uint64_t* v = phys_to_virt((uint64_t) p[i]);
             *v = 0xDEADBEEFCAFEBABEULL;
-            if (*v != 0xDEADBEEFCAFEBABEULL) {
+            if (*v != 0xDEADBEEFCAFEBABEULL)
+            {
                 pmm_ok = false;
                 break;
             }
         }
         for (int i = 0; i < 4 && pmm_ok; i++)
             for (int j = i + 1; j < 4; j++)
-                if (p[i] == p[j]) {
+                if (p[i] == p[j])
+                {
                     pmm_ok = false;
                     break;
                 }
@@ -227,9 +240,11 @@ void kmain(void)
         uint64_t test_phys = (uint64_t) pmm_alloc();
         bool vmm_ok = false;
 
-        if (test_phys) {
+        if (test_phys)
+        {
             int r = vmm_map(&g_kernel_space, test_virt, test_phys, VMM_KDATA);
-            if (r == 0) {
+            if (r == 0)
+            {
                 volatile uint64_t* p = (volatile uint64_t*) test_virt;
                 *p = 0xC0FFEE00DEADC0DEULL;
                 vmm_ok = (*p == 0xC0FFEE00DEADC0DEULL);
@@ -250,7 +265,8 @@ void kmain(void)
 
         heap_ok = a && b && c && (a != b) && (b != c) && (a != c);
 
-        if (heap_ok) {
+        if (heap_ok)
+        {
             memset(a, 0xAA, 64);
             memset(b, 0xBB, 128);
             memset(c, 0xCC, 256);
@@ -273,12 +289,15 @@ void kmain(void)
 
         uint8_t* a2 = krealloc(a, 512);
         heap_ok = heap_ok && (a2 != NULL);
-        if (a2) {
+        if (a2)
+        {
             for (int i = 0; i < 64 && heap_ok; i++)
                 if (a2[i] != 0xAA)
                     heap_ok = false;
             kfree(a2);
-        } else {
+        }
+        else
+        {
             kfree(a);
         }
         kfree(c);
@@ -295,16 +314,22 @@ void kmain(void)
 
     print_memmap();
 
-    if (mod_req.response && mod_req.response->module_count > 0) {
+    if (mod_req.response && mod_req.response->module_count > 0)
+    {
         struct limine_file* initrd = mod_req.response->modules[0];
         log_info("initrd: %s  (%lu bytes)", initrd->path, initrd->size);
-        if (cpio_load(initrd->address, initrd->size) < 0) {
+        if (cpio_load(initrd->address, initrd->size) < 0)
+        {
             kstatus("Loading initrd", false);
             log_warn("initrd parse failed");
-        } else {
+        }
+        else
+        {
             kstatus("Loading initrd", true);
         }
-    } else {
+    }
+    else
+    {
         kstatus("Loading initrd", false);
         log_warn("no initrd module");
     }
@@ -316,12 +341,16 @@ void kmain(void)
         if (!init_node)
             init_node = vfs_lookup("/bin/init");
 
-        if (init_node && init_node->type == VFS_TYPE_REG && init_node->data) {
+        if (init_node && init_node->type == VFS_TYPE_REG && init_node->data)
+        {
             if (process_exec(init_node->data, init_node->size, "/init") < 0)
                 kprintf("  FATAL: process_exec failed\n");
-        } else {
+        }
+        else
+        {
             kprintf("  FATAL: /init not found in initrd\n");
         }
+        vfs_node_unref_internal(init_node);
     }
 
     fb_set_color(COLOR_GRAY, COLOR_BG);

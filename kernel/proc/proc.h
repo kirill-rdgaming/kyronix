@@ -16,23 +16,24 @@
 #define KSTACK_PAGES 8
 #define KSTACK_SIZE (KSTACK_PAGES * 4096ULL)
 
-typedef struct proc {
-    int state;           /*  0 */
-    int pgid;            /*  4 */
-    uint32_t pid;        /*  8 */
-    uint32_t ppid;       /* 12 */
-    vmm_space_t* space;  /* 16 */
-    uint8_t* kstack;     /* 24 */
-    uint64_t kstack_top; /* 32 */
-    uint64_t kstack_rsp; /* 40 */
-    uint64_t user_rsp;   /* 48 */
-    int exit_code;       /* 56 */
-    int wait_for;        /* 60 — pid to wait for (-1 = any) */
-    uint64_t brk;        /* 64 */
-    uint64_t brk_base;   /* 72 */
-    uint64_t mmap_bump;  /* 80 */
-    uint64_t fs_base;    /* 88 */
-    vfs_file_t** fds;    /* 96 */
+typedef struct proc
+{
+    int state;                       /*  0 */
+    int pgid;                        /*  4 */
+    uint32_t pid;                    /*  8 */
+    uint32_t ppid;                   /* 12 */
+    vmm_space_t* space;              /* 16 */
+    uint8_t* kstack;                 /* 24 */
+    uint64_t kstack_top;             /* 32 */
+    uint64_t kstack_rsp;             /* 40 */
+    uint64_t user_rsp;               /* 48 */
+    int exit_code;                   /* 56 */
+    int wait_for;                    /* 60 - pid to wait for (-1 = any) */
+    uint64_t brk;                    /* 64 */
+    uint64_t brk_base;               /* 72 */
+    uint64_t mmap_bump;              /* 80 */
+    uint64_t fs_base;                /* 88 */
+    vfs_file_t** fds;                /* 96 */
     uint32_t* fds_refcnt;
     uint64_t pending_sigs;
     uint64_t sig_mask;
@@ -43,15 +44,17 @@ typedef struct proc {
     char exe_path[512];
     uint32_t* cleartid_addr;
     uint8_t is_thread;
-    uint32_t uid, gid;     /* real */
-    uint32_t euid, egid;   /* effective */
-    uint32_t suid, sgid;   /* saved-set */
+    uint32_t uid,  gid;  /* real */
+    uint32_t euid, egid; /* effective */
+    uint32_t suid, sgid; /* saved-set */
     uint32_t fsuid, fsgid; /* fs creds */
     uint32_t umask;
     uint64_t kstack_guard;
     uint64_t itimer_value_ms;
     uint64_t itimer_interval_ms;
     uint64_t itimer_next_tick;
+    void*    blocked_pipe;       /* pipe_t* this proc is sleeping on, NULL ifnone */
+    int      blocked_pipe_read;  /* 1 = waiting_reader, 0 = waiting_writer */
     uint8_t fpu_state[512] __attribute__((aligned(16)));
 } proc_t;
 

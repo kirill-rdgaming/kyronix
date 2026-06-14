@@ -278,7 +278,6 @@ fmt:
 fmt-check:
 	@echo "Checking code style..."
 	@find $(SRC_DIR) -type f \( -name "*.c" -o -name "*.h" \) -exec clang-format --dry-run -Werror {} +
-
 clean:
 	rm -f $(TARGET) $(ISO) $(INITRD) $(TEST_ISO) $(TEST_INITRD)
 	rm -rf $(BUILD_DIR) iso_root rootfs/bin $(TEST_ROOTFS)
