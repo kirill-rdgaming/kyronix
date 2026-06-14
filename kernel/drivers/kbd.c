@@ -89,7 +89,6 @@ static void kbd_irq1(int irq, void* arg)
     tty_process_input(); /* drain kbd port into tty buffer (feeds evdev hook too) */
 }
 
-/* wait until the controller can accept a write (input buffer empty) */
 static void kbd_wait_write(void)
 {
     int t = 100000;
@@ -97,7 +96,6 @@ static void kbd_wait_write(void)
         cpu_relax();
 }
 
-/* wait until the controller has a byte for us (output buffer full) */
 static bool kbd_wait_read(void)
 {
     int t = 100000;
@@ -132,13 +130,10 @@ static int kbd_dev_cmd(uint8_t cmd)
 
 void kbd_init(void)
 {
-    /* Quiesce the controller before reconfiguring it: real 8042s carry stale
-       firmware bytes and depend on an explicit config byte (QEMU does not). */
-    kbd_wait_write(); outb(KBD_STAT, 0xAD); /* disable keyboard port */
-    kbd_wait_write(); outb(KBD_STAT, 0xA7); /* disable aux port (mouse_init re-enables) */
+    kbd_wait_write(); outb(KBD_STAT, 0xAD);
+    kbd_wait_write(); outb(KBD_STAT, 0xA7);
     kbd_flush();
 
-    /* program the controller config byte */
     kbd_wait_write(); outb(KBD_STAT, 0x20); /* read config */
     uint8_t cfg = kbd_wait_read() ? inb(KBD_DATA) : 0;
     cfg |= 0x01;  /* enable keyboard IRQ1 */
@@ -149,7 +144,6 @@ void kbd_init(void)
 
     kbd_wait_write(); outb(KBD_STAT, 0xAE); /* enable keyboard port */
 
-    /* reset the keyboard to a known state, then (re)enable scanning */
     if (kbd_dev_cmd(0xFF) == 0)
         kbd_wait_read(), inb(KBD_DATA); /* consume 0xAA self-test result */
     kbd_dev_cmd(0xF4);
