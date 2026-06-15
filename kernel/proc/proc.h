@@ -69,7 +69,7 @@ void proc_defer_thread_reap(proc_t* p);
 void proc_reap_pending(void);           /* free a deferred kstack - call only when not on it */
 proc_t* proc_find(uint32_t pid);
 proc_t* proc_next_ready(proc_t* skip);
-proc_t* proc_idle_until_ready(proc_t* skip);=
+proc_t* proc_idle_until_ready(proc_t* skip);
 void sched_switch(proc_t* next);
 void sched_yield_blocking(void);
 extern void proc_resume_frame(void);

@@ -57,7 +57,6 @@ void idt_init(void)
         idt_set_gate(i, isr_stub_table[i], IDT_INT_GATE);
 
     idt_set_gate(3, isr_stub_table[3], IDT_TRAP_GATE); /* #BP -  trap so debugger can resume */
-/
     g_idt[8].ist = 1; /* #DF -> g_tss.ist[0] */
     g_idt[2].ist = 2; /* NMI -> g_tss.ist[1] */
 
