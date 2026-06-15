@@ -8,26 +8,34 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <poll.h>
 #include <sched.h>
 #include <signal.h>
-#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
+#include <sys/reboot.h>
 #include <sys/resource.h>
 #include <sys/sendfile.h>
+#include <sys/shm.h>
+#include <sys/signalfd.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <sys/sysinfo.h>
 #include <sys/time.h>
+#include <sys/times.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/utsname.h>
 #include <sys/vfs.h>
 #include <sys/wait.h>
@@ -36,6 +44,11 @@
 #include <utime.h>
 
 /* asm/prctl.h for ARCH_GET_FS etc. — may live under asm/ or linux/ */
+/* reboot() command constant (musl may not define it) */
+#ifndef LINUX_REBOOT_CMD_RESTART
+#define LINUX_REBOOT_CMD_RESTART 0x01234567
+#endif
+
 #ifndef ARCH_GET_FS
 #define ARCH_GET_FS 0x1003
 #endif
@@ -43,13 +56,38 @@
 #define ARCH_SET_FS 0x1002
 #endif
 
-/* ------------------------------------------------------------------ */
-/*  Assertion helpers                                                  */
-/* ------------------------------------------------------------------ */
+#ifndef FUTEX_WAIT
+#define FUTEX_WAIT 0
+#endif
+#ifndef FUTEX_WAKE
+#define FUTEX_WAKE 1
+#endif
+#ifndef FUTEX_REQUEUE
+#define FUTEX_REQUEUE 3
+#endif
+#ifndef FUTEX_CMP_REQUEUE
+#define FUTEX_CMP_REQUEUE 4
+#endif
+
+#define ANSI_GREEN "\033[32m"
+#define ANSI_RED "\033[31m"
+#define ANSI_CYAN "\033[36m"
+#define ANSI_RESET "\033[0m"
+
+#define TEST_PASS 1
+#define TEST_FAIL 0
+
+extern int failure_pipe[2];
 
 #define ASSERT(cond)                                                                               \
     do {                                                                                           \
-        if (!(cond)) return 0;                                                                     \
+        if (!(cond)) {                                                                             \
+            fprintf(stderr, "\n  " ANSI_RED "!" ANSI_RESET " %s:%d: %s\n", __FILE__, __LINE__,     \
+                    #cond);                                                                        \
+            if (failure_pipe[1] >= 0)                                                              \
+                dprintf(failure_pipe[1], "%s:%d: %s\n", __FILE__, __LINE__, #cond);                \
+            return TEST_FAIL;                                                                      \
+        }                                                                                          \
     } while (0)
 #define ASSERT_EQ(a, b) ASSERT((a) == (b))
 #define ASSERT_NE(a, b) ASSERT((a) != (b))
@@ -65,10 +103,6 @@
 #define ASSERT_TRUE(c) ASSERT((c) != 0)
 #define ASSERT_FALSE(c) ASSERT((c) == 0)
 #define ASSERT_ERRNO(e) ASSERT(errno == (e))
-
-/* ------------------------------------------------------------------ */
-/*  Temp directory / file helpers                                      */
-/* ------------------------------------------------------------------ */
 
 extern char tmpdir[256];
 
@@ -116,10 +150,6 @@ static inline ssize_t read_file(const char *path, char *buf, size_t bufsz) {
     if (n >= 0) buf[n] = '\0';
     return n;
 }
-
-/* ------------------------------------------------------------------ */
-/*  Process helpers                                                    */
-/* ------------------------------------------------------------------ */
 
 static inline int run_cmd(char *const argv[]) {
     pid_t pid = fork();
@@ -182,10 +212,6 @@ static inline int wait_for(pid_t pid) {
     return -1;
 }
 
-/* ------------------------------------------------------------------ */
-/*  mkdir -p helper                                                    */
-/* ------------------------------------------------------------------ */
-
 static inline int mkdir_p(const char *path) {
     char tmp[PATH_MAX];
     size_t len = strlen(path);
@@ -201,5 +227,26 @@ static inline int mkdir_p(const char *path) {
     if (mkdir(tmp, 0777) < 0 && errno != EEXIST) return -1;
     return 0;
 }
+
+typedef struct {
+    const char *name;
+    const char *phase;
+    int (*func)(void);
+} test_entry_t;
+
+#define MAX_TESTS 256
+
+extern test_entry_t test_registry[MAX_TESTS];
+extern int test_count;
+
+#define REGISTER_TEST(tname, phase_name)                                                           \
+    static void __attribute__((constructor)) __reg_##tname(void) {                                 \
+        if (test_count < MAX_TESTS) {                                                              \
+            test_registry[test_count].name = #tname;                                               \
+            test_registry[test_count].phase = phase_name;                                          \
+            test_registry[test_count].func = test_##tname;                                         \
+            test_count++;                                                                          \
+        }                                                                                          \
+    }
 
 #endif /* TEST_HARNESS_H */

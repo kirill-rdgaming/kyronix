@@ -1972,55 +1972,40 @@ void syscall_dispatch(syscall_frame_t* f)
     case 28:
         ret = sys_madvise((void*) a1, a2, (int) a3);
         break;
-    case 29: ret = (int64_t)sys_shmget((int)a1, a2, (int)a3); break;
-    case 30: ret = (int64_t)sys_shmat((int)a1, a2, (int)a3); break;
-    case 31: ret = (int64_t)sys_shmctl((int)a1, (int)a2, (void*)a3); break;
-    case 40:
-        ret = sys_sendfile((int)a1, (int)a2, (uint64_t*)a3, a4);
-        break;
-    case 41: /* socket(domain, type, proto) */
-        ret = (int64_t)fd_socket((int)a1, (int)a2, (int)a3);
-        break;
-    case 42: /* connect(fd, addr, addrlen) */
-        ret = sys_socket_connect((int)a1, (struct sockaddr_un*)a2, a3);
-        break;
-    case 43: /* accept(fd, addr, addrlen) */
-        ret = sys_socket_accept((int)a1, (struct sockaddr_un*)a2, (int*)a3, 0);
-        break;
-    case 44: { /* sendto(fd, buf, len, flags, addr, addrlen) */
-        vfs_file_t* sf = fd_get_file((int)a1);
-        if (sf && sf->inet && a5) {
-            if (!uptr_ok((void*)a5, 16))
-                { ret = -(int64_t)EFAULT; break; }
-            ret = inet_sendto(sf->inet, (const void*)a2, a3,
-                              (const struct sockaddr_in*)a5);
-        } else if (sf && sf->inet) {
-            ret = inet_fd_write(sf->inet, (const void*)a2, a3);
-        } else {
-            ret = fd_write((int)a1, (const void*)a2, a3);
+    case 90: {
+        char abs[512];
+        int _r = copy_user_path((const char *) a1, abs, sizeof(abs));
+        if (_r < 0) {
+            ret = (int64_t) _r;
+            break;
         }
+        ret = (int64_t) vfs_chmod(abs, (uint32_t) a2);
         break;
     }
-    case 45: { /* recvfrom(fd, buf, len, flags, addr, addrlen_ptr) */
-        vfs_file_t* sf = fd_get_file((int)a1);
-        if (sf && sf->inet) {
-            struct sockaddr_in* sa = a5 ? (struct sockaddr_in*)a5 : NULL;
-            if (sa && !uptr_ok_w(sa, sizeof(*sa)))
-                { ret = -(int64_t)EFAULT; break; }
-            int rflags = sf->flags | ((a4 & 0x40) ? O_NONBLOCK : 0); /* MSG_DONTWAIT */
-            ret = inet_recvfrom(sf->inet, (void*)a2, a3, sa, rflags);
-            if (ret >= 0 && sa && a6 && uptr_ok_w((void*)a6, sizeof(int)))
-                *(int*)(uintptr_t)a6 = (int)sizeof(*sa);
-        } else {
-            ret = fd_read((int)a1, (void*)a2, a3);
+    case 91:
+        ret = (int64_t) vfs_fchmod((int) a1, (uint32_t) a2);
+        break;
+    case 92: {
+        char abs[512];
+        int _r = copy_user_path((const char *) a1, abs, sizeof(abs));
+        if (_r < 0) {
+            ret = (int64_t) _r;
+            break;
         }
+        ret = (int64_t) vfs_chown(abs, (uint32_t) a2, (uint32_t) a3);
         break;
     }
     case 46: /* sendmsg(fd, msghdr, flags) */
         ret = sys_socket_sendmsg((int)a1, (const void*)a2, (int)a3);
         break;
-    case 47: /* recvmsg(fd, msghdr, flags) */
-        ret = sys_socket_recvmsg((int)a1, (void*)a2, (int)a3);
+    case 94: {
+        char abs[512];
+        int _r = copy_user_path((const char *) a1, abs, sizeof(abs));
+        if (_r < 0) {
+            ret = (int64_t) _r;
+            break;
+        }
+        ret = (int64_t) vfs_lchown(abs, (uint32_t) a2, (uint32_t) a3);
         break;
     case 48: { /* shutdown(fd, how) */
         vfs_file_t* sf = fd_get_file((int)a1);
@@ -2394,8 +2379,55 @@ void syscall_dispatch(syscall_frame_t* f)
         ret = sys_futex((uint32_t*) a1, (int) a2, (uint32_t) a3, (void*) a4, (uint32_t*) a5,
                         (uint32_t) a6);
         break;
-    case 217:
-        ret = fd_getdents64((int) a1, (void*) a2, a3);
+
+    /* Misc */
+    case 97:
+        ret = sys_getrlimit(a1, (void *) a2);
+        break;
+    case 98: {
+        if (a2) {
+            if (!uptr_ok_w((void *) a2, 144)) {
+                ret = -(int64_t) EFAULT;
+                break;
+            }
+            memset((void *) a2, 0, 144);
+        }
+        ret = 0;
+        break;
+    }
+    case 99:
+        ret = sys_sysinfo((struct sysinfo_s *) a1);
+        break;
+    case 101:
+        ret = -(int64_t) EPERM;
+        break;
+    case 103:
+        ret = -(int64_t) EPERM;
+        break;
+    case 133: {
+        char abs[512];
+        int _r = copy_user_path((const char *) a1, abs, sizeof(abs));
+        if (_r < 0) {
+            ret = (int64_t) _r;
+            break;
+        }
+        ret = (int64_t) vfs_mknod(abs, (uint32_t) a2, a3);
+        break;
+    }
+    case 135:
+        ret = 0;
+        break;
+    case 153:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break;
+    case 159:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break;
+    case 160:
+        ret = sys_getrlimit(a1, (void *) a2);
+        break;
+    case 161:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
         break;
     case 218:
         ret = sys_set_tid_address((void*) a1);
