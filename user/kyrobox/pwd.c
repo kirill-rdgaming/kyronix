@@ -1,7 +1,7 @@
 #include "common.h"
-int main(int argc, char **argv)
-{
-    (void)argc; (void)argv;
+int main(int argc, char **argv) {
+    (void) argc;
+    (void) argv;
     char cwd[PATH_MAX];
     kx_prog = "pwd";
     if (!getcwd(cwd, sizeof(cwd))) {

@@ -1,3 +1,4 @@
+.section .note.GNU-stack,"",@progbits
 .code64
 .section .text
 

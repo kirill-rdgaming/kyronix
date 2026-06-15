@@ -1,6 +1,5 @@
 #include "common.h"
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "touch";
     if (argc < 2) kx_die("missing operand");
     int rc = 0;
@@ -9,7 +8,8 @@ int main(int argc, char **argv)
         if (fd < 0) {
             kx_warn(argv[i]);
             rc = 1;
-        } else close(fd);
+        } else
+            close(fd);
     }
     return rc;
 }

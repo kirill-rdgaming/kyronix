@@ -6,8 +6,7 @@
 #define PIC2_CMD 0xA0
 #define PIC2_DATA 0xA1
 
-static inline void pic_remap(uint8_t off1, uint8_t off2)
-{
+static inline void pic_remap(uint8_t off1, uint8_t off2) {
     uint8_t m1 = inb(PIC1_DATA);
     uint8_t m2 = inb(PIC2_DATA);
 
@@ -32,24 +31,20 @@ static inline void pic_remap(uint8_t off1, uint8_t off2)
     outb(PIC2_DATA, m2);
 }
 
-static inline void pic_mask_all(void)
-{
+static inline void pic_mask_all(void) {
     outb(PIC1_DATA, 0xFF);
     outb(PIC2_DATA, 0xFF);
 }
 
-static inline void pic_mask_irq(uint8_t irq)
-{
+static inline void pic_mask_irq(uint8_t irq) {
     uint16_t port = (irq < 8) ? PIC1_DATA : PIC2_DATA;
-    uint8_t bit = (irq < 8) ? irq : (uint8_t)(irq - 8);
-    outb(port, inb(port) | (uint8_t)(1u << bit));
+    uint8_t bit = (irq < 8) ? irq : (uint8_t) (irq - 8);
+    outb(port, inb(port) | (uint8_t) (1u << bit));
 }
 
-static inline void pic_unmask_irq(uint8_t irq)
-{
+static inline void pic_unmask_irq(uint8_t irq) {
     uint16_t port = (irq < 8) ? PIC1_DATA : PIC2_DATA;
-    if (irq >= 8)
-    {
+    if (irq >= 8) {
         irq -= 8;
         /* slave irqs reach the cpu only if the cascade line (IRQ2) is unmasked */
         outb(PIC1_DATA, inb(PIC1_DATA) & (uint8_t) ~(1u << 2));
@@ -57,9 +52,7 @@ static inline void pic_unmask_irq(uint8_t irq)
     outb(port, inb(port) & (uint8_t) ~(1u << irq));
 }
 
-static inline void pic_send_eoi(uint8_t irq)
-{
-    if (irq >= 8)
-        outb(PIC2_CMD, 0x20);
+static inline void pic_send_eoi(uint8_t irq) {
+    if (irq >= 8) outb(PIC2_CMD, 0x20);
     outb(PIC1_CMD, 0x20);
 }

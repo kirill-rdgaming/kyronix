@@ -1,6 +1,5 @@
 #include "common.h"
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "readlink";
     if (argc != 2) kx_die("usage: readlink LINK");
     char buf[PATH_MAX];

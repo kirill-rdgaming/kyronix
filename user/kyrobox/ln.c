@@ -1,6 +1,5 @@
 #include "common.h"
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "ln";
     bool sym = false;
     int first = 1;

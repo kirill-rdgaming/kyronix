@@ -1,16 +1,17 @@
 CC := musl-gcc
-CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2 -march=x86-64 -mtune=generic -fno-pie -fno-link-libatomic
+CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2 -march=x86-64 -mtune=generic -fno-pie -L../../build
 LDFLAGS ?= -static -no-pie
 OUT := ../../build/bin/ksh
+
+FNO_LINK_LIBATOMIC := $(shell echo 'int main(void){return 0;}' | $(CC) -x c - -fno-link-libatomic -o /dev/null 2>/dev/null && echo '-fno-link-libatomic')
+CFLAGS += $(FNO_LINK_LIBATOMIC)
 
 .PHONY: all check-musl clean
 
 all: check-musl $(OUT)
 
 check-musl:
-	@command -v $(CC) >/dev/null 2>&1 && test -f /usr/lib/musl/lib/libc.a || { \
-		exit 1; \
-	}
+	@command -v $(CC) >/dev/null 2>&1 || { echo "musl-gcc not found"; exit 1; }
 
 $(OUT): ksh.c
 	mkdir -p ../../build/bin

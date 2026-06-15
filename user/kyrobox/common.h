@@ -1,13 +1,13 @@
-#ifndef KYRONIX_COREUTILS_COMMON_H
-#define KYRONIX_COREUTILS_COMMON_H
+#ifndef KYROBOX_COMMON_H
+#define KYROBOX_COMMON_H
 
 #define _POSIX_C_SOURCE 200809L
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <grp.h>
+#include <limits.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -23,25 +23,21 @@
 
 static const char *kx_prog;
 
-static inline const char *kx_base(const char *s)
-{
+static inline const char *kx_base(const char *s) {
     const char *p = strrchr(s, '/');
     return p ? p + 1 : s;
 }
 
-static inline void kx_warn(const char *path)
-{
+static inline void kx_warn(const char *path) {
     fprintf(stderr, "%s: %s: %s\n", kx_prog, path, strerror(errno));
 }
 
-static inline void kx_die(const char *msg)
-{
+static inline void kx_die(const char *msg) {
     fprintf(stderr, "%s: %s\n", kx_prog, msg);
     exit(1);
 }
 
-static inline int kx_copy_fd(int in, int out)
-{
+static inline int kx_copy_fd(int in, int out) {
     char buf[8192];
     for (;;) {
         ssize_t n = read(in, buf, sizeof(buf));
@@ -49,7 +45,7 @@ static inline int kx_copy_fd(int in, int out)
         if (n == 0) return 0;
         char *p = buf;
         while (n > 0) {
-            ssize_t w = write(out, p, (size_t)n);
+            ssize_t w = write(out, p, (size_t) n);
             if (w < 0) return -1;
             p += w;
             n -= w;
@@ -57,8 +53,7 @@ static inline int kx_copy_fd(int in, int out)
     }
 }
 
-static inline int kx_mkdir_p(const char *path, mode_t mode)
-{
+static inline int kx_mkdir_p(const char *path, mode_t mode) {
     char tmp[PATH_MAX];
     size_t len = strlen(path);
     if (len >= sizeof(tmp)) {
@@ -77,8 +72,7 @@ static inline int kx_mkdir_p(const char *path, mode_t mode)
     return 0;
 }
 
-static inline int kx_copy_file(const char *src, const char *dst)
-{
+static inline int kx_copy_file(const char *src, const char *dst) {
     int in = open(src, O_RDONLY);
     if (in < 0) return -1;
     int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0666);

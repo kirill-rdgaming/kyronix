@@ -14,13 +14,9 @@
 #define PROMPT_MAX 64
 #define LINE_MAX 256
 
-static void putstr(const char *s)
-{
-    write(STDERR_FILENO, s, strlen(s));
-}
+static void putstr(const char *s) { write(STDERR_FILENO, s, strlen(s)); }
 
-static void read_line(char *buf, size_t size, int echo)
-{
+static void read_line(char *buf, size_t size, int echo) {
     size_t i = 0;
     int c;
     for (;;) {
@@ -37,8 +33,7 @@ static void read_line(char *buf, size_t size, int echo)
         if (c == '\b' || c == 0x7f) {
             if (i > 0) {
                 i--;
-                if (echo)
-                    putstr("\b \b");
+                if (echo) putstr("\b \b");
             }
             continue;
         }
@@ -52,21 +47,17 @@ static void read_line(char *buf, size_t size, int echo)
     }
 }
 
-static void print_issue(void)
-{
+static void print_issue(void) {
     int fd = open("/etc/issue", O_RDONLY);
-    if (fd < 0)
-        return;
+    if (fd < 0) return;
     char buf[512];
     ssize_t n;
-    while ((n = read(fd, buf, sizeof(buf))) > 0)
-        write(STDERR_FILENO, buf, n);
+    while ((n = read(fd, buf, sizeof(buf))) > 0) write(STDERR_FILENO, buf, n);
     close(fd);
     puts("");
 }
 
-static int check_password(const char *user, const char *pass)
-{
+static int check_password(const char *user, const char *pass) {
     struct spwd *sp = getspnam(user);
     if (sp && sp->sp_pwdp) {
         const char *enc = crypt(pass, sp->sp_pwdp);
@@ -74,19 +65,15 @@ static int check_password(const char *user, const char *pass)
     }
 
     struct passwd *pw = getpwnam(user);
-    if (!pw || !pw->pw_passwd)
-        return 0;
-    if (pw->pw_passwd[0] == '\0')
-        return 1;
-    if (strcmp(pw->pw_passwd, "x") == 0)
-        return 0;
+    if (!pw || !pw->pw_passwd) return 0;
+    if (pw->pw_passwd[0] == '\0') return 1;
+    if (strcmp(pw->pw_passwd, "x") == 0) return 0;
 
     const char *enc = crypt(pass, pw->pw_passwd);
     return enc && strcmp(enc, pw->pw_passwd) == 0;
 }
 
-int main(void)
-{
+int main(void) {
     struct passwd *pw;
     struct utsname uts;
     int first = 1;
@@ -102,8 +89,7 @@ int main(void)
         dup2(fd, STDIN_FILENO);
         dup2(fd, STDOUT_FILENO);
         dup2(fd, STDERR_FILENO);
-        if (fd > STDERR_FILENO)
-            close(fd);
+        if (fd > STDERR_FILENO) close(fd);
     }
 
     for (;;) {
@@ -120,8 +106,7 @@ int main(void)
             putstr(uts.nodename);
             putstr(" login: ");
             read_line(user, sizeof(user), 1);
-            if (user[0] == '\0')
-                continue;
+            if (user[0] == '\0') continue;
 
             putstr("Password: ");
             read_line(pass, sizeof(pass), -1);
@@ -151,8 +136,7 @@ int main(void)
         setenv("TERM", "vt100", 1);
         setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin", 1);
 
-        if (chdir(pw->pw_dir) < 0)
-            chdir("/");
+        if (chdir(pw->pw_dir) < 0) chdir("/");
 
         setgid(pw->pw_gid);
         setuid(pw->pw_uid);

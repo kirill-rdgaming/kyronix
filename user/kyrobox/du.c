@@ -1,7 +1,6 @@
 #include "common.h"
 
-static long total_blocks(const char *path)
-{
+static long total_blocks(const char *path) {
     struct stat st;
     if (lstat(path, &st) < 0) {
         kx_warn(path);
@@ -22,8 +21,7 @@ static long total_blocks(const char *path)
     return total;
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "du";
     if (argc == 1) argv[argc++] = ".";
     for (int i = 1; i < argc; i++) printf("%ld\t%s\n", total_blocks(argv[i]), argv[i]);

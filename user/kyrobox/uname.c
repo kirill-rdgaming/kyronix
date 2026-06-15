@@ -1,6 +1,5 @@
 #include "common.h"
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     struct utsname u;
     if (uname(&u) < 0) return 1;
     if (argc > 1 && strcmp(argv[1], "-a") == 0)

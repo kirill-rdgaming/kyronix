@@ -1,6 +1,5 @@
 #include "common.h"
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "tee";
     bool append = false;
     int first = 1;
@@ -9,12 +8,15 @@ int main(int argc, char **argv)
         first = 2;
     }
     int out_count = argc > first ? argc - first : 0;
-    FILE **outs = calloc((size_t)out_count, sizeof(*outs));
+    FILE **outs = calloc((size_t) out_count, sizeof(*outs));
     int nouts = 0, rc = 0;
     for (int i = first; i < argc; i++) {
         outs[nouts] = fopen(argv[i], append ? "ab" : "wb");
-        if (!outs[nouts]) { kx_warn(argv[i]); rc = 1; }
-        else nouts++;
+        if (!outs[nouts]) {
+            kx_warn(argv[i]);
+            rc = 1;
+        } else
+            nouts++;
     }
     char buf[4096];
     size_t n;

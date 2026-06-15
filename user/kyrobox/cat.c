@@ -1,6 +1,5 @@
 #include "common.h"
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     kx_prog = "cat";
     int rc = 0;
     if (argc == 1) return kx_copy_fd(STDIN_FILENO, STDOUT_FILENO) < 0;

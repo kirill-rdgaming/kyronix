@@ -1,0 +1,20 @@
+CC := musl-gcc
+CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2 -march=x86-64 -mtune=generic -fno-pie -L../../build
+LDFLAGS ?= -static -no-pie
+OUT := ../../build/bin
+
+FNO_LINK_LIBATOMIC := $(shell echo 'int main(void){return 0;}' | $(CC) -x c - -fno-link-libatomic -o /dev/null 2>/dev/null && echo '-fno-link-libatomic')
+CFLAGS += $(FNO_LINK_LIBATOMIC)
+
+SRCS := testrunner.c tests_fs.c tests_proc.c
+
+.PHONY: all clean
+
+all: $(OUT)/testrunner
+
+$(OUT)/testrunner: $(SRCS) test_harness.h
+	mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SRCS)
+
+clean:
+	rm -f $(OUT)/testrunner

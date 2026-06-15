@@ -9,8 +9,7 @@
 #define MSR_SFMASK 0xC0000084
 #define MSR_KERNEL_GS_BASE 0xC0000102
 
-typedef struct
-{
+typedef struct {
     uint64_t kernel_rsp; /* offset 0 */
     uint64_t user_rsp;   /* offset 8 */
 } cpu_local_t;
@@ -22,16 +21,14 @@ static uint8_t g_syscall_stack[KERNEL_STACK_PAGES * 4096] __attribute__((aligned
 
 extern void syscall_entry(void);
 
-void cpu_enable_sse(void)
-{
+void cpu_enable_sse(void) {
     uint64_t cr0 = read_cr0();
     cr0 = (cr0 & ~(1ULL << 2)) | (1ULL << 1);
     write_cr0(cr0);
     write_cr4(read_cr4() | (1ULL << 9) | (1ULL << 10));
 }
 
-void syscall_init(void)
-{
+void syscall_init(void) {
     cpu_enable_sse();
 
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | 1ULL);
@@ -51,8 +48,7 @@ void syscall_init(void)
     log_info("SYSCALL: LSTAR=0x%016lx  stack=0x%016lx", (uint64_t) syscall_entry, rsp0);
 }
 
-void cpu_set_kernel_stack(uint64_t rsp)
-{
+void cpu_set_kernel_stack(uint64_t rsp) {
     g_cpu_local.kernel_rsp = rsp;
     gdt_set_kernel_stack(rsp);
 }

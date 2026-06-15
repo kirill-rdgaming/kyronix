@@ -10,8 +10,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/reboot.h>
 #include <sys/ioctl.h>
+#include <sys/reboot.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -24,44 +24,45 @@
 #define MAX_JOBS 16
 
 #define SEG_FIRST 0
-#define SEG_AND   1
-#define SEG_OR    2
-#define SEG_SEQ   3
-typedef struct { char seg[MAX_LINE]; int conn; } seg_t;
+#define SEG_AND 1
+#define SEG_OR 2
+#define SEG_SEQ 3
+typedef struct {
+    char seg[MAX_LINE];
+    int conn;
+} seg_t;
 
 typedef struct {
     pid_t pgid;
     pid_t pids[32];
-    int   npids;
-    char  cmd[MAX_LINE];
-    int   stopped;
-    int   id;
+    int npids;
+    char cmd[MAX_LINE];
+    int stopped;
+    int id;
 } job_t;
 
 static job_t g_jobs[MAX_JOBS];
-static int   g_job_seq = 0;
+static int g_job_seq = 0;
 
-static job_t* job_add(pid_t pgid, pid_t* pids, int n, const char* cmd)
-{
+static job_t *job_add(pid_t pgid, pid_t *pids, int n, const char *cmd) {
     for (int i = 0; i < MAX_JOBS; i++) {
         if (g_jobs[i].pgid == 0) {
-            g_jobs[i].pgid    = pgid;
-            g_jobs[i].npids   = n;
+            g_jobs[i].pgid = pgid;
+            g_jobs[i].npids = n;
             for (int j = 0; j < n; j++) g_jobs[i].pids[j] = pids[j];
             strncpy(g_jobs[i].cmd, cmd, MAX_LINE - 1);
             g_jobs[i].stopped = 0;
-            g_jobs[i].id      = ++g_job_seq;
+            g_jobs[i].id = ++g_job_seq;
             return &g_jobs[i];
         }
     }
     return NULL;
 }
 
-static void job_remove(job_t* j) { memset(j, 0, sizeof(*j)); }
+static void job_remove(job_t *j) { memset(j, 0, sizeof(*j)); }
 
-static job_t* job_last(int stopped_only)
-{
-    job_t* best = NULL;
+static job_t *job_last(int stopped_only) {
+    job_t *best = NULL;
     for (int i = 0; i < MAX_JOBS; i++) {
         if (!g_jobs[i].pgid) continue;
         if (stopped_only && !g_jobs[i].stopped) continue;
@@ -70,23 +71,20 @@ static job_t* job_last(int stopped_only)
     return best;
 }
 
-static job_t* job_by_id(int id)
-{
+static job_t *job_by_id(int id) {
     for (int i = 0; i < MAX_JOBS; i++)
         if (g_jobs[i].pgid && g_jobs[i].id == id) return &g_jobs[i];
     return NULL;
 }
 
-static void print_matches_columns(char names[][PATH_MAX], int count)
-{
+static void print_matches_columns(char names[][PATH_MAX], int count) {
     struct winsize ws;
     ws.ws_col = 80;
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws);
     int term_w = (ws.ws_col > 0) ? (int) ws.ws_col : 80;
 
     int max_w = 0;
-    for (int i = 0; i < count; i++)
-    {
+    for (int i = 0; i < count; i++) {
         int w = (int) strlen(names[i]);
         if (w > max_w) max_w = w;
     }
@@ -96,10 +94,8 @@ static void print_matches_columns(char names[][PATH_MAX], int count)
     if (num_cols < 1) num_cols = 1;
     int num_rows = (count + num_cols - 1) / num_cols;
 
-    for (int row = 0; row < num_rows; row++)
-    {
-        for (int col = 0; col < num_cols; col++)
-        {
+    for (int row = 0; row < num_rows; row++) {
+        for (int col = 0; col < num_cols; col++) {
             int idx = col * num_rows + row;
             if (idx >= count) break;
             int w = (int) strlen(names[idx]);
@@ -113,40 +109,30 @@ static void print_matches_columns(char names[][PATH_MAX], int count)
 static int cached_uid = -1;
 static char shell_pwd[MAX_LINE];
 
-static void build_prompt(char* buf, size_t size)
-{
+static void build_prompt(char *buf, size_t size) {
     static char cwd[MAX_LINE];
-    const char* cwd_str = getcwd(cwd, sizeof(cwd));
-    if (cwd_str == NULL)
-    {
+    const char *cwd_str = getcwd(cwd, sizeof(cwd));
+    if (cwd_str == NULL) {
         cwd_str = shell_pwd;
-        if (cwd_str[0] == '\0')
-        {
-            cwd_str = "?";
-        }
+        if (cwd_str[0] == '\0') { cwd_str = "?"; }
     }
 
-    const char* display_path = cwd_str;
+    const char *display_path = cwd_str;
     static char tilde_path[MAX_LINE];
-    const char* home = getenv("HOME");
-    if (home != NULL)
-    {
+    const char *home = getenv("HOME");
+    if (home != NULL) {
         size_t home_len = strlen(home);
-        if (strncmp(cwd_str, home, home_len) == 0)
-        {
-            if (cwd_str[home_len] == '\0')
-            {
+        if (strncmp(cwd_str, home, home_len) == 0) {
+            if (cwd_str[home_len] == '\0') {
                 display_path = "~";
-            }
-            else if (cwd_str[home_len] == '/')
-            {
+            } else if (cwd_str[home_len] == '/') {
                 snprintf(tilde_path, sizeof(tilde_path), "~%s", cwd_str + home_len);
                 display_path = tilde_path;
             }
         }
     }
 
-    const char* prompt_char = (cached_uid == 0) ? "#" : "$";
+    const char *prompt_char = (cached_uid == 0) ? "#" : "$";
     snprintf(buf, size, "\033[34m%s\033[0m %s ", display_path, prompt_char);
 }
 
@@ -157,49 +143,34 @@ static char history[MAX_HISTORY][MAX_LINE];
 static int history_count = 0;
 static int history_start = 0;
 
-static int split_line(char* line, char** argv)
-{
+static int split_line(char *line, char **argv) {
     int argc = 0;
-    char* cursor = line;
+    char *cursor = line;
 
-    while (*cursor != '\0' && argc < MAX_ARGS - 1)
-    {
-        while (isspace((unsigned char) *cursor))
-        {
-            cursor++;
-        }
-        if (*cursor == '\0')
-        {
-            break;
-        }
+    while (*cursor != '\0' && argc < MAX_ARGS - 1) {
+        while (isspace((unsigned char) *cursor)) { cursor++; }
+        if (*cursor == '\0') { break; }
 
-        char* out = cursor;
+        char *out = cursor;
         argv[argc++] = out;
         int quote = 0;
 
-        while (*cursor != '\0')
-        {
-            if (quote == 0 && isspace((unsigned char) *cursor))
-                break;
+        while (*cursor != '\0') {
+            if (quote == 0 && isspace((unsigned char) *cursor)) break;
 
-            if ((*cursor == '\'' || *cursor == '"') && (quote == 0 || quote == *cursor))
-            {
+            if ((*cursor == '\'' || *cursor == '"') && (quote == 0 || quote == *cursor)) {
                 quote = quote == 0 ? *cursor : 0;
                 cursor++;
                 continue;
             }
 
-            if (*cursor == '\\' && cursor[1] != '\0')
-                cursor++;
+            if (*cursor == '\\' && cursor[1] != '\0') cursor++;
 
             *out++ = *cursor;
             cursor++;
         }
 
-        if (*cursor != '\0')
-        {
-            cursor++;
-        }
+        if (*cursor != '\0') { cursor++; }
         *out = '\0';
     }
 
@@ -207,38 +178,26 @@ static int split_line(char* line, char** argv)
     return argc;
 }
 
-static const char* history_path(void)
-{
-    const char* home = getenv("HOME");
+static const char *history_path(void) {
+    const char *home = getenv("HOME");
     return home != NULL ? home : "/root";
 }
 
-static void history_load(void)
-{
+static void history_load(void) {
     char path[PATH_MAX];
     snprintf(path, sizeof(path), "%s/.ksh_history", history_path());
 
-    FILE* file = fopen(path, "r");
-    if (file == NULL)
-    {
-        return;
-    }
+    FILE *file = fopen(path, "r");
+    if (file == NULL) { return; }
 
     char line[MAX_LINE];
-    while (fgets(line, sizeof(line), file) != NULL)
-    {
+    while (fgets(line, sizeof(line), file) != NULL) {
         line[strcspn(line, "\n")] = '\0';
-        if (line[0] == '\0')
-        {
-            continue;
-        }
-        if (history_count < MAX_HISTORY)
-        {
+        if (line[0] == '\0') { continue; }
+        if (history_count < MAX_HISTORY) {
             snprintf(history[history_count], MAX_LINE, "%s", line);
             history_count++;
-        }
-        else
-        {
+        } else {
             snprintf(history[history_start], MAX_LINE, "%s", line);
             history_start = (history_start + 1) % MAX_HISTORY;
         }
@@ -247,19 +206,14 @@ static void history_load(void)
     fclose(file);
 }
 
-static void history_save(void)
-{
+static void history_save(void) {
     char path[PATH_MAX];
     snprintf(path, sizeof(path), "%s/.ksh_history", history_path());
 
-    FILE* file = fopen(path, "w");
-    if (file == NULL)
-    {
-        return;
-    }
+    FILE *file = fopen(path, "w");
+    if (file == NULL) { return; }
 
-    for (int i = 0; i < history_count; i++)
-    {
+    for (int i = 0; i < history_count; i++) {
         int index = (history_start + i) % MAX_HISTORY;
         fprintf(file, "%s\n", history[index]);
     }
@@ -267,29 +221,18 @@ static void history_save(void)
     fclose(file);
 }
 
-static void history_add(const char* line)
-{
-    if (line[0] == '\0')
-    {
-        return;
-    }
+static void history_add(const char *line) {
+    if (line[0] == '\0') { return; }
 
-    if (history_count > 0)
-    {
+    if (history_count > 0) {
         int last = (history_start + history_count - 1) % MAX_HISTORY;
-        if (strcmp(history[last], line) == 0)
-        {
-            return;
-        }
+        if (strcmp(history[last], line) == 0) { return; }
     }
 
-    if (history_count < MAX_HISTORY)
-    {
+    if (history_count < MAX_HISTORY) {
         snprintf(history[history_count], MAX_LINE, "%s", line);
         history_count++;
-    }
-    else
-    {
+    } else {
         snprintf(history[history_start], MAX_LINE, "%s", line);
         history_start = (history_start + 1) % MAX_HISTORY;
     }
@@ -297,17 +240,10 @@ static void history_add(const char* line)
     history_save();
 }
 
-static void terminal_enable_raw(void)
-{
-    if (!isatty(STDIN_FILENO))
-    {
-        return;
-    }
+static void terminal_enable_raw(void) {
+    if (!isatty(STDIN_FILENO)) { return; }
 
-    if (tcgetattr(STDIN_FILENO, &saved_termios) == -1)
-    {
-        return;
-    }
+    if (tcgetattr(STDIN_FILENO, &saved_termios) == -1) { return; }
 
     struct termios raw = saved_termios;
     raw.c_lflag &= (tcflag_t) ~(ICANON | ECHO | ISIG);
@@ -317,63 +253,37 @@ static void terminal_enable_raw(void)
     termios_saved = 1;
 }
 
-static void terminal_restore(void)
-{
-    if (termios_saved)
-    {
+static void terminal_restore(void) {
+    if (termios_saved) {
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_termios);
         termios_saved = 0;
     }
 }
 
-static int read_byte(void)
-{
+static int read_byte(void) {
     unsigned char byte = 0;
     ssize_t r;
-    do {
-        r = read(STDIN_FILENO, &byte, 1);
-    } while (r < 0 && errno == EINTR);
+    do { r = read(STDIN_FILENO, &byte, 1); } while (r < 0 && errno == EINTR);
     return (r == 1) ? (int) byte : -1;
 }
 
-static int read_escape_sequence(void)
-{
+static int read_escape_sequence(void) {
     int next = read_byte();
-    if (next != '[')
-    {
-        return -1;
-    }
+    if (next != '[') { return -1; }
 
     next = read_byte();
-    if (next == 'A')
-    {
-        return 256;
-    }
-    if (next == 'B')
-    {
-        return 257;
-    }
-    if (next == 'C')
-    {
-        return 258;
-    }
-    if (next == 'D')
-    {
-        return 259;
-    }
-    if (next == '3')
-    {
-        if (read_byte() == '~')
-        {
-            return 127;
-        }
+    if (next == 'A') { return 256; }
+    if (next == 'B') { return 257; }
+    if (next == 'C') { return 258; }
+    if (next == 'D') { return 259; }
+    if (next == '3') {
+        if (read_byte() == '~') { return 127; }
     }
 
     return -1;
 }
 
-static void redraw_line(const char* line, size_t cursor)
-{
+static void redraw_line(const char *line, size_t cursor) {
     char prompt[PATH_MAX + 64];
     build_prompt(prompt, sizeof(prompt));
 
@@ -381,37 +291,23 @@ static void redraw_line(const char* line, size_t cursor)
     fputs(prompt, stdout);
     fputs(line, stdout);
     fflush(stdout);
-    if (cursor < strlen(line))
-    {
-        dprintf(STDOUT_FILENO, "\033[%zuD", strlen(line) - cursor);
-    }
+    if (cursor < strlen(line)) { dprintf(STDOUT_FILENO, "\033[%zuD", strlen(line) - cursor); }
 }
 
-static int common_prefix_len(const char* a, const char* b)
-{
+static int common_prefix_len(const char *a, const char *b) {
     size_t i = 0;
-    while (a[i] != '\0' && b[i] != '\0' && a[i] == b[i])
-    {
-        i++;
-    }
+    while (a[i] != '\0' && b[i] != '\0' && a[i] == b[i]) { i++; }
     return (int) i;
 }
 
-static void complete_token(char* line, size_t* cursor, size_t* length)
-{
+static void complete_token(char *line, size_t *cursor, size_t *length) {
     size_t end = *cursor;
     size_t start = end;
-    while (start > 0 && !isspace((unsigned char) line[start - 1]))
-    {
-        start--;
-    }
+    while (start > 0 && !isspace((unsigned char) line[start - 1])) { start--; }
 
     char token[MAX_LINE];
     size_t token_len = end - start;
-    if (token_len >= sizeof(token))
-    {
-        return;
-    }
+    if (token_len >= sizeof(token)) { return; }
     memcpy(token, line + start, token_len);
     token[token_len] = '\0';
 
@@ -419,57 +315,36 @@ static void complete_token(char* line, size_t* cursor, size_t* length)
     char matches[64][PATH_MAX];
     int match_count = 0;
 
-    if (completing_command)
-    {
-        const char* path_env = getenv("PATH");
-        if (path_env != NULL)
-        {
+    if (completing_command) {
+        const char *path_env = getenv("PATH");
+        if (path_env != NULL) {
             char path_copy[PATH_MAX];
             strncpy(path_copy, path_env, sizeof(path_copy) - 1);
             path_copy[sizeof(path_copy) - 1] = '\0';
 
-            char* save = NULL;
-            for (char* dir = strtok_r(path_copy, ":", &save); dir != NULL && match_count < 64;
-                 dir = strtok_r(NULL, ":", &save))
-            {
-                DIR* directory = opendir(dir);
-                if (directory == NULL)
-                {
-                    continue;
-                }
+            char *save = NULL;
+            for (char *dir = strtok_r(path_copy, ":", &save); dir != NULL && match_count < 64;
+                 dir = strtok_r(NULL, ":", &save)) {
+                DIR *directory = opendir(dir);
+                if (directory == NULL) { continue; }
 
-                struct dirent* entry = NULL;
-                while ((entry = readdir(directory)) != NULL && match_count < 64)
-                {
-                    if (entry->d_name[0] == '.')
-                    {
-                        continue;
-                    }
-                    if (strncmp(entry->d_name, token, token_len) != 0)
-                    {
-                        continue;
-                    }
+                struct dirent *entry = NULL;
+                while ((entry = readdir(directory)) != NULL && match_count < 64) {
+                    if (entry->d_name[0] == '.') { continue; }
+                    if (strncmp(entry->d_name, token, token_len) != 0) { continue; }
 
                     int duplicate = 0;
-                    for (int i = 0; i < match_count; i++)
-                    {
-                        if (strcmp(matches[i], entry->d_name) == 0)
-                        {
+                    for (int i = 0; i < match_count; i++) {
+                        if (strcmp(matches[i], entry->d_name) == 0) {
                             duplicate = 1;
                             break;
                         }
                     }
-                    if (duplicate)
-                    {
-                        continue;
-                    }
+                    if (duplicate) { continue; }
 
                     char candidate[PATH_MAX];
                     snprintf(candidate, sizeof(candidate), "%s/%s", dir, entry->d_name);
-                    if (access(candidate, X_OK) != 0)
-                    {
-                        continue;
-                    }
+                    if (access(candidate, X_OK) != 0) { continue; }
 
                     snprintf(matches[match_count], sizeof(matches[match_count]), "%s",
                              entry->d_name);
@@ -478,48 +353,31 @@ static void complete_token(char* line, size_t* cursor, size_t* length)
                 closedir(directory);
             }
         }
-    }
-    else
-    {
+    } else {
         char dirpart[PATH_MAX];
-        const char* base = token;
-        char* slash = strrchr(token, '/');
-        if (slash != NULL)
-        {
+        const char *base = token;
+        char *slash = strrchr(token, '/');
+        if (slash != NULL) {
             size_t dir_len = (size_t) (slash - token);
-            if (dir_len == 0)
-            {
+            if (dir_len == 0) {
                 strcpy(dirpart, "/");
-            }
-            else
-            {
+            } else {
                 memcpy(dirpart, token, dir_len);
                 dirpart[dir_len] = '\0';
             }
             base = slash + 1;
-        }
-        else
-        {
-            if (!getcwd(dirpart, sizeof(dirpart)))
-            {
-                return;
-            }
+        } else {
+            if (!getcwd(dirpart, sizeof(dirpart))) { return; }
         }
 
-        DIR* directory = opendir(dirpart);
-        if (directory == NULL)
-        {
-            return;
-        }
+        DIR *directory = opendir(dirpart);
+        if (directory == NULL) { return; }
 
         size_t base_len = strlen(base);
-        struct dirent* entry = NULL;
-        while ((entry = readdir(directory)) != NULL && match_count < 64)
-        {
-            if (entry->d_name[0] == '.' && base_len == 0)
-                continue;
-            if (strncmp(entry->d_name, base, base_len) != 0)
-                continue;
+        struct dirent *entry = NULL;
+        while ((entry = readdir(directory)) != NULL && match_count < 64) {
+            if (entry->d_name[0] == '.' && base_len == 0) continue;
+            if (strncmp(entry->d_name, base, base_len) != 0) continue;
 
             char full[PATH_MAX];
             if (strcmp(dirpart, "/") == 0)
@@ -532,34 +390,37 @@ static void complete_token(char* line, size_t* cursor, size_t* length)
 
             if (slash != NULL) {
                 size_t fl = strlen(full);
-                if (fl + 2 < PATH_MAX) { memcpy(matches[match_count], full, fl);
-                    if (is_dir) { matches[match_count][fl] = '/'; fl++; }
-                    matches[match_count][fl] = '\0'; }
+                if (fl + 2 < PATH_MAX) {
+                    memcpy(matches[match_count], full, fl);
+                    if (is_dir) {
+                        matches[match_count][fl] = '/';
+                        fl++;
+                    }
+                    matches[match_count][fl] = '\0';
+                }
             } else {
                 /* no slash in token -> complete with just the name, not full path */
                 size_t nl = strlen(entry->d_name);
-                if (nl + 2 < PATH_MAX) { memcpy(matches[match_count], entry->d_name, nl);
-                    if (is_dir) { matches[match_count][nl] = '/'; nl++; }
-                    matches[match_count][nl] = '\0'; }
+                if (nl + 2 < PATH_MAX) {
+                    memcpy(matches[match_count], entry->d_name, nl);
+                    if (is_dir) {
+                        matches[match_count][nl] = '/';
+                        nl++;
+                    }
+                    matches[match_count][nl] = '\0';
+                }
             }
             match_count++;
         }
         closedir(directory);
     }
 
-    if (match_count == 0)
-    {
-        return;
-    }
+    if (match_count == 0) { return; }
 
-    if (match_count == 1)
-    {
-        const char* replacement = matches[0];
+    if (match_count == 1) {
+        const char *replacement = matches[0];
         size_t replace_len = strlen(replacement);
-        if (*length + replace_len > token_len + (MAX_LINE - 1))
-        {
-            return;
-        }
+        if (*length + replace_len > token_len + (MAX_LINE - 1)) { return; }
 
         memmove(line + start + replace_len, line + end, *length - end + 1);
         memcpy(line + start, replacement, replace_len);
@@ -570,23 +431,17 @@ static void complete_token(char* line, size_t* cursor, size_t* length)
     }
 
     int prefix = (int) strlen(matches[0]);
-    for (int i = 1; i < match_count; i++)
-    {
+    for (int i = 1; i < match_count; i++) {
         prefix = common_prefix_len(matches[0], matches[i]);
-        if (prefix <= (int) token_len)
-        {
+        if (prefix <= (int) token_len) {
             prefix = (int) token_len;
             break;
         }
     }
 
-    if (prefix > (int) token_len)
-    {
+    if (prefix > (int) token_len) {
         size_t add = (size_t) prefix - token_len;
-        if (*length + add >= MAX_LINE - 1)
-        {
-            return;
-        }
+        if (*length + add >= MAX_LINE - 1) { return; }
         memmove(line + start + prefix, line + end, *length - end + 1);
         memcpy(line + start, matches[0], (size_t) prefix);
         *length = start + prefix + (*length - end);
@@ -599,14 +454,9 @@ static void complete_token(char* line, size_t* cursor, size_t* length)
     redraw_line(line, *cursor);
 }
 
-static int read_line(char* line, size_t size)
-{
-    if (!isatty(STDIN_FILENO))
-    {
-        if (fgets(line, (int) size, stdin) == NULL)
-        {
-            return -1;
-        }
+static int read_line(char *line, size_t size) {
+    if (!isatty(STDIN_FILENO)) {
+        if (fgets(line, (int) size, stdin) == NULL) { return -1; }
         line[strcspn(line, "\n")] = '\0';
         return 0;
     }
@@ -624,17 +474,14 @@ static int read_line(char* line, size_t size)
     fputs(prompt, stdout);
     fflush(stdout);
 
-    for (;;)
-    {
+    for (;;) {
         int key = read_byte();
-        if (key == -1)
-        {
+        if (key == -1) {
             terminal_restore();
             return -1;
         }
 
-        if (key == '\n' || key == '\r')
-        {
+        if (key == '\n' || key == '\r') {
             putchar('\n');
             line[length] = '\0';
             terminal_restore();
@@ -655,16 +502,13 @@ static int read_line(char* line, size_t size)
             continue;
         }
 
-        if (key == 4)
-        {
+        if (key == 4) {
             terminal_restore();
             return -1; /* EOF */
         }
 
-        if (key == 127 || key == 8)
-        {
-            if (cursor > 0)
-            {
+        if (key == 127 || key == 8) {
+            if (cursor > 0) {
                 memmove(line + cursor - 1, line + cursor, length - cursor + 1);
                 length--;
                 cursor--;
@@ -673,37 +517,26 @@ static int read_line(char* line, size_t size)
             continue;
         }
 
-        if (key == '\t')
-        {
+        if (key == '\t') {
             complete_token(line, &cursor, &length);
             continue;
         }
 
-        if (key == 27)
-        {
+        if (key == 27) {
             key = read_escape_sequence();
-            if (key == 256 && history_count > 0)
-            {
-                if (history_index > 0)
-                {
-                    history_index--;
-                }
+            if (key == 256 && history_count > 0) {
+                if (history_index > 0) { history_index--; }
                 int index = (history_start + history_index) % MAX_HISTORY;
                 strncpy(line, history[index], size - 1);
                 line[size - 1] = '\0';
                 length = strlen(line);
                 cursor = length;
                 redraw_line(line, cursor);
-            }
-            else if (key == 257 && history_index < history_count)
-            {
+            } else if (key == 257 && history_index < history_count) {
                 history_index++;
-                if (history_index == history_count)
-                {
+                if (history_index == history_count) {
                     line[0] = '\0';
-                }
-                else
-                {
+                } else {
                     int index = (history_start + history_index) % MAX_HISTORY;
                     strncpy(line, history[index], size - 1);
                     line[size - 1] = '\0';
@@ -711,22 +544,17 @@ static int read_line(char* line, size_t size)
                 length = strlen(line);
                 cursor = length;
                 redraw_line(line, cursor);
-            }
-            else if (key == 258 && cursor < length)
-            {
+            } else if (key == 258 && cursor < length) {
                 cursor++;
                 redraw_line(line, cursor);
-            }
-            else if (key == 259 && cursor > 0)
-            {
+            } else if (key == 259 && cursor > 0) {
                 cursor--;
                 redraw_line(line, cursor);
             }
             continue;
         }
 
-        if (key >= 32 && length + 1 < size - 1)
-        {
+        if (key >= 32 && length + 1 < size - 1) {
             memmove(line + cursor + 1, line + cursor, length - cursor + 1);
             line[cursor] = (char) key;
             length++;
@@ -737,32 +565,27 @@ static int read_line(char* line, size_t size)
     }
 }
 
-static int exec_pipeline(char** argv, int argc, int background, const char* cmd)
-{
+static int exec_pipeline(char **argv, int argc, int background, const char *cmd) {
     int pipe_at[32];
     int n_pipes = 0;
-    for (int i = 0; i < argc; i++)
-    {
-        if (strcmp(argv[i], "|") == 0)
-            pipe_at[n_pipes++] = i;
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "|") == 0) pipe_at[n_pipes++] = i;
     }
     int n_stages = n_pipes + 1;
 
     int st_start[32];
-    char* outfile[32];
+    char *outfile[32];
     int append[32];
     int prev = 0;
-    char* infile[32];
-    for (int s = 0; s < n_stages; s++)
-    {
+    char *infile[32];
+    for (int s = 0; s < n_stages; s++) {
         int end = (s < n_pipes) ? pipe_at[s] : argc;
         st_start[s] = prev;
         outfile[s] = NULL;
-        infile[s]  = NULL;
-        append[s]  = 0;
+        infile[s] = NULL;
+        append[s] = 0;
         int cmd_end = end;
-        for (int i = prev; i + 1 < end; i++)
-        {
+        for (int i = prev; i + 1 < end; i++) {
             if (strcmp(argv[i], "<") == 0) {
                 infile[s] = argv[i + 1];
                 if (i < cmd_end) cmd_end = i;
@@ -790,25 +613,21 @@ static int exec_pipeline(char** argv, int argc, int background, const char* cmd)
     int n_children = 0;
     pid_t job_pgid = 0;
 
-    for (int s = 0; s < n_stages; s++)
-    {
-        int pipe_w[2] = {-1, -1};
-        if (s < n_stages - 1 && pipe(pipe_w) < 0)
-        {
+    for (int s = 0; s < n_stages; s++) {
+        int pipe_w[2] = { -1, -1 };
+        if (s < n_stages - 1 && pipe(pipe_w) < 0) {
             perror("pipe");
             sigprocmask(SIG_SETMASK, &oldmask, NULL);
             return 1;
         }
 
         pid_t pid = fork();
-        if (pid == -1)
-        {
+        if (pid == -1) {
             perror("fork");
             sigprocmask(SIG_SETMASK, &oldmask, NULL);
             return 1;
         }
-        if (pid == 0)
-        {
+        if (pid == 0) {
             signal(SIGINT, SIG_DFL);
             signal(SIGTSTP, SIG_DFL);
             sigprocmask(SIG_SETMASK, &oldmask, NULL);
@@ -816,19 +635,31 @@ static int exec_pipeline(char** argv, int argc, int background, const char* cmd)
             /* all pipeline children join the same pgroup */
             setpgid(0, job_pgid ? job_pgid : 0);
 
-            if (prev_read >= 0) { dup2(prev_read, STDIN_FILENO); close(prev_read); }
+            if (prev_read >= 0) {
+                dup2(prev_read, STDIN_FILENO);
+                close(prev_read);
+            }
             if (infile[s] != NULL) {
                 int fd = open(infile[s], O_RDONLY);
-                if (fd < 0) { perror(infile[s]); _exit(1); }
+                if (fd < 0) {
+                    perror(infile[s]);
+                    _exit(1);
+                }
                 dup2(fd, STDIN_FILENO);
                 close(fd);
             }
-            if (pipe_w[1] >= 0) { close(pipe_w[0]); dup2(pipe_w[1], STDOUT_FILENO); close(pipe_w[1]); }
-            if (outfile[s] != NULL)
-            {
+            if (pipe_w[1] >= 0) {
+                close(pipe_w[0]);
+                dup2(pipe_w[1], STDOUT_FILENO);
+                close(pipe_w[1]);
+            }
+            if (outfile[s] != NULL) {
                 int flags = O_WRONLY | O_CREAT | (append[s] ? O_APPEND : O_TRUNC);
                 int fd = open(outfile[s], flags, 0666);
-                if (fd < 0) { perror(outfile[s]); _exit(1); }
+                if (fd < 0) {
+                    perror(outfile[s]);
+                    _exit(1);
+                }
                 dup2(fd, STDOUT_FILENO);
                 close(fd);
             }
@@ -850,9 +681,8 @@ static int exec_pipeline(char** argv, int argc, int background, const char* cmd)
 
     if (prev_read >= 0) close(prev_read);
 
-    if (background)
-    {
-        job_t* j = job_add(job_pgid, children, n_children, cmd);
+    if (background) {
+        job_t *j = job_add(job_pgid, children, n_children, cmd);
         if (j) printf("[%d] %d\n", j->id, (int) job_pgid);
         sigprocmask(SIG_SETMASK, &oldmask, NULL);
         return 0;
@@ -863,8 +693,7 @@ static int exec_pipeline(char** argv, int argc, int background, const char* cmd)
 
     int status = 0;
     int any_stopped = 0;
-    for (int i = 0; i < n_children; i++)
-    {
+    for (int i = 0; i < n_children; i++) {
         int s;
         if (waitpid(children[i], &s, WUNTRACED) == -1) {
             if (errno != ECHILD) perror("waitpid");
@@ -876,34 +705,33 @@ static int exec_pipeline(char** argv, int argc, int background, const char* cmd)
 
     tcsetpgrp(STDIN_FILENO, getpgrp());
 
-    if (any_stopped)
-    {
-        job_t* j = job_add(job_pgid, children, n_children, cmd);
-        if (j) { j->stopped = 1; printf("\n[%d]+  Stopped\t%s\n", j->id, cmd); }
+    if (any_stopped) {
+        job_t *j = job_add(job_pgid, children, n_children, cmd);
+        if (j) {
+            j->stopped = 1;
+            printf("\n[%d]+  Stopped\t%s\n", j->id, cmd);
+        }
         return 128 + SIGTSTP;
     }
 
-    return WIFEXITED(status) ? WEXITSTATUS(status) : (WIFSIGNALED(status) ? 128 + WTERMSIG(status) : 1);
+    return WIFEXITED(status) ? WEXITSTATUS(status) :
+                               (WIFSIGNALED(status) ? 128 + WTERMSIG(status) : 1);
 }
 
-static void expand_globs(int* argc, char** argv)
-{
+static void expand_globs(int *argc, char **argv) {
     static char expanded[MAX_ARGS][MAX_LINE];
     int new_argc = 0;
 
-    for (int i = 0; i < *argc && new_argc < MAX_ARGS - 1; i++)
-    {
+    for (int i = 0; i < *argc && new_argc < MAX_ARGS - 1; i++) {
         glob_t gl;
-        if (glob(argv[i], GLOB_NOCHECK | GLOB_TILDE, NULL, &gl) != 0)
-        {
+        if (glob(argv[i], GLOB_NOCHECK | GLOB_TILDE, NULL, &gl) != 0) {
             strncpy(expanded[new_argc], argv[i], MAX_LINE - 1);
             expanded[new_argc][MAX_LINE - 1] = '\0';
             new_argc++;
             continue;
         }
 
-        for (size_t j = 0; j < gl.gl_pathc && new_argc < MAX_ARGS - 1; j++)
-        {
+        for (size_t j = 0; j < gl.gl_pathc && new_argc < MAX_ARGS - 1; j++) {
             strncpy(expanded[new_argc], gl.gl_pathv[j], MAX_LINE - 1);
             expanded[new_argc][MAX_LINE - 1] = '\0';
             new_argc++;
@@ -911,73 +739,53 @@ static void expand_globs(int* argc, char** argv)
         globfree(&gl);
     }
 
-    for (int i = 0; i < new_argc; i++)
-    {
-        argv[i] = expanded[i];
-    }
+    for (int i = 0; i < new_argc; i++) { argv[i] = expanded[i]; }
     argv[new_argc] = NULL;
     *argc = new_argc;
 }
 
-static int resolve_path(const char* target, char* result, size_t result_size)
-{
+static int resolve_path(const char *target, char *result, size_t result_size) {
     static char buf[PATH_MAX * 3];
 
-    if (target[0] == '~')
-    {
-        const char* home = getenv("HOME");
-        if (home == NULL)
-            return -1;
+    if (target[0] == '~') {
+        const char *home = getenv("HOME");
+        if (home == NULL) return -1;
         size_t home_len = strlen(home);
         size_t rest_len = strlen(target + 1);
-        if (home_len + rest_len + 1 > sizeof(buf))
-            return -1;
+        if (home_len + rest_len + 1 > sizeof(buf)) return -1;
         memcpy(buf, home, home_len);
         memcpy(buf + home_len, target + 1, rest_len + 1);
         target = buf;
     }
 
-    char* path = buf + PATH_MAX;
-    if (target[0] == '/')
-    {
+    char *path = buf + PATH_MAX;
+    if (target[0] == '/') {
         size_t len = strlen(target);
-        if (len >= PATH_MAX)
-            return -1;
+        if (len >= PATH_MAX) return -1;
         memcpy(path, target, len + 1);
-    }
-    else
-    {
+    } else {
         int n = snprintf(path, PATH_MAX, "%s/%s", shell_pwd, target);
-        if (n < 0 || (size_t)n >= PATH_MAX)
-            return -1;
+        if (n < 0 || (size_t) n >= PATH_MAX) return -1;
     }
 
-    char* norm = buf + PATH_MAX * 2;
+    char *norm = buf + PATH_MAX * 2;
     size_t pos = 0;
-    const char* p = path;
+    const char *p = path;
 
-    while (*p != '\0')
-    {
-        while (*p == '/')
-            p++;
-        if (*p == '\0')
-            break;
+    while (*p != '\0') {
+        while (*p == '/') p++;
+        if (*p == '\0') break;
 
-        const char* start = p;
-        while (*p != '\0' && *p != '/')
-            p++;
-        size_t comp_len = (size_t)(p - start);
+        const char *start = p;
+        while (*p != '\0' && *p != '/') p++;
+        size_t comp_len = (size_t) (p - start);
 
-        if (comp_len == 1 && start[0] == '.')
-            continue;
+        if (comp_len == 1 && start[0] == '.') continue;
 
-        if (comp_len == 2 && start[0] == '.' && start[1] == '.')
-        {
-            if (pos > 1)
-            {
+        if (comp_len == 2 && start[0] == '.' && start[1] == '.') {
+            if (pos > 1) {
                 pos--;
-                while (pos > 0 && norm[pos - 1] != '/')
-                    pos--;
+                while (pos > 0 && norm[pos - 1] != '/') pos--;
             }
             norm[pos] = '\0';
             continue;
@@ -988,15 +796,13 @@ static int resolve_path(const char* target, char* result, size_t result_size)
         else if (pos == 0)
             norm[pos++] = '/';
 
-        if (pos + comp_len >= PATH_MAX)
-            return -1;
+        if (pos + comp_len >= PATH_MAX) return -1;
         memcpy(norm + pos, start, comp_len);
         pos += comp_len;
         norm[pos] = '\0';
     }
 
-    if (pos == 0)
-    {
+    if (pos == 0) {
         norm[pos++] = '/';
         norm[pos] = '\0';
     }
@@ -1006,8 +812,7 @@ static int resolve_path(const char* target, char* result, size_t result_size)
     return 0;
 }
 
-static void print_help(void)
-{
+static void print_help(void) {
     puts("Built-in commands:");
     puts("  cd [dir]  - Change directory (default: HOME)");
     puts("  exit      - Exit the shell");
@@ -1015,8 +820,7 @@ static void print_help(void)
     puts("External commands are also supported via $PATH.");
 }
 
-static void argv_to_cmd(char** argv, int argc, char* buf, size_t sz)
-{
+static void argv_to_cmd(char **argv, int argc, char *buf, size_t sz) {
     size_t pos = 0;
     for (int i = 0; i < argc && argv[i]; i++) {
         if (i && pos < sz - 1) buf[pos++] = ' ';
@@ -1028,27 +832,31 @@ static void argv_to_cmd(char** argv, int argc, char* buf, size_t sz)
     buf[pos] = '\0';
 }
 
-static int apply_builtin_redirs(char** argv, int* argc, int start)
-{
+static int apply_builtin_redirs(char **argv, int *argc, int start) {
     int out_fd = -1, err_fd = -1;
     int new_argc = start;
 
-    for (int i = start; i < *argc; i++)
-    {
+    for (int i = start; i < *argc; i++) {
         int target = -1;
         int append = 0;
-        const char* path = NULL;
+        const char *path = NULL;
 
-        if (strcmp(argv[i], ">") == 0 || strcmp(argv[i], ">>") == 0 ||
-            strcmp(argv[i], "1>") == 0 || strcmp(argv[i], "1>>") == 0) {
+        if (strcmp(argv[i], ">") == 0 || strcmp(argv[i], ">>") == 0 || strcmp(argv[i], "1>") == 0 ||
+            strcmp(argv[i], "1>>") == 0) {
             target = STDOUT_FILENO;
             append = strstr(argv[i], ">>") != NULL;
-            if (i + 1 >= *argc) { errno = EINVAL; goto fail; }
+            if (i + 1 >= *argc) {
+                errno = EINVAL;
+                goto fail;
+            }
             path = argv[++i];
         } else if (strcmp(argv[i], "2>") == 0 || strcmp(argv[i], "2>>") == 0) {
             target = STDERR_FILENO;
             append = strcmp(argv[i], "2>>") == 0;
-            if (i + 1 >= *argc) { errno = EINVAL; goto fail; }
+            if (i + 1 >= *argc) {
+                errno = EINVAL;
+                goto fail;
+            }
             path = argv[++i];
         } else if (strcmp(argv[i], "2>&1") == 0) {
             if (err_fd >= 0) close(err_fd);
@@ -1069,10 +877,19 @@ static int apply_builtin_redirs(char** argv, int* argc, int start)
             target = STDERR_FILENO;
             path = argv[i] + 2;
         } else if (strcmp(argv[i], "<") == 0) {
-            if (i + 1 >= *argc) { errno = EINVAL; goto fail; }
+            if (i + 1 >= *argc) {
+                errno = EINVAL;
+                goto fail;
+            }
             int fd = open(argv[++i], O_RDONLY);
-            if (fd < 0) { perror(argv[i]); goto fail; }
-            if (dup2(fd, STDIN_FILENO) < 0) { close(fd); goto fail; }
+            if (fd < 0) {
+                perror(argv[i]);
+                goto fail;
+            }
+            if (dup2(fd, STDIN_FILENO) < 0) {
+                close(fd);
+                goto fail;
+            }
             close(fd);
             continue;
         } else {
@@ -1111,8 +928,7 @@ fail:
     return -1;
 }
 
-static int run_command(int argc, char** argv)
-{
+static int run_command(int argc, char **argv) {
     if (argc == 0) return 0;
 
     /* detect trailing & for background */
@@ -1125,19 +941,18 @@ static int run_command(int argc, char** argv)
 
     if (strcmp(argv[0], "exit") == 0) exit(argc > 1 ? atoi(argv[1]) : 0);
 
-    if (strcmp(argv[0], "help") == 0) { print_help(); return 0; }
+    if (strcmp(argv[0], "help") == 0) {
+        print_help();
+        return 0;
+    }
 
-    if (strcmp(argv[0], "export") == 0)
-    {
+    if (strcmp(argv[0], "export") == 0) {
         int ret = 0;
-        for (int i = 1; i < argc; i++)
-        {
-            char* eq = strchr(argv[i], '=');
-            if (eq == NULL)
-            {
-                const char* cur = getenv(argv[i]);
-                if (setenv(argv[i], cur ? cur : "", 1) != 0)
-                {
+        for (int i = 1; i < argc; i++) {
+            char *eq = strchr(argv[i], '=');
+            if (eq == NULL) {
+                const char *cur = getenv(argv[i]);
+                if (setenv(argv[i], cur ? cur : "", 1) != 0) {
                     perror("export");
                     ret = 1;
                 }
@@ -1145,8 +960,7 @@ static int run_command(int argc, char** argv)
             }
 
             *eq = '\0';
-            if (setenv(argv[i], eq + 1, 1) != 0)
-            {
+            if (setenv(argv[i], eq + 1, 1) != 0) {
                 perror("export");
                 ret = 1;
             }
@@ -1155,37 +969,35 @@ static int run_command(int argc, char** argv)
         return ret;
     }
 
-    if (strcmp(argv[0], "exec") == 0)
-    {
+    if (strcmp(argv[0], "exec") == 0) {
         if (apply_builtin_redirs(argv, &argc, 1) < 0) {
             perror("exec");
             return 1;
         }
-        if (argc == 1)
-            return 0;
+        if (argc == 1) return 0;
         execvp(argv[1], argv + 1);
         perror(argv[1]);
         return 127;
     }
 
-    if (strcmp(argv[0], "jobs") == 0)
-    {
+    if (strcmp(argv[0], "jobs") == 0) {
         for (int i = 0; i < MAX_JOBS; i++) {
-            job_t* j = &g_jobs[i];
+            job_t *j = &g_jobs[i];
             if (!j->pgid) continue;
-            printf("[%d]%s  %s\t\t%s\n", j->id,
-                   (job_last(0) == j ? "+" : " "),
+            printf("[%d]%s  %s\t\t%s\n", j->id, (job_last(0) == j ? "+" : " "),
                    j->stopped ? "Stopped" : "Running", j->cmd);
         }
         return 0;
     }
 
-    if (strcmp(argv[0], "fg") == 0)
-    {
-        job_t* j = NULL;
+    if (strcmp(argv[0], "fg") == 0) {
+        job_t *j = NULL;
         if (argv[1] && argv[1][0] == '%') j = job_by_id(atoi(argv[1] + 1));
         if (!j) j = job_last(0);
-        if (!j) { fputs("fg: no current job\n", stderr); return 1; }
+        if (!j) {
+            fputs("fg: no current job\n", stderr);
+            return 1;
+        }
         printf("%s\n", j->cmd);
         tcsetpgrp(STDIN_FILENO, j->pgid);
         j->stopped = 0;
@@ -1198,35 +1010,52 @@ static int run_command(int argc, char** argv)
             status = s;
         }
         tcsetpgrp(STDIN_FILENO, getpgrp());
-        if (any_stopped) { j->stopped = 1; printf("\n[%d]+  Stopped\t%s\n", j->id, j->cmd); return 128 + SIGTSTP; }
+        if (any_stopped) {
+            j->stopped = 1;
+            printf("\n[%d]+  Stopped\t%s\n", j->id, j->cmd);
+            return 128 + SIGTSTP;
+        }
         int ret = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
         job_remove(j);
         return ret;
     }
 
-    if (strcmp(argv[0], "bg") == 0)
-    {
-        job_t* j = NULL;
+    if (strcmp(argv[0], "bg") == 0) {
+        job_t *j = NULL;
         if (argv[1] && argv[1][0] == '%') j = job_by_id(atoi(argv[1] + 1));
         if (!j) j = job_last(1);
-        if (!j) { fputs("bg: no stopped jobs\n", stderr); return 1; }
+        if (!j) {
+            fputs("bg: no stopped jobs\n", stderr);
+            return 1;
+        }
         j->stopped = 0;
         kill(-j->pgid, SIGCONT);
         printf("[%d]+ %s &\n", j->id, j->cmd);
         return 0;
     }
 
-    if (strcmp(argv[0], "cd") == 0)
-    {
+    if (strcmp(argv[0], "cd") == 0) {
         for (int i = 1; i < argc; i++) {
-            if (strcmp(argv[i], "|") == 0 || strcmp(argv[i], ">") == 0 || strcmp(argv[i], ">>") == 0)
-                { fputs("cd: pipes/redirections not supported\n", stderr); return 1; }
+            if (strcmp(argv[i], "|") == 0 || strcmp(argv[i], ">") == 0 ||
+                strcmp(argv[i], ">>") == 0) {
+                fputs("cd: pipes/redirections not supported\n", stderr);
+                return 1;
+            }
         }
-        const char* dir = argv[1] ? argv[1] : getenv("HOME");
-        if (!dir) { fputs("cd: HOME not set\n", stderr); return 0; }
+        const char *dir = argv[1] ? argv[1] : getenv("HOME");
+        if (!dir) {
+            fputs("cd: HOME not set\n", stderr);
+            return 0;
+        }
         static char resolved[PATH_MAX];
-        if (resolve_path(dir, resolved, sizeof(resolved)) != 0) { fputs("cd: path too long\n", stderr); return 0; }
-        if (chdir(resolved) != 0) { perror("cd"); return 1; }
+        if (resolve_path(dir, resolved, sizeof(resolved)) != 0) {
+            fputs("cd: path too long\n", stderr);
+            return 0;
+        }
+        if (chdir(resolved) != 0) {
+            perror("cd");
+            return 1;
+        }
         strncpy(shell_pwd, resolved, sizeof(shell_pwd) - 1);
         shell_pwd[sizeof(shell_pwd) - 1] = '\0';
         return 0;
@@ -1237,20 +1066,21 @@ static int run_command(int argc, char** argv)
     return exec_pipeline(argv, argc, background, cmdbuf);
 }
 
-static int split_logic(const char* in, seg_t* segs, int max)
-{
+static int split_logic(const char *in, seg_t *segs, int max) {
     int n = 0, conn = SEG_FIRST, quote = 0;
     char buf[MAX_LINE];
     int bpos = 0;
-    const char* p = in;
+    const char *p = in;
 
     for (;;) {
         char c = *p;
 
         if (!c) {
             buf[bpos] = '\0';
-            char* s = buf; while (isspace((unsigned char)*s)) s++;
-            char* e = s + strlen(s); while (e > s && isspace((unsigned char)e[-1])) *--e = '\0';
+            char *s = buf;
+            while (isspace((unsigned char) *s)) s++;
+            char *e = s + strlen(s);
+            while (e > s && isspace((unsigned char) e[-1])) *--e = '\0';
             if (*s && n < max) {
                 segs[n].conn = conn;
                 strncpy(segs[n].seg, s, MAX_LINE - 1);
@@ -1261,29 +1091,47 @@ static int split_logic(const char* in, seg_t* segs, int max)
         }
 
         if (quote) {
-            if (c == (char)quote) quote = 0;
+            if (c == (char) quote) quote = 0;
             if (bpos < MAX_LINE - 1) buf[bpos++] = c;
-            p++; continue;
+            p++;
+            continue;
         }
         if (c == '\'' || c == '"') {
             quote = c;
             if (bpos < MAX_LINE - 1) buf[bpos++] = c;
-            p++; continue;
+            p++;
+            continue;
         }
         if (c == '\\' && p[1]) {
-            if (bpos < MAX_LINE - 2) { buf[bpos++] = c; buf[bpos++] = p[1]; }
-            p += 2; continue;
+            if (bpos < MAX_LINE - 2) {
+                buf[bpos++] = c;
+                buf[bpos++] = p[1];
+            }
+            p += 2;
+            continue;
         }
 
         int flush = 0, next_conn = SEG_FIRST;
-        if      (c == '&' && p[1] == '&') { flush = 1; next_conn = SEG_AND; p += 2; }
-        else if (c == '|' && p[1] == '|') { flush = 1; next_conn = SEG_OR;  p += 2; }
-        else if (c == ';')                 { flush = 1; next_conn = SEG_SEQ; p++;    }
+        if (c == '&' && p[1] == '&') {
+            flush = 1;
+            next_conn = SEG_AND;
+            p += 2;
+        } else if (c == '|' && p[1] == '|') {
+            flush = 1;
+            next_conn = SEG_OR;
+            p += 2;
+        } else if (c == ';') {
+            flush = 1;
+            next_conn = SEG_SEQ;
+            p++;
+        }
 
         if (flush) {
             buf[bpos] = '\0';
-            char* s = buf; while (isspace((unsigned char)*s)) s++;
-            char* e = s + strlen(s); while (e > s && isspace((unsigned char)e[-1])) *--e = '\0';
+            char *s = buf;
+            while (isspace((unsigned char) *s)) s++;
+            char *e = s + strlen(s);
+            while (e > s && isspace((unsigned char) e[-1])) *--e = '\0';
             if (*s && n < max) {
                 segs[n].conn = conn;
                 strncpy(segs[n].seg, s, MAX_LINE - 1);
@@ -1300,18 +1148,17 @@ static int split_logic(const char* in, seg_t* segs, int max)
     return n;
 }
 
-static int run_line_logic(char* input)
-{
+static int run_line_logic(char *input) {
     seg_t segs[32];
     int n = split_logic(input, segs, 32);
     int status = 0;
     for (int i = 0; i < n; i++) {
         if (segs[i].conn == SEG_AND && status != 0) continue;
-        if (segs[i].conn == SEG_OR  && status == 0) continue;
+        if (segs[i].conn == SEG_OR && status == 0) continue;
         char copy[MAX_LINE];
         strncpy(copy, segs[i].seg, MAX_LINE - 1);
         copy[MAX_LINE - 1] = '\0';
-        char* cmd_argv[MAX_ARGS];
+        char *cmd_argv[MAX_ARGS];
         int argc = split_line(copy, cmd_argv);
         if (argc > 0) expand_globs(&argc, cmd_argv);
         status = run_command(argc, cmd_argv);
@@ -1322,40 +1169,40 @@ static int run_line_logic(char* input)
 /* Execute an if/elif/else/fi block.
    cond_line is the full `if COND` line (with optional `; then` suffix).
    File is positioned right after that line (next line may be `then`). */
-static int run_if_block(FILE* f, const char* cond_line, int outer_status)
-{
+static int run_if_block(FILE *f, const char *cond_line, int outer_status) {
     /* extract condition: skip `if `, strip `; then` or ` then` suffix */
-    const char* cp = cond_line;
-    while (*cp && !isspace((unsigned char)*cp)) cp++; /* skip 'if' */
-    while (*cp && isspace((unsigned char)*cp)) cp++;  /* skip space */
+    const char *cp = cond_line;
+    while (*cp && !isspace((unsigned char) *cp)) cp++; /* skip 'if' */
+    while (*cp && isspace((unsigned char) *cp)) cp++;  /* skip space */
     char cond[MAX_LINE];
-    strncpy(cond, cp, sizeof(cond)-1);
-    cond[sizeof(cond)-1] = '\0';
+    strncpy(cond, cp, sizeof(cond) - 1);
+    cond[sizeof(cond) - 1] = '\0';
     /* strip ; then */
-    char* semi = strstr(cond, "; then");
+    char *semi = strstr(cond, "; then");
     if (!semi) semi = strstr(cond, ";then");
-    if (semi) *semi = '\0';
+    if (semi)
+        *semi = '\0';
     else {
-        char* sthen = strstr(cond, " then");
+        char *sthen = strstr(cond, " then");
         if (sthen) *sthen = '\0';
     }
     /* strip trailing whitespace */
-    int cl = (int)strlen(cond);
-    while (cl > 0 && isspace((unsigned char)cond[cl-1])) cond[--cl] = '\0';
+    int cl = (int) strlen(cond);
+    while (cl > 0 && isspace((unsigned char) cond[cl - 1])) cond[--cl] = '\0';
 
     /* evaluate condition */
     int cond_status = run_line_logic(cond);
     int take_then = (cond_status == 0);
 
-    int depth = 1;       /* nesting depth */
-    int in_else = 0;     /* 0=then-block, 1=else-block */
+    int depth = 1;   /* nesting depth */
+    int in_else = 0; /* 0=then-block, 1=else-block */
     int status = outer_status;
     char line[MAX_LINE];
 
     while (fgets(line, sizeof(line), f)) {
         line[strcspn(line, "\n")] = '\0';
-        char* p = line;
-        while (isspace((unsigned char)*p)) p++;
+        char *p = line;
+        while (isspace((unsigned char) *p)) p++;
         if (*p == '\0' || *p == '#') continue;
 
         /* track nesting */
@@ -1364,26 +1211,23 @@ static int run_if_block(FILE* f, const char* cond_line, int outer_status)
         } else if (strcmp(p, "fi") == 0) {
             if (--depth == 0) break;
         } else if (depth == 1 && strcmp(p, "else") == 0) {
-            in_else = 1; continue;
+            in_else = 1;
+            continue;
         } else if (depth == 1 && strcmp(p, "then") == 0) {
             continue; /* standalone `then` line */
         }
 
         if (depth == 1) {
             int should_exec = in_else ? !take_then : take_then;
-            if (should_exec) {
-                status = run_line_logic(p);
-            }
+            if (should_exec) { status = run_line_logic(p); }
         }
     }
     return status;
 }
 
-static int run_script(const char* path)
-{
-    FILE* file = fopen(path, "r");
-    if (file == NULL)
-    {
+static int run_script(const char *path) {
+    FILE *file = fopen(path, "r");
+    if (file == NULL) {
         perror(path);
         return 127;
     }
@@ -1393,46 +1237,35 @@ static int run_script(const char* path)
     int status = 0;
 
     logical[0] = '\0';
-    while (fgets(physical, sizeof(physical), file) != NULL)
-    {
+    while (fgets(physical, sizeof(physical), file) != NULL) {
         physical[strcspn(physical, "\n")] = '\0';
         size_t len = strlen(physical);
-        if (len > 0 && physical[len - 1] == '\r')
-            physical[--len] = '\0';
+        if (len > 0 && physical[len - 1] == '\r') physical[--len] = '\0';
 
         int continued = len > 0 && physical[len - 1] == '\\';
-        if (continued)
-            physical[--len] = '\0';
+        if (continued) physical[--len] = '\0';
 
-        if (strlen(logical) + len + 1 >= sizeof(logical))
-        {
+        if (strlen(logical) + len + 1 >= sizeof(logical)) {
             fputs("script: line too long\n", stderr);
             status = 1;
             logical[0] = '\0';
-            if (!continued)
-                continue;
-        }
-        else
-        {
+            if (!continued) continue;
+        } else {
             strncat(logical, physical, sizeof(logical) - strlen(logical) - 1);
         }
 
-        if (continued)
-            continue;
+        if (continued) continue;
 
-        char* p = logical;
-        while (isspace((unsigned char) *p))
-            p++;
+        char *p = logical;
+        while (isspace((unsigned char) *p)) p++;
 
-        if (*p == '\0' || *p == '#')
-        {
+        if (*p == '\0' || *p == '#') {
             logical[0] = '\0';
             continue;
         }
 
         /* if/then/fi block */
-        if (strncmp(p, "if ", 3) == 0)
-        {
+        if (strncmp(p, "if ", 3) == 0) {
             status = run_if_block(file, p, status);
             logical[0] = '\0';
             continue;
@@ -1449,48 +1282,43 @@ static int run_script(const char* path)
     return status;
 }
 
-static int run_command_string(const char* command)
-{
+static int run_command_string(const char *command) {
     char line[MAX_LINE];
     strncpy(line, command, sizeof(line) - 1);
     line[sizeof(line) - 1] = '\0';
     return run_line_logic(line);
 }
 
-int main(int argc, char** argv)
-{
+int main(int argc, char **argv) {
     signal(SIGINT, SIG_IGN);
 
-    const char* path_env = getenv("PATH");
+    const char *path_env = getenv("PATH");
     if (!path_env || !*path_env || !strstr(path_env, "/usr/bin"))
         setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin", 1);
 
-    if (getcwd(shell_pwd, sizeof(shell_pwd)) == NULL)
-    {
-        const char* env = getenv("PWD");
-        if (env != NULL)
-        {
+    if (getcwd(shell_pwd, sizeof(shell_pwd)) == NULL) {
+        const char *env = getenv("PWD");
+        if (env != NULL) {
             strncpy(shell_pwd, env, sizeof(shell_pwd) - 1);
             shell_pwd[sizeof(shell_pwd) - 1] = '\0';
-        }
-        else
-        {
+        } else {
             snprintf(shell_pwd, sizeof(shell_pwd), "/");
         }
     }
 
-    if (argc > 2 && strcmp(argv[1], "-c") == 0)
-        return run_command_string(argv[2]);
+    if (argc > 2 && strcmp(argv[1], "-c") == 0) return run_command_string(argv[2]);
 
     /* skip flags like -i/-l/-s that xterm passes for interactive/login shells;
        only treat a non-flag argument as a script path */
     {
         int script_arg = 0;
         for (int ai = 1; ai < argc; ai++) {
-            if (argv[ai][0] != '-') { script_arg = ai; break; }
+            if (argv[ai][0] != '-') {
+                script_arg = ai;
+                break;
+            }
         }
-        if (script_arg)
-            return run_script(argv[script_arg]);
+        if (script_arg) return run_script(argv[script_arg]);
     }
 
     puts("");
@@ -1500,11 +1328,10 @@ int main(int argc, char** argv)
 
     char line[MAX_LINE];
 
-    for (;;)
-    {
+    for (;;) {
         /* reap finished background jobs */
         for (int i = 0; i < MAX_JOBS; i++) {
-            job_t* j = &g_jobs[i];
+            job_t *j = &g_jobs[i];
             if (!j->pgid || j->stopped) continue;
             int all_done = 1;
             for (int k = 0; k < j->npids; k++) {
@@ -1526,9 +1353,13 @@ int main(int argc, char** argv)
 
         int rl = read_line(line, sizeof(line));
         if (rl == 2) continue;
-        if (rl != 0) { putchar('\n'); break; }
+        if (rl != 0) {
+            putchar('\n');
+            break;
+        }
 
-        char* tp = line; while (isspace((unsigned char)*tp)) tp++;
+        char *tp = line;
+        while (isspace((unsigned char) *tp)) tp++;
         if (*tp) history_add(line);
 
         char line_copy[MAX_LINE];

@@ -1,6 +1,5 @@
 #include "common.h"
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     bool nl = true;
     int i = 1;
     if (argc > 1 && strcmp(argv[1], "-n") == 0) {

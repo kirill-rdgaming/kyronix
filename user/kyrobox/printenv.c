@@ -1,7 +1,6 @@
 #include "common.h"
 extern char **environ;
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     if (argc == 1) {
         for (char **e = environ; *e; e++) puts(*e);
         return 0;
