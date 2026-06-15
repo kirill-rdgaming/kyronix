@@ -1,6 +1,7 @@
 #include "vfs.h"
 #include "devfs.h"
 #include "eventfd.h"
+#include "inet_socket.h"
 #include "procfs.h"
 #include "unix_socket.h"
 #include "syscall/syscall.h"
@@ -619,8 +620,6 @@ int vfs_rename(const char* oldpath, const char* newpath)
     vfs_node_t* new_parent = parent_of(newpath, &new_leaf);
     if (!new_parent || new_parent->type != VFS_TYPE_DIR) { node_unref(n); node_unref(new_parent); return -(int)ENOENT; }
     if (!new_leaf || !*new_leaf) { node_unref(n); node_unref(new_parent); return -(int)EINVAL; }
-    /* source removal is governed by sticky on the old parent; target creation by
-       write on the new parent. the replaced target (if any) is checked below. */
     if (!may_delete_in(n->parent, n) || !may_create_in(new_parent)) { node_unref(n); node_unref(new_parent); return -(int)EACCES; }
 
     uint64_t _f = irq_save();
@@ -790,6 +789,7 @@ bool fd_pollin(int fd)
     if (!f) return false;
     if (f->efd) return f->efd->counter > 0;
     if (f->tfd) return f->tfd->next_tick && g_ticks >= f->tfd->next_tick;
+    if (f->inet) return inet_poll_in(f->inet);
     if (f->wpipe) /* socket - readable when read-pipe has data */
         return f->pipe->count > 0 || f->pipe->write_refs == 0;
     if (f->pipe)
@@ -808,6 +808,7 @@ bool fd_pollout(int fd)
 {
     vfs_file_t* f = fd_get(fd);
     if (!f) return false;
+    if (f->inet) return inet_poll_out(f->inet);
     if (f->wpipe) /* socket - writable when write-pipe has space */
         return f->wpipe->count < PIPE_BUFSZ && f->wpipe->read_refs > 0;
     if (f->node && f->node->type == VFS_TYPE_SOCK)
@@ -852,6 +853,7 @@ static void file_close(vfs_file_t* f)
         return;
     if (f->efd) { kfree(f->efd); f->magic = 0; kfree(f); return; }
     if (f->tfd) { kfree(f->tfd); f->magic = 0; kfree(f); return; }
+    if (f->inet) { inet_conn_close(f->inet); f->magic = 0; kfree(f); return; }
     if (!f->pipe && !f->wpipe && f->node && f->node->type == VFS_TYPE_SOCK) {
         unix_socket_close(f);
         node_unref(f->node);
@@ -882,8 +884,6 @@ static void file_close(vfs_file_t* f)
     if (f->node) {
         vfs_node_t* n = f->node;
         void (*cc)(vfs_node_t*) = (n->type == VFS_TYPE_CHR) ? n->chr_close : NULL;
-        /* run chr_close on the final reference BEFORE dropping it: node_unref may
-           free n, and reading n->refcnt / calling cc(n) afterwards is a uaf. */
         if (cc && n->refcnt <= 1)
             cc(n);
         node_unref(n);
@@ -1039,8 +1039,6 @@ static void fill_stat(vfs_node_t* n, struct linux_stat* st)
     st->st_blocks = (int64_t) ((n->size + 511) / 512);
 }
 
-/* validate+copy a user path into kbuf[512]; returns NULL on a bad user pointer.
-   Kernel-internal callers pass pointers above USER_LIMIT, which we copy as-is. */
 const char* vfs_copy_user_path(const char* path, char* kbuf)
 {
     if (!path) return NULL;
@@ -1136,7 +1134,7 @@ int fd_open(const char* path, int flags, int mode)
     f->flags = flags;
     f->pos = 0;
     f->cloexec = (flags & O_CLOEXEC) ? 1 : 0;
-    /* n is already reffed: from_lookup → lookup_ref bumped it; !from_lookup → node_ref above */
+    /* n is already reffed: from_lookup -> lookup_ref bumped it; !from_lookup -> node_ref above */
     (void)from_lookup;
     if ((flags & O_TRUNC) && n->type == VFS_TYPE_REG)
         n->size = 0;
@@ -1180,6 +1178,7 @@ int64_t fd_read(int fd, void* buf, uint64_t len)
         return -(int64_t) EFAULT;
     if (f->efd) return eventfd_read(f, (char*)buf, len);
     if (f->tfd) return timerfd_read(f, (char*)buf, len);
+    if (f->inet) return inet_fd_read(f->inet, buf, len, f->flags);
 
     if (!f->pipe && !f->wpipe && (f->flags & O_ACCMODE) == O_WRONLY)
         return -(int64_t) EBADF;
@@ -1256,6 +1255,8 @@ int64_t fd_peek(int fd, void* buf, uint64_t len, uint64_t skip)
 
 static int64_t fd_write_dispatch(vfs_file_t* f, const void* buf, uint64_t len)
 {
+    if (f->inet) return inet_fd_write(f->inet, buf, len);
+
     if (!f->pipe && !f->wpipe && (f->flags & O_ACCMODE) == O_RDONLY)
         return -(int64_t) EBADF;
 
@@ -1723,7 +1724,7 @@ int vfs_mknod(const char* path, uint32_t mode, uint64_t dev)
 int at_resolve(int dirfd, const char* path, char* out, size_t sz)
 {
     char _pbuf[512];
-    if (sz) out[0] = '\0'; /* callers that ignore our return get an empty (→ENOENT) path */
+    if (sz) out[0] = '\0';
     if (!(path = vfs_copy_user_path(path, _pbuf))) return -(int)EFAULT;
     if (path[0] == '/' || dirfd == AT_FDCWD) {
         vfs_abs_path(out, sz, path);

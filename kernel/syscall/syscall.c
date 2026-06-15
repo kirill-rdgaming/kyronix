@@ -4,6 +4,7 @@
 #include "poll.h"
 #include "socket.h"
 #include "time.h"
+#include "fs/inet_socket.h"
 #include "arch/x86_64/cpu.h"
 #include "fs/pipe.h"
 #include "mm/shm.h"
@@ -858,17 +859,21 @@ __attribute__((noreturn)) void proc_do_exit(int code)
             *p->cleartid_addr = 0;
             cleartid_wake(p->cleartid_addr);
         }
-        proc_kstack_free(p);
-        p->state = PROC_UNUSED;
-        /* find another ready process before losing our stack */
-        proc_t* nt = proc_next_ready(p);
-        if (nt) {
-            nt->state = PROC_RUNNING;
-            vfs_set_fdtable(nt->fds);
-            g_current_space = nt->space;
-            cpu_set_kernel_stack(nt->kstack_top);
-            sched_switch(nt);
-        }
+        /* We are STILL running on this thread's kernel stack - freeing it now
+           (vmm_unmap) would unmap the live stack and #DF. Mark it PROC_DYING and
+           defer the kstack free until another context is running on its own stack. */
+        p->state = PROC_DYING;
+        proc_defer_thread_reap(p);
+        /* Idle with IRQs ENABLED until something is runnable - a sibling/main may
+           be transiently WAITING (blocked in poll/futex) and only the timer can
+           wake it. cpu_halt() here (cli;hlt) would kill the timer and deadlock. */
+        proc_t* nt = proc_idle_until_ready(p);
+        nt->state = PROC_RUNNING;
+        vfs_set_fdtable(nt->fds);
+        g_current_space = nt->space;
+        cpu_set_kernel_stack(nt->kstack_top);
+        sched_switch(nt);
+        /* unreachable: this thread is dead and never scheduled again */
         cpu_halt();
     }
 
@@ -888,16 +893,16 @@ __attribute__((noreturn)) void proc_do_exit(int code)
             sched_switch(parent);
         }
     }
-    /* no parent to switch to: find any ready process */
-    proc_t* any = proc_next_ready(p);
-    if (any) {
-        any->state = PROC_RUNNING;
-        vfs_set_fdtable(any->fds);
-        g_current_space = any->space;
-        cpu_set_kernel_stack(any->kstack_top);
-        sched_switch(any);
-    }
-    cpu_halt();
+    /* Parent wasn't switchable: idle (IRQs on) until some proc is READY, then
+       switch. Never cpu_halt() here - that disables the timer and deadlocks if
+       every proc is transiently WAITING. The zombie waits for wait4 to reap it. */
+    proc_t* any = proc_idle_until_ready(p);
+    any->state = PROC_RUNNING;
+    vfs_set_fdtable(any->fds);
+    g_current_space = any->space;
+    cpu_set_kernel_stack(any->kstack_top);
+    sched_switch(any);
+    cpu_halt(); /* unreachable */
 }
 
 static int64_t sys_wait4(int pid, int* wstatus, int options, void* rusage)
@@ -1982,27 +1987,58 @@ void syscall_dispatch(syscall_frame_t* f)
     case 43: /* accept(fd, addr, addrlen) */
         ret = sys_socket_accept((int)a1, (struct sockaddr_un*)a2, (int*)a3, 0);
         break;
-    case 44: /* send(fd, buf, len, flags) */
-        ret = fd_write((int)a1, (const void*)a2, a3);
+    case 44: { /* sendto(fd, buf, len, flags, addr, addrlen) */
+        vfs_file_t* sf = fd_get_file((int)a1);
+        if (sf && sf->inet && a5) {
+            if (!uptr_ok((void*)a5, 16))
+                { ret = -(int64_t)EFAULT; break; }
+            ret = inet_sendto(sf->inet, (const void*)a2, a3,
+                              (const struct sockaddr_in*)a5);
+        } else if (sf && sf->inet) {
+            ret = inet_fd_write(sf->inet, (const void*)a2, a3);
+        } else {
+            ret = fd_write((int)a1, (const void*)a2, a3);
+        }
         break;
-    case 45: /* recv(fd, buf, len, flags) */
-        ret = fd_read((int)a1, (void*)a2, a3);
+    }
+    case 45: { /* recvfrom(fd, buf, len, flags, addr, addrlen_ptr) */
+        vfs_file_t* sf = fd_get_file((int)a1);
+        if (sf && sf->inet) {
+            struct sockaddr_in* sa = a5 ? (struct sockaddr_in*)a5 : NULL;
+            if (sa && !uptr_ok_w(sa, sizeof(*sa)))
+                { ret = -(int64_t)EFAULT; break; }
+            int rflags = sf->flags | ((a4 & 0x40) ? O_NONBLOCK : 0); /* MSG_DONTWAIT */
+            ret = inet_recvfrom(sf->inet, (void*)a2, a3, sa, rflags);
+            if (ret >= 0 && sa && a6 && uptr_ok_w((void*)a6, sizeof(int)))
+                *(int*)(uintptr_t)a6 = (int)sizeof(*sa);
+        } else {
+            ret = fd_read((int)a1, (void*)a2, a3);
+        }
         break;
+    }
     case 46: /* sendmsg(fd, msghdr, flags) */
         ret = sys_socket_sendmsg((int)a1, (const void*)a2, (int)a3);
         break;
     case 47: /* recvmsg(fd, msghdr, flags) */
         ret = sys_socket_recvmsg((int)a1, (void*)a2, (int)a3);
         break;
-    case 48: /* shutdown(fd, how) */
-        ret = 0; /* no-op: close() will tear down the pipes */
+    case 48: { /* shutdown(fd, how) */
+        vfs_file_t* sf = fd_get_file((int)a1);
+        if (sf && sf->inet) { inet_conn_close(sf->inet); sf->inet = NULL; }
+        ret = 0;
         break;
+    }
     case 49: /* bind(fd, addr, addrlen) */
         ret = sys_socket_bind((int)a1, (struct sockaddr_un*)a2, a3);
         break;
-    case 50: /* listen(fd, backlog) */
-        ret = (int64_t)fd_listen_unix((int)a1, (int)a2);
+    case 50: { /* listen(fd, backlog) */
+        vfs_file_t* lf = fd_get_file((int)a1);
+        if (lf && lf->inet)
+            ret = inet_listen(lf->inet, (int)a2);
+        else
+            ret = (int64_t)fd_listen_unix((int)a1, (int)a2);
         break;
+    }
     case 51: /* getsockname(fd, addr, addrlen) */
         ret = sys_socket_getsockname((int)a1, (struct sockaddr_un*)a2, (int*)a3);
         break;

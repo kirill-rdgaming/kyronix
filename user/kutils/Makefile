@@ -5,7 +5,7 @@ OUT := ../../build/bin
 UTILS := basename cat chgrp chmod chown cksum clear cmp cp cut date dd dirname du echo env false \
 	find grep head hostname id kill link ln ls mkdir mktemp mv printenv printf pwd readlink realpath rm rmdir \
 	sed seq sleep sort stat sync tail tee test touch tr true tty uname uniq unlink wc which whoami \
-	xargs yes
+	xargs yes ping
 
 .PHONY: all clean
 

@@ -4,6 +4,7 @@
 #include "lib/string.h"
 #include "pmm.h"
 #include "vmm.h"
+#include "arch/x86_64/cpu.h"
 
 typedef struct block_hdr
 {
@@ -88,6 +89,8 @@ void* kmalloc(uint64_t size)
 
     size = (size + 15) & ~15ULL;
 
+    uint64_t flags = irq_save();
+
     block_hdr_t* blk = g_head;
     while (blk)
     {
@@ -99,8 +102,7 @@ void* kmalloc(uint64_t size)
     while (!blk || !blk->free || blk->size < size)
     {
         blk = heap_grow(size);
-        if (!blk)
-            return NULL;
+        if (!blk) { irq_restore(flags); return NULL; }
     }
 
     if (blk->size >= size + MIN_SPLIT)
@@ -117,6 +119,7 @@ void* kmalloc(uint64_t size)
     }
 
     blk->free = 0;
+    irq_restore(flags);
     return (uint8_t*) blk + HDR_SIZE;
 }
 
@@ -125,9 +128,12 @@ void kfree(void* ptr)
     if (!ptr)
         return;
 
+    uint64_t flags = irq_save();
+
     block_hdr_t* blk = (block_hdr_t*) ((uint8_t*) ptr - HDR_SIZE);
-    if (blk->free) /* double free, very cool thing!!! */
+    if (blk->free)
     {
+        irq_restore(flags);
         return;
     }
     blk->free = 1;
@@ -147,6 +153,8 @@ void kfree(void* ptr)
         if (blk->next)
             blk->next->prev = blk->prev;
     }
+
+    irq_restore(flags);
 }
 
 void* kcalloc(uint64_t nmemb, uint64_t size)

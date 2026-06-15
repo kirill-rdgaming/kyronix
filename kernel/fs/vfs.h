@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct net_conn; /* forward declaration for inet sockets */
+
 extern char g_cwd[512];
 
 struct linux_stat
@@ -130,9 +132,10 @@ typedef struct
     pipe_t* wpipe;  
     uint32_t peer_pid, peer_uid, peer_gid;
     int passcred;
-    uint8_t cloexec;  
-    eventfd_state_t* efd;   
-    timerfd_state_t* tfd;   
+    uint8_t cloexec;
+    eventfd_state_t* efd;
+    timerfd_state_t* tfd;
+    struct net_conn* inet;  /* non-null for AF_INET sockets */
 
 } vfs_file_t;
 

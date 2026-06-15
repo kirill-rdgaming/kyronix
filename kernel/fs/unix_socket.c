@@ -1,4 +1,5 @@
 #include "unix_socket.h"
+#include "inet_socket.h"
 #include "fs/pipe.h"
 #include "fs/vfs_internal.h"
 #include "lib/string.h"
@@ -46,6 +47,7 @@ static struct {
 int fd_socket(int domain, int type, int proto)
 {
     (void)proto;
+    if (domain == 2) return fd_inet_socket(type, proto); /* AF_INET */
     if (domain != 1 || (type & 0xf) != 1) return -(int)EINVAL;
     unix_sock_t* s = (unix_sock_t*)kcalloc(1, sizeof(unix_sock_t));
     if (!s) return -(int)ENOMEM;

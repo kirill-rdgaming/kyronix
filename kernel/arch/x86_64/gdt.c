@@ -39,6 +39,11 @@ typedef struct
 static gdt_t g_gdt;
 static tss_t g_tss __attribute__((aligned(16)));
 
+// fauld stacks
+#define IST_STACK_SIZE 16384u
+static uint8_t g_ist_df[IST_STACK_SIZE]  __attribute__((aligned(16)));
+static uint8_t g_ist_nmi[IST_STACK_SIZE] __attribute__((aligned(16)));
+
 void gdt_init(void)
 {
     g_gdt.null = 0ULL;
@@ -48,6 +53,10 @@ void gdt_init(void)
     g_gdt.user_code = 0x00AFFA000000FFFFULL;
 
     g_tss.iopb_offset = (uint16_t) sizeof(tss_t);
+
+    /* IST1 -> #DF, IST2 -> NMI (stacks grow down, point at the top) */
+    g_tss.ist[0] = (uint64_t) (g_ist_df  + IST_STACK_SIZE);
+    g_tss.ist[1] = (uint64_t) (g_ist_nmi + IST_STACK_SIZE);
 
     uint64_t base = (uint64_t) &g_tss;
     uint32_t limit = (uint32_t) (sizeof(tss_t) - 1);

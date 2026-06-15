@@ -13,11 +13,14 @@ else
     LD := ld
 endif
 
+LWIP_SRC := kernel/net/lwip/src
+
 CFLAGS := \
     -std=c11           \
     -O2                \
     -Wall -Wextra      \
     -Wno-unused-parameter \
+    -Wno-error         \
     -ffreestanding     \
     -fno-stack-protector \
     -fno-pic -fno-pie  \
@@ -29,7 +32,9 @@ CFLAGS := \
     -mno-red-zone      \
     -mcmodel=kernel    \
     -Ikernel           \
-    -Ikernel/boot
+    -Ikernel/boot      \
+    -Ikernel/net       \
+    -I$(LWIP_SRC)/include
 
 LDFLAGS := \
     -T linker.ld       \
@@ -65,6 +70,7 @@ SRCS := \
     kernel/fs/fdpipe.c                 \
     kernel/fs/procfs.c                 \
     kernel/fs/unix_socket.c            \
+    kernel/fs/inet_socket.c            \
     kernel/fs/pipe.c                   \
     kernel/fs/cpio.c                   \
     kernel/drivers/serial.c           \
@@ -72,6 +78,33 @@ SRCS := \
     kernel/drivers/tty.c              \
     kernel/drivers/fb.c               \
     kernel/drivers/pci.c              \
+    kernel/drivers/virtio_net.c       \
+    kernel/net/net.c                  \
+    kernel/net/lwip_glue.c            \
+    kernel/net/netif/kyronix_netif.c  \
+    $(LWIP_SRC)/core/init.c           \
+    $(LWIP_SRC)/core/def.c            \
+    $(LWIP_SRC)/core/dns.c            \
+    $(LWIP_SRC)/core/inet_chksum.c    \
+    $(LWIP_SRC)/core/ip.c             \
+    $(LWIP_SRC)/core/mem.c            \
+    $(LWIP_SRC)/core/memp.c           \
+    $(LWIP_SRC)/core/netif.c          \
+    $(LWIP_SRC)/core/pbuf.c           \
+    $(LWIP_SRC)/core/raw.c            \
+    $(LWIP_SRC)/core/stats.c          \
+    $(LWIP_SRC)/core/sys.c            \
+    $(LWIP_SRC)/core/tcp.c            \
+    $(LWIP_SRC)/core/tcp_in.c         \
+    $(LWIP_SRC)/core/tcp_out.c        \
+    $(LWIP_SRC)/core/timeouts.c       \
+    $(LWIP_SRC)/core/udp.c            \
+    $(LWIP_SRC)/core/ipv4/etharp.c    \
+    $(LWIP_SRC)/core/ipv4/icmp.c      \
+    $(LWIP_SRC)/core/ipv4/ip4.c       \
+    $(LWIP_SRC)/core/ipv4/ip4_addr.c  \
+    $(LWIP_SRC)/core/ipv4/ip4_frag.c  \
+    $(LWIP_SRC)/netif/ethernet.c      \
     kernel/drivers/uio.c              \
     kernel/drivers/fbdev.c            \
     kernel/drivers/input.c            \
@@ -163,7 +196,9 @@ run: iso
 	    -boot d                     \
 	    -serial stdio               \
 	    -vga qxl                    \
-	    -global qxl-vga.vgamem_mb=1024
+	    -global qxl-vga.vgamem_mb=1024 \
+	    -netdev user,id=n0          \
+	    -device virtio-net-pci,netdev=n0
 
 run-serial: iso
 	qemu-system-x86_64              \

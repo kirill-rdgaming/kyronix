@@ -69,7 +69,7 @@ typedef struct
 {
     vmm_space_t* space;
     uint64_t entry;       /* jump target: interpreter entry if PT_INTERP else prog entry */
-    uint64_t prog_entry;  /* AT_ENTRY: main programs own entry point */
+    uint64_t prog_entry;
     uint64_t brk;
     uint64_t phdr_va;
     uint16_t phentsize;

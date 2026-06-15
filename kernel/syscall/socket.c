@@ -1,5 +1,6 @@
 #include "socket.h"
 #include "syscall/syscall.h"
+#include "fs/inet_socket.h"
 #include "fs/pipe.h"
 #include "fs/vfs.h"
 #include "lib/string.h"
@@ -76,6 +77,10 @@ int64_t sys_socket_connect(int fd, struct sockaddr_un* addr, uint64_t addrlen)
     (void)addrlen;
     if (!addr) return -(int64_t)EFAULT;
     if (!uptr_ok(addr, sizeof(*addr))) return -(int64_t)EFAULT;
+    vfs_file_t* f = fd_get_file(fd);
+    if (!f) return -(int64_t)EBADF;
+    if (f->inet)
+        return inet_connect(f->inet, (const struct sockaddr_in*)addr);
     const char* path;
     char abs[512];
     if (addr->sun_path[0] == '\0') {
@@ -90,6 +95,13 @@ int64_t sys_socket_connect(int fd, struct sockaddr_un* addr, uint64_t addrlen)
 int64_t sys_socket_accept(int fd, struct sockaddr_un* addr, int* addrlen, int flags)
 {
     (void)addrlen;
+    vfs_file_t* f = fd_get_file(fd);
+    if (!f) return -(int64_t)EBADF;
+    if (f->inet) {
+        struct sockaddr_in* sin = (struct sockaddr_in*)addr;
+        if (sin && !uptr_ok_w(sin, sizeof(*sin))) return -(int64_t)EFAULT;
+        return inet_accept(f->inet, sin, flags);
+    }
     char tmp[108] = {0};
     int r = fd_accept_unix(fd, tmp, sizeof(tmp), flags);
     if (r >= 0 && addr) {
@@ -105,6 +117,10 @@ int64_t sys_socket_bind(int fd, struct sockaddr_un* addr, uint64_t addrlen)
     (void)addrlen;
     if (!addr) return -(int64_t)EFAULT;
     if (!uptr_ok(addr, sizeof(*addr))) return -(int64_t)EFAULT;
+    vfs_file_t* f = fd_get_file(fd);
+    if (!f) return -(int64_t)EBADF;
+    if (f->inet)
+        return inet_bind(f->inet, (const struct sockaddr_in*)addr);
     const char* path;
     char abs[512];
     if (addr->sun_path[0] == '\0') {
@@ -172,7 +188,7 @@ int64_t sys_socket_getsockopt(int fd, int level, int opt, void* val, int* optlen
     switch (opt) {
     case SO_TYPE:
         if (*optlen < (int)sizeof(int) || !uptr_ok_w(val, sizeof(int))) return -(int64_t)EINVAL;
-        *(int*)val = 1;
+        *(int*)val = f->inet ? inet_get_type(f->inet) : 1;
         *optlen = sizeof(int);
         return 0;
     case SO_ERROR:
@@ -188,7 +204,7 @@ int64_t sys_socket_getsockopt(int fd, int level, int opt, void* val, int* optlen
         return 0;
     case SO_DOMAIN:
         if (*optlen < (int)sizeof(int) || !uptr_ok_w(val, sizeof(int))) return -(int64_t)EINVAL;
-        *(int*)val = 1;
+        *(int*)val = f->inet ? 2 : 1; /* AF_INET=2, AF_UNIX=1 */
         *optlen = sizeof(int);
         return 0;
     }
@@ -245,7 +261,31 @@ int64_t sys_socket_recvmsg(int fd, void* mhdr, int flags)
     const struct iovec* iov = (const struct iovec*)m[2];
     int iovlen = (int)m[3];
     if (iovlen < 0 || (iovlen && !uptr_ok(iov, (uint64_t)iovlen * sizeof(*iov))))
-        return -(int64_t)EFAULT;
+        return -(int64_t)EFAULT; // yes im fixed this, 15.06.2026 im so tired
+    {
+        vfs_file_t* isf = fd_get_file(fd);
+        if (isf && isf->inet && iovlen > 0 && !(flags & MSG_PEEK)) {
+            if (!uptr_ok_w((void*)iov[0].iov_base, iov[0].iov_len))
+                return -(int64_t)EFAULT;
+            struct sockaddr_in src;
+            memset(&src, 0, sizeof(src));
+            int64_t r = inet_recvfrom(isf->inet, (void*)iov[0].iov_base,
+                                      iov[0].iov_len, &src, isf->flags);
+            if (r < 0) return r;
+            void* name = (void*)m[0];
+            uint32_t namelen = ((uint32_t*)mhdr)[2]; /* msg_namelen at offset 8 */
+            if (name && namelen >= sizeof(src) && uptr_ok_w(name, sizeof(src))) {
+                memcpy(name, &src, sizeof(src));
+                ((uint32_t*)mhdr)[2] = (uint32_t)sizeof(src);
+            } else {
+                ((uint32_t*)mhdr)[2] = 0;
+            }
+            m[5] = 0;                      /* msg_controllen */
+            ((uint32_t*)mhdr)[12] = 0;     /* msg_flags */
+            return r;
+        }
+    }
+
     int64_t total = 0;
     uint64_t peek_skip = 0;
     for (int i = 0; i < iovlen; i++) {

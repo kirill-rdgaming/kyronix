@@ -15,6 +15,8 @@
 #include "drivers/vt.h"
 #include "drivers/kbd.h"
 #include "drivers/pci.h"
+#include "drivers/virtio_net.h"
+#include "net/net.h"
 #include "drivers/ps2mouse.h"
 #include "drivers/serial.h"
 #include "drivers/tty.h"
@@ -180,6 +182,10 @@ void kmain(void)
     { vfs_node_t* _n = vfs_lookup("/dev/pts"); kstatus("Mounting /dev/pts", _n != NULL); vfs_node_unref_internal(_n); }
     pci_enumerate();
     kstatus("Enumerating PCI", true);
+    virtnet_init();
+    kstatus("virtio-net", virtnet_ready());
+    net_init();
+    kstatus("lwIP network stack", true);
     uio_init();
     kstatus("Initialising UIO", true);
     fbdev_init();
