@@ -1,4 +1,5 @@
 #include "heap.h"
+#include "arch/x86_64/cpu.h"
 #include "lib/log.h"
 #include "lib/printf.h"
 #include "lib/string.h"
@@ -73,6 +74,8 @@ void *kmalloc(uint64_t size) {
 
     size = (size + 15) & ~15ULL;
 
+    uint64_t flags = irq_save();
+
     block_hdr_t *blk = g_head;
     while (blk) {
         if (blk->free && blk->size >= size) break;
@@ -81,7 +84,10 @@ void *kmalloc(uint64_t size) {
 
     while (!blk || !blk->free || blk->size < size) {
         blk = heap_grow(size);
-        if (!blk) return NULL;
+        if (!blk) {
+            irq_restore(flags);
+            return NULL;
+        }
     }
 
     if (blk->size >= size + MIN_SPLIT) {
@@ -96,14 +102,20 @@ void *kmalloc(uint64_t size) {
     }
 
     blk->free = 0;
+    irq_restore(flags);
     return (uint8_t *) blk + HDR_SIZE;
 }
 
 void kfree(void *ptr) {
     if (!ptr) return;
 
+    uint64_t flags = irq_save();
+
     block_hdr_t *blk = (block_hdr_t *) ((uint8_t *) ptr - HDR_SIZE);
-    if (blk->free) { return; }
+    if (blk->free) {
+        irq_restore(flags);
+        return;
+    }
     blk->free = 1;
 
     if (blk->next && blk->next->free) {
@@ -117,6 +129,8 @@ void kfree(void *ptr) {
         blk->prev->next = blk->next;
         if (blk->next) blk->next->prev = blk->prev;
     }
+
+    irq_restore(flags);
 }
 
 void *kcalloc(uint64_t nmemb, uint64_t size) {

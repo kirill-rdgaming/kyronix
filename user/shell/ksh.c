@@ -399,7 +399,7 @@ static void complete_token(char *line, size_t *cursor, size_t *length) {
                     matches[match_count][fl] = '\0';
                 }
             } else {
-                /* no slash in token → complete with just the name, not full path */
+                /* no slash in token -> complete with just the name, not full path */
                 size_t nl = strlen(entry->d_name);
                 if (nl + 2 < PATH_MAX) {
                     memcpy(matches[match_count], entry->d_name, nl);

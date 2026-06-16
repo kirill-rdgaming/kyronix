@@ -104,6 +104,20 @@ void *pmm_alloc_zeroed(void) {
     return phys;
 }
 
+void *pmm_alloc_contiguous(uint64_t n) {
+    for (uint64_t s = 1; s + n <= g_pmm.total_pages; s++) {
+        bool ok = true;
+        for (uint64_t i = 0; i < n && ok; i++) ok = bitmap_is_free(s + i);
+        if (!ok) continue;
+        for (uint64_t i = 0; i < n; i++) {
+            bitmap_set_used(s + i);
+            g_pmm.free_pages--;
+        }
+        return (void *) (s << PAGE_SHIFT);
+    }
+    return NULL;
+}
+
 void pmm_free(void *phys) {
     uint64_t page = (uint64_t) phys >> PAGE_SHIFT;
     if (!phys || page >= g_pmm.total_pages) return;

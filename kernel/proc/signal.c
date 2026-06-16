@@ -38,11 +38,9 @@ static void setup_sigframe(proc_t *p, int sig, syscall_frame_t *f) {
     uint64_t sp = user_rsp - 128 - sizeof(rt_sigframe_t);
     sp = ((sp - 8) & ~(uint64_t) 0xF) + 8;
 
+    if (!uptr_ok_w((void *) sp, sizeof(rt_sigframe_t))) proc_do_exit(-SIGSEGV);
+
     rt_sigframe_t *frame = (rt_sigframe_t *) sp;
-    if (!uptr_ok_w(frame, sizeof(*frame))) {
-        log_warn("signal: bad stack %p", (void *) sp);
-        proc_do_exit(-sig);
-    }
     memset(frame, 0, sizeof(*frame));
 
     frame->pretcode = p->sig_actions[sig - 1].sa_restorer;

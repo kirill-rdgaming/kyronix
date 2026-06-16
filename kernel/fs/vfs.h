@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct net_conn; /* forward declaration for inet sockets */
+
 extern char g_cwd[512];
 
 struct linux_stat {
@@ -41,7 +43,6 @@ struct linux_dirent64 {
 #define S_IFLNK 0120000U
 #define S_IFCHR 0020000U
 #define S_IFIFO 0010000U
-#define S_ISVTX 0001000U
 
 #define DT_UNKNOWN 0
 #define DT_CHR 2
@@ -76,6 +77,7 @@ struct linux_dirent64 {
 #define VFS_TYPE_SOCK 5
 
 #define S_IFSOCK 0140000U
+#define S_ISVTX 0001000U /* sticky bit: restrict deletion in a shared dir */
 
 typedef struct vfs_node {
     char name[256];
@@ -130,6 +132,7 @@ typedef struct {
     uint8_t cloexec;
     eventfd_state_t *efd;
     timerfd_state_t *tfd;
+    struct net_conn *inet; /* non-null for AF_INET sockets */
 
 } vfs_file_t;
 
@@ -143,6 +146,7 @@ vfs_file_t **vfs_get_fdtable(void);
 void vfs_copy_fdtable(vfs_file_t **dst, vfs_file_t **src);
 void vfs_free_fdtable(vfs_file_t **fds);
 
+const char *vfs_copy_user_path(const char *path, char *kbuf);
 int fd_open(const char *path, int flags, int mode);
 int fd_openat(int dirfd, const char *path, int flags, int mode);
 int fd_close(int fd);
@@ -204,7 +208,6 @@ int vfs_mkdir(const char *path, uint32_t mode);
 int vfs_unlink(const char *path);
 int vfs_rmdir(const char *path);
 int vfs_rename(const char *oldpath, const char *newpath);
-int may_delete_in(vfs_node_t *dir, vfs_node_t *node);
 int vfs_link(const char *oldpath, const char *newpath);
 int vfs_chmod(const char *path, uint32_t mode);
 int vfs_fchmod(int fd, uint32_t mode);

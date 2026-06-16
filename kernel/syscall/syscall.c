@@ -6,6 +6,7 @@
 #include "exec/elf.h"
 #include "exec/process.h"
 #include "file.h"
+#include "fs/inet_socket.h"
 #include "fs/pipe.h"
 #include "fs/vfs.h"
 #include "fs/vfs_internal.h"
@@ -23,7 +24,7 @@
 #include "socket.h"
 #include "time.h"
 
-/* Linux errno values */
+/* linuh errno values */
 #define EPERM 1
 #define ENOENT 2
 #define ESRCH 3
@@ -472,10 +473,30 @@ static int64_t sys_clone(uint64_t flags, uint64_t child_stack, uint32_t *ptid, u
     return (int64_t) child->pid;
 }
 
+/* Copy a NUL-terminated user string into out[512], page-validating as we go.
+   Returns false on a bad/unmapped user pointer instead of faulting in-kernel. */
+static bool copy_user_path(char *out, const char *in) {
+    if (!in) return false;
+    for (size_t i = 0; i < 511; i++) {
+        const char *a = in + i;
+        if (i == 0 || ((uint64_t) (uintptr_t) a & 0xFFF) == 0) {
+            if (!uptr_ok(a, 1)) return false;
+        }
+        char c = *a;
+        out[i] = c;
+        if (!c) return true;
+    }
+    out[511] = '\0';
+    return true;
+}
+
+/* resolve a user path to an absolute one in out[512]. returns false
+                if the user pointer is invalid; on success out is always non-empty */
 static bool path_abs(char *out, const char *in) {
-    if (!in || in[0] == '/') {
-        strncpy(out, in ? in : "", 511);
-        out[511] = '\0';
+    char tmp[512];
+    if (!copy_user_path(tmp, in)) return false;
+    if (tmp[0] == '/') {
+        memcpy(out, tmp, sizeof(tmp));
         return true;
     }
     proc_t *p = cur();
@@ -484,35 +505,22 @@ static bool path_abs(char *out, const char *in) {
     if (cl >= 511) {
         out[0] = '/';
         out[1] = '\0';
-        return false;
+        return true;
     }
     memcpy(out, cwd, cl);
     if (out[cl - 1] != '/') out[cl++] = '/';
-    strncpy(out + cl, in, 511 - cl);
+    strncpy(out + cl, tmp, 511 - cl);
     out[511] = '\0';
-    return false;
-}
-
-static int copy_user_path(const char *in, char *out, size_t sz) {
-    if (!in) return -(int) EFAULT;
-    if (!uptr_ok(in, 1)) return -(int) EFAULT;
-    size_t n = 0;
-    while (n < sz && in[n]) n++;
-    if (n >= sz) return -(int) ENAMETOOLONG;
-    char buf[512];
-    memcpy(buf, in, n);
-    buf[n] = '\0';
-    path_abs(out, buf);
-    if (!out[0]) return -(int) ENOENT;
-    return 0;
+    return true;
 }
 
 #define MAX_EXEC_ARGS 32
 
 static int64_t sys_execve(const char *path, const char **uargv, const char **uenvp) {
+    if (!path) return -(int64_t) EFAULT;
+
     char abs[512];
-    int _er = copy_user_path(path, abs, sizeof(abs));
-    if (_er < 0) return (int64_t) _er;
+    if (!path_abs(abs, path)) return -(int64_t) EFAULT;
     const char *exec_path = abs;
 
     vfs_node_t *node = vfs_lookup(exec_path);
@@ -755,17 +763,21 @@ __attribute__((noreturn)) void proc_do_exit(int code) {
             *p->cleartid_addr = 0;
             cleartid_wake(p->cleartid_addr);
         }
-        proc_kstack_free(p);
-        p->state = PROC_UNUSED;
-        /* find another ready process before losing our stack */
-        proc_t *nt = proc_next_ready(p);
-        if (nt) {
-            nt->state = PROC_RUNNING;
-            vfs_set_fdtable(nt->fds);
-            g_current_space = nt->space;
-            cpu_set_kernel_stack(nt->kstack_top);
-            sched_switch(nt);
-        }
+        /* We are STILL running on this thread's kernel stack - freeing it now
+           (vmm_unmap) would unmap the live stack and #DF. Mark it PROC_DYING and
+           defer the kstack free until another context is running on its own stack. */
+        p->state = PROC_DYING;
+        proc_defer_thread_reap(p);
+        /* Idle with IRQs ENABLED until something is runnable - a sibling/main may
+           be transiently WAITING (blocked in poll/futex) and only the timer can
+           wake it. cpu_halt() here (cli;hlt) would kill the timer and deadlock. */
+        proc_t *nt = proc_idle_until_ready(p);
+        nt->state = PROC_RUNNING;
+        vfs_set_fdtable(nt->fds);
+        g_current_space = nt->space;
+        cpu_set_kernel_stack(nt->kstack_top);
+        sched_switch(nt);
+        /* unreachable: this thread is dead and never scheduled again */
         cpu_halt();
     }
 
@@ -783,16 +795,16 @@ __attribute__((noreturn)) void proc_do_exit(int code) {
             sched_switch(parent);
         }
     }
-    /* no parent to switch to: find any ready process */
-    proc_t *any = proc_next_ready(p);
-    if (any) {
-        any->state = PROC_RUNNING;
-        vfs_set_fdtable(any->fds);
-        g_current_space = any->space;
-        cpu_set_kernel_stack(any->kstack_top);
-        sched_switch(any);
-    }
-    cpu_halt();
+    /* Parent wasn't switchable: idle (IRQs on) until some proc is READY, then
+       switch. Never cpu_halt() here - that disables the timer and deadlocks if
+       every proc is transiently WAITING. The zombie waits for wait4 to reap it. */
+    proc_t *any = proc_idle_until_ready(p);
+    any->state = PROC_RUNNING;
+    vfs_set_fdtable(any->fds);
+    g_current_space = any->space;
+    cpu_set_kernel_stack(any->kstack_top);
+    sched_switch(any);
+    cpu_halt(); /* unreachable */
 }
 
 static int64_t sys_wait4(int pid, int *wstatus, int options, void *rusage) {
@@ -840,9 +852,8 @@ static int64_t sys_wait4(int pid, int *wstatus, int options, void *rusage) {
         vfs_set_fdtable(next->fds);
         g_current_space = next->space;
         cpu_set_kernel_stack(next->kstack_top);
-        sti();
+        /* IF=0 across the switch: keep current-proc/space updates atomic. */
         sched_switch(next);
-        cli();
 
         parent->state = PROC_RUNNING;
         vfs_set_fdtable(parent->fds);
@@ -907,17 +918,18 @@ static int64_t sys_getcwd(char *buf, uint64_t size) {
 }
 
 static int64_t sys_chdir(const char *path) {
+    if (!path) return -(int64_t) EFAULT;
     char abs[512];
-    int _r = copy_user_path(path, abs, sizeof(abs));
-    if (_r < 0) return (int64_t) _r;
-    vfs_node_t *n = vfs_lookup(abs);
+    if (!path_abs(abs, path)) return -(int64_t) EFAULT;
+    const char *rp = abs;
+    vfs_node_t *n = vfs_lookup(rp);
     if (!n) return -(int64_t) ENOENT;
     if (n->type != VFS_TYPE_DIR) {
         vfs_node_unref_internal(n);
         return -(int64_t) ENOTDIR;
     }
     proc_t *p = cur();
-    if (p) strncpy(p->cwd, abs, sizeof(p->cwd) - 1);
+    if (p) strncpy(p->cwd, rp, sizeof(p->cwd) - 1);
     vfs_node_unref_internal(n);
     return 0;
 }
@@ -1225,9 +1237,8 @@ static int64_t sys_pause(void) {
         vfs_set_fdtable(next->fds);
         g_current_space = next->space;
         cpu_set_kernel_stack(next->kstack_top);
-        sti();
+        /* IF=0 across the switch: keep current-proc/space updates atomic. */
         sched_switch(next);
-        cli();
         p->state = PROC_RUNNING;
         vfs_set_fdtable(p->fds);
         g_current_space = p->space;
@@ -1266,9 +1277,8 @@ static int64_t sys_rt_sigsuspend(const uint64_t *mask, uint64_t sigsetsize) {
         vfs_set_fdtable(next->fds);
         g_current_space = next->space;
         cpu_set_kernel_stack(next->kstack_top);
-        sti();
+        /* IF=0 across the switch: keep current-proc/space updates atomic. */
         sched_switch(next);
-        cli();
         p->state = PROC_RUNNING;
         vfs_set_fdtable(p->fds);
         g_current_space = p->space;
@@ -1279,32 +1289,30 @@ static int64_t sys_rt_sigsuspend(const uint64_t *mask, uint64_t sigsetsize) {
 }
 
 static int64_t sys_mkdir(const char *path, uint32_t mode) {
+    if (!path) return -(int64_t) EINVAL;
     char abs[512];
-    int _r = copy_user_path(path, abs, sizeof(abs));
-    if (_r < 0) return (int64_t) _r;
+    if (!path_abs(abs, path)) return -(int64_t) EFAULT;
     return (int64_t) vfs_mkdir(abs, mode);
 }
 
 static int64_t sys_rmdir(const char *path) {
+    if (!path) return -(int64_t) EINVAL;
     char abs[512];
-    int _r = copy_user_path(path, abs, sizeof(abs));
-    if (_r < 0) return (int64_t) _r;
+    if (!path_abs(abs, path)) return -(int64_t) EFAULT;
     return (int64_t) vfs_rmdir(abs);
 }
 
 static int64_t sys_unlink(const char *path) {
+    if (!path) return -(int64_t) EINVAL;
     char abs[512];
-    int _r = copy_user_path(path, abs, sizeof(abs));
-    if (_r < 0) return (int64_t) _r;
+    if (!path_abs(abs, path)) return -(int64_t) EFAULT;
     return (int64_t) vfs_unlink(abs);
 }
 
 static int64_t sys_rename(const char *oldpath, const char *newpath) {
+    if (!oldpath || !newpath) return -(int64_t) EINVAL;
     char abs_old[512], abs_new[512];
-    int _r = copy_user_path(oldpath, abs_old, sizeof(abs_old));
-    if (_r < 0) return (int64_t) _r;
-    _r = copy_user_path(newpath, abs_new, sizeof(abs_new));
-    if (_r < 0) return (int64_t) _r;
+    if (!path_abs(abs_old, oldpath) || !path_abs(abs_new, newpath)) return -(int64_t) EFAULT;
     return (int64_t) vfs_rename(abs_old, abs_new);
 }
 
@@ -1487,17 +1495,16 @@ static int64_t sys_ftruncate(int fd, uint64_t len) {
 }
 
 static int64_t sys_truncate(const char *path, uint64_t len) {
+    if (!path) return -(int64_t) EFAULT;
     char abs[512];
-    int _r = copy_user_path(path, abs, sizeof(abs));
-    if (_r < 0) return (int64_t) _r;
+    if (!path_abs(abs, path)) return -(int64_t) EFAULT;
     return (int64_t) vfs_truncate(abs, len);
 }
 
 static int64_t sys_symlink(const char *target, const char *linkpath) {
-    if (!target || !uptr_ok(target, 1)) return -(int64_t) EFAULT;
+    if (!target || !linkpath) return -(int64_t) EFAULT;
     char abs[512];
-    int _r = copy_user_path(linkpath, abs, sizeof(abs));
-    if (_r < 0) return (int64_t) _r;
+    if (!path_abs(abs, linkpath)) return -(int64_t) EFAULT;
     vfs_node_t *n = vfs_create_symlink(abs, target);
     return n ? 0 : -(int64_t) EEXIST;
 }
@@ -1534,9 +1541,9 @@ static int64_t sys_madvise(void *addr, uint64_t len, int advice) {
 }
 
 static int64_t sys_access(const char *p, int m) {
+    if (!p) return -(int64_t) EFAULT;
     char abs[512];
-    int _r = copy_user_path(p, abs, sizeof(abs));
-    if (_r < 0) return (int64_t) _r;
+    if (!path_abs(abs, p)) return -(int64_t) EFAULT;
     return (int64_t) vfs_access(abs, m);
 }
 
@@ -1641,11 +1648,9 @@ static int64_t sys_fchdir(int fd) {
 }
 
 static int64_t sys_link(const char *old, const char *lnew) {
+    if (!old || !lnew) return -(int64_t) EFAULT;
     char abs_old[512], abs_new[512];
-    int _r = copy_user_path(old, abs_old, sizeof(abs_old));
-    if (_r < 0) return (int64_t) _r;
-    _r = copy_user_path(lnew, abs_new, sizeof(abs_new));
-    if (_r < 0) return (int64_t) _r;
+    if (!path_abs(abs_old, old) || !path_abs(abs_new, lnew)) return -(int64_t) EFAULT;
     return (int64_t) vfs_link(abs_old, abs_new);
 }
 
@@ -1656,7 +1661,6 @@ void syscall_dispatch(syscall_frame_t *f) {
 
     int64_t ret;
     switch (nr) {
-    /* File I/O */
     case 0:
         ret = fd_read((int) a1, (void *) a2, a3);
         break;
@@ -1684,6 +1688,47 @@ void syscall_dispatch(syscall_frame_t *f) {
     case 8:
         ret = fd_lseek((int) a1, (int64_t) a2, (int) a3);
         break;
+    case 9:
+        ret = sys_mmap(a1, a2, a3, a4, a5, a6);
+        break;
+    case 10:
+        ret = sys_mprotect(a1, a2, a3);
+        break;
+    case 11:
+        ret = sys_munmap(a1, a2);
+        break;
+    case 12:
+        ret = sys_brk(a1);
+        break;
+    case 25:
+        ret = sys_mremap(a1, a2, a3, a4, a5);
+        break;
+    case 26:
+        ret = 0; /* noop ramfs*/
+        break;
+    case 27:
+        if (a3) {
+            uint64_t vec_len = (a2 + PAGE_SIZE - 1) / PAGE_SIZE;
+            if (!uptr_ok_w((void *) a3, vec_len)) {
+                ret = -(int64_t) EFAULT;
+                break;
+            }
+            memset((void *) a3, 1, vec_len);
+        }
+        ret = 0;
+        break;
+    case 13:
+        ret = sys_rt_sigaction((int) a1, (const k_sigaction_t *) a2, (k_sigaction_t *) a3, a4);
+        break;
+    case 14:
+        ret = sys_rt_sigprocmask((int) a1, (const uint64_t *) a2, (uint64_t *) a3, a4);
+        break;
+    case 15:
+        ret = sys_rt_sigreturn(f);
+        break;
+    case 16:
+        ret = fd_ioctl((int) a1, a2, a3);
+        break;
     case 17:
         ret = fd_pread((int) a1, (void *) a2, a3, a4);
         break;
@@ -1706,11 +1751,188 @@ void syscall_dispatch(syscall_frame_t *f) {
         }
         ret = fd_pipe((int *) a1);
         break;
+    case 24:
+        sched_yield_blocking();
+        ret = 0;
+        break;
+    case 53:
+        if (!a4 || !uptr_ok_w((void *) a4, 2 * sizeof(int))) {
+            ret = -(int64_t) EFAULT;
+            break;
+        }
+        ret = fd_socketpair((int *) a4);
+        break;
     case 23:
         ret = sys_select((int) a1, (void *) a2, (void *) a3, (void *) a4, (void *) a5);
         break;
-    case 40:
-        ret = sys_sendfile((int) a1, (int) a2, (uint64_t *) a3, a4);
+    case 28:
+        ret = sys_madvise((void *) a1, a2, (int) a3);
+        break;
+    case 41: /* socket(domain, type, protocol) */
+        ret = (int64_t) fd_socket((int) a1, (int) a2, (int) a3);
+        break;
+    case 42: /* connect(fd, addr, addrlen) */
+        ret = sys_socket_connect((int) a1, (struct sockaddr_un *) a2, a3);
+        break;
+    case 43: /* accept(fd, addr, addrlen) */
+        ret = sys_socket_accept((int) a1, (struct sockaddr_un *) a2, (int *) a3, 0);
+        break;
+    case 44: { /* sendto(fd, buf, len, flags, addr, addrlen) */
+        vfs_file_t *sf = fd_get_file((int) a1);
+        if (sf && sf->inet) {
+            struct sockaddr_in sin;
+            if (a5) {
+                if (!uptr_ok((void *) a5, sizeof(sin))) {
+                    ret = -(int64_t) EFAULT;
+                    break;
+                }
+                memcpy(&sin, (void *) a5, sizeof(sin));
+                ret = inet_sendto(sf->inet, (const void *) a2, a3, &sin);
+            } else {
+                ret = inet_sendto(sf->inet, (const void *) a2, a3, NULL);
+            }
+        } else {
+            ret = fd_write((int) a1, (const void *) a2, a3);
+        }
+        break;
+    }
+    case 45: { /* recvfrom(fd, buf, len, flags, addr, addrlen) */
+        vfs_file_t *sf = fd_get_file((int) a1);
+        if (sf && sf->inet) {
+            struct sockaddr_in sin;
+            struct sockaddr_in *sinp = a5 ? &sin : NULL;
+            if (sinp) memset(&sin, 0, sizeof(sin));
+            ret = inet_recvfrom(sf->inet, (void *) a2, a3, sinp, sf->flags);
+            if (sinp && ret >= 0 && a6) {
+                if (!uptr_ok_w((void *) a6, sizeof(int))) {
+                    ret = -(int64_t) EFAULT;
+                    break;
+                }
+                *(int *) a6 = sizeof(sin);
+                if (!uptr_ok_w((void *) a5, sizeof(sin))) {
+                    ret = -(int64_t) EFAULT;
+                    break;
+                }
+                memcpy((void *) a5, &sin, sizeof(sin));
+            }
+        } else {
+            ret = fd_read((int) a1, (void *) a2, a3);
+        }
+        break;
+    }
+    case 46: /* sendmsg(fd, msghdr, flags) */
+        ret = sys_socket_sendmsg((int) a1, (const void *) a2, (int) a3);
+        break;
+    case 47: /* recvmsg(fd, msghdr, flags) */
+        ret = sys_socket_recvmsg((int) a1, (void *) a2, (int) a3);
+        break;
+    case 48: { /* shutdown(fd, how) */
+        vfs_file_t *sf = fd_get_file((int) a1);
+        if (sf && sf->inet) {
+            inet_conn_close(sf->inet);
+            sf->inet = NULL;
+        }
+        ret = 0;
+        break;
+    }
+    case 49: /* bind(fd, addr, addrlen) */
+        ret = sys_socket_bind((int) a1, (struct sockaddr_un *) a2, a3);
+        break;
+    case 50: { /* listen(fd, backlog) */
+        vfs_file_t *lf = fd_get_file((int) a1);
+        if (lf && lf->inet)
+            ret = inet_listen(lf->inet, (int) a2);
+        else
+            ret = (int64_t) fd_listen_unix((int) a1, (int) a2);
+        break;
+    }
+    case 51: /* getsockname(fd, addr, addrlen) */
+        ret = sys_socket_getsockname((int) a1, (struct sockaddr_un *) a2, (int *) a3);
+        break;
+    case 52: /* getpeername(fd, addr, addrlen) */
+        ret = sys_socket_getpeername((int) a1, (struct sockaddr_un *) a2, (int *) a3);
+        break;
+    case 54:
+        ret = sys_socket_setsockopt((int) a1, (int) a2, (int) a3, (void *) a4, (int) a5);
+        break;
+    case 55: /* getsockopt */
+        ret = sys_socket_getsockopt((int) a1, (int) a2, (int) a3, (void *) a4, (int *) a5);
+        break;
+    case 32:
+        ret = fd_dup((int) a1);
+        break;
+    case 33:
+        ret = fd_dup2((int) a1, (int) a2);
+        break;
+    case 34:
+        ret = sys_pause();
+        break;
+    case 35:
+        ret = sys_nanosleep((void *) a1, (void *) a2);
+        break;
+    case 36:
+        ret = sys_getitimer((int) a1, (void *) a2);
+        break;
+    case 37:
+        ret = sys_alarm((uint32_t) a1);
+        break;
+    case 38:
+        ret = sys_setitimer((int) a1, (const void *) a2, (void *) a3);
+        break;
+    case 39:
+        ret = sys_getpid();
+        break;
+    case 56:
+        ret = sys_clone(a1, a2, (uint32_t *) a3, (uint32_t *) a4, a5, f);
+        break;
+    case 57:
+        ret = sys_fork(f);
+        break;
+    case 58:
+        ret = sys_fork(f); /* vfork: treat as fork */
+        break;
+    case 59:
+        ret = sys_execve((const char *) a1, (const char **) a2, (const char **) a3);
+        break;
+    case 60:
+        proc_do_exit((int) a1);
+        return;
+    case 61:
+        ret = sys_wait4((int) a1, (int *) a2, (int) a3, (void *) a4);
+        break;
+    case 62:
+        ret = sys_kill(a1, (int) a2);
+        break;
+    case 63:
+        ret = sys_uname((struct utsname *) a1);
+        break;
+    case 64:
+    case 65:
+    case 66:
+    case 68:
+    case 69:
+    case 70:
+    case 71:
+        ret = -(int64_t) ENOSYS;
+        break;
+    case 67:
+        ret = (int64_t) sys_shmdt(a1);
+        break;
+    case 72:
+        ret = fd_fcntl((int) a1, (int) a2, a3);
+        break;
+    case 73:
+        ret = fd_valid((int) a1) ? 0 : -(int64_t) EBADF;
+        break;
+    case 74:
+    case 75:
+        ret = fd_valid((int) a1) ? 0 : -(int64_t) EBADF;
+        break;
+    case 76:
+        ret = sys_truncate((const char *) a1, a2);
+        break;
+    case 77:
+        ret = sys_ftruncate((int) a1, a2);
         break;
     case 78:
         ret = fd_getdents64((int) a1, (void *) a2, a3);
@@ -1750,9 +1972,8 @@ void syscall_dispatch(syscall_frame_t *f) {
         break;
     case 90: {
         char abs[512];
-        int _r = copy_user_path((const char *) a1, abs, sizeof(abs));
-        if (_r < 0) {
-            ret = (int64_t) _r;
+        if (!path_abs(abs, (const char *) a1)) {
+            ret = -(int64_t) EFAULT;
             break;
         }
         ret = (int64_t) vfs_chmod(abs, (uint32_t) a2);
@@ -1763,9 +1984,8 @@ void syscall_dispatch(syscall_frame_t *f) {
         break;
     case 92: {
         char abs[512];
-        int _r = copy_user_path((const char *) a1, abs, sizeof(abs));
-        if (_r < 0) {
-            ret = (int64_t) _r;
+        if (!path_abs(abs, (const char *) a1)) {
+            ret = -(int64_t) EFAULT;
             break;
         }
         ret = (int64_t) vfs_chown(abs, (uint32_t) a2, (uint32_t) a3);
@@ -1776,9 +1996,8 @@ void syscall_dispatch(syscall_frame_t *f) {
         break;
     case 94: {
         char abs[512];
-        int _r = copy_user_path((const char *) a1, abs, sizeof(abs));
-        if (_r < 0) {
-            ret = (int64_t) _r;
+        if (!path_abs(abs, (const char *) a1)) {
+            ret = -(int64_t) EFAULT;
             break;
         }
         ret = (int64_t) vfs_lchown(abs, (uint32_t) a2, (uint32_t) a3);
@@ -1787,6 +2006,207 @@ void syscall_dispatch(syscall_frame_t *f) {
     case 95:
         ret = sys_umask(a1);
         break;
+    case 96:
+        ret = sys_gettimeofday((void *) a1, (void *) a2);
+        break;
+    case 97:
+        ret = sys_getrlimit(a1, (void *) a2);
+        break;
+    case 98:
+        if (a2) {
+            if (!uptr_ok_w((void *) a2, 144)) {
+                ret = -(int64_t) EFAULT;
+                break;
+            }
+            memset((void *) a2, 0, 144);
+        }
+        ret = 0;
+        break;
+    case 99:
+        ret = sys_sysinfo((struct sysinfo_s *) a1);
+        break;
+    case 100:
+        ret = sys_times((void *) a1);
+        break;
+    case 101:
+        ret = -(int64_t) EPERM; /* ptrace */
+        break;
+    case 103:
+        ret = -(int64_t) EPERM; /* syslog */
+        break;
+    case 102:
+        ret = sys_getuid();
+        break;
+    case 104:
+        ret = sys_getgid();
+        break;
+    case 105:
+        ret = sys_setuid((uint32_t) a1);
+        break;
+    case 106:
+        ret = sys_setgid((uint32_t) a1);
+        break;
+    case 107:
+        ret = sys_geteuid();
+        break;
+    case 108:
+        ret = sys_getegid();
+        break;
+    case 109:
+        ret = sys_setpgid(a1, a2);
+        break;
+    case 110:
+        ret = sys_getppid();
+        break;
+    case 111:
+        ret = sys_getpgrp();
+        break;
+    case 112:
+        ret = sys_setsid();
+        break;
+    case 113:
+        ret = sys_setreuid((uint32_t) a1, (uint32_t) a2);
+        break;
+    case 114:
+        ret = sys_setregid((uint32_t) a1, (uint32_t) a2);
+        break;
+    case 115:
+        ret = sys_getgroups((int) a1, (uint32_t *) a2);
+        break;
+    case 116:
+        ret = sys_setgroups((int) a1, (uint32_t *) a2);
+        break;
+    case 117:
+        ret = sys_setresuid((uint32_t) a1, (uint32_t) a2, (uint32_t) a3);
+        break;
+    case 118:
+        ret = sys_getresuid((uint32_t *) a1, (uint32_t *) a2, (uint32_t *) a3);
+        break;
+    case 119:
+        ret = sys_setresgid((uint32_t) a1, (uint32_t) a2, (uint32_t) a3);
+        break;
+    case 120:
+        ret = sys_getresgid((uint32_t *) a1, (uint32_t *) a2, (uint32_t *) a3);
+        break;
+    case 121:
+        ret = sys_getpgid(a1);
+        break;
+    case 122:
+        ret = sys_setfsuid((uint32_t) a1);
+        break;
+    case 123:
+        ret = sys_setfsgid((uint32_t) a1);
+        break;
+    case 124: {
+        proc_t *_p = a1 ? proc_find((uint32_t) a1) : cur();
+        ret = _p ? (int64_t) _p->pgid : -(int64_t) ESRCH;
+        break;
+    }
+    case 125:
+        if (a2) {
+            if (!uptr_ok_w((void *) a2, 40)) {
+                ret = -(int64_t) EFAULT;
+                break;
+            }
+            memset((void *) a2, 0, 40);
+        }
+        ret = 0;
+        break; /* capget: no caps */
+    case 126:
+        ret = -(int64_t) EPERM;
+        break; /* capset */
+    case 127: {
+        if (a1) {
+            if (!uptr_ok_w((void *) a1, 8)) {
+                ret = -(int64_t) EFAULT;
+                break;
+            }
+            *(uint64_t *) a1 = cur() ? (cur()->pending_sigs & cur()->sig_mask) : 0;
+        }
+        ret = 0;
+        break;
+    }
+    case 128:
+        ret = sys_rt_sigtimedwait((const uint64_t *) a1, (void *) a2, (const void *) a3, a4);
+        break;
+    case 129:
+        ret = 0;
+        break; /* rt_sigqueueinfo */
+    case 132:
+        ret = 0;
+        break; /* utime: no-op */
+    case 130:
+        ret = sys_rt_sigsuspend((const uint64_t *) a1, a2);
+        break;
+    case 131:
+        ret = sys_sigaltstack((const void *) a1, (void *) a2);
+        break;
+    case 133: {
+        char abs[512];
+        if (!a1 || !path_abs(abs, (const char *) a1)) {
+            ret = -(int64_t) EFAULT;
+            break;
+        }
+        ret = (int64_t) vfs_mknod(abs, (uint32_t) a2, a3);
+        break;
+    }
+    case 135:
+        ret = 0;
+        break; /* personality */
+    case 139:
+        ret = -(int64_t) ENOSYS;
+        break; /* sysfs */
+    case 140:
+        ret = 0;
+        break; /* getpriority */
+    case 141:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break; /* setpriority */
+    case 142:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break; /* sched_setparam */
+    case 143:
+        if (a2) {
+            if (!uptr_ok_w((void *) a2, 4)) {
+                ret = -(int64_t) EFAULT;
+                break;
+            }
+            ((int *) a2)[0] = 0;
+        }
+        ret = 0;
+        break; /* sched_getparam */
+    case 144:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break; /* sched_setscheduler */
+    case 145:
+        ret = 0;
+        break; /* sched_getscheduler: SCHED_OTHER */
+    case 146:
+        ret = 0;
+        break; /* sched_get_priority_max */
+    case 147:
+        ret = 0;
+        break; /* sched_get_priority_min */
+    case 148:
+        if (a2) {
+            if (!uptr_ok_w((void *) a2, 16)) {
+                ret = -(int64_t) EFAULT;
+                break;
+            }
+            ((uint64_t *) a2)[0] = 0;
+            ((uint64_t *) a2)[1] = 10000000ULL;
+        }
+        ret = 0;
+        break; /* sched_rr_get_interval */
+    case 149:
+    case 150:
+    case 151:
+    case 152:
+        ret = -(int64_t) ENOSYS;
+        break; /* mlock/munlock */
+    case 153:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break; /* vhangup */
     case 137:
         ret = sys_statfs((const char *) a1, (void *) a2);
         break;
@@ -1799,11 +2219,187 @@ void syscall_dispatch(syscall_frame_t *f) {
     case 158:
         ret = sys_arch_prctl((int) a1, a2);
         break;
+    case 159:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break; /* adjtimex */
+    case 160:
+        ret = sys_getrlimit(a1, (void *) a2); /* setrlimit: accept silently */
+        break;
+    case 161:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break; /* chroot: no-op until real roots exist */
     case 162:
         ret = 0; /* sync: no-op (ramfs) */
         break;
+    case 169:
+        if (!is_root()) {
+            ret = -(int64_t) EPERM;
+            break;
+        }
+        cpu_halt();
+        ret = 0;
+        break;
+    case 164:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break; /* settimeofday */
+    case 170:
+        ret = is_root() ? 0 : -(int64_t) EPERM; /* sethostname */
+        break;
+    case 171:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break;  /* setdomainname */
+    case 172: { /* iopl(level) - set io privilege level in RFLAGS */
+        if (!is_root()) {
+            ret = -(int64_t) EPERM;
+            break;
+        }
+        int level = (int) a1 & 3;
+        f->r11 = (f->r11 & ~0x3000ULL) | ((uint64_t) level << 12);
+        ret = 0;
+        break;
+    }
+    case 173: { /* ioperm(from, count, turn_on) - we just grant iopl=3 for simplicity hahaha */
+        if (!is_root()) {
+            ret = -(int64_t) EPERM;
+            break;
+        }
+        (void) a1;
+        (void) a2;
+        if (a3) f->r11 |= 0x3000ULL; /* IOPL=3: allow all ports */
+        ret = 0;
+        break;
+    }
+    case 175:
+    case 176:
+        ret = -(int64_t) ENOSYS;
+        break; /* init/delete_module */
+    case 188:
+    case 189:
+    case 190:
+    case 191:
+    case 192:
+    case 193:
+    case 194:
+    case 195:
+    case 196:
+    case 197:
+    case 198:
+    case 199:
+        ret = -(int64_t) ENOTSUP; /* xattr: not supported */
+        break;
+    case 186:
+        ret = sys_gettid();
+        break;
+    case 201: {
+        uint64_t t = g_epoch_base + g_ticks / 1000;
+        if (a1) {
+            if (!uptr_ok_w((void *) a1, 8)) {
+                ret = -(int64_t) EFAULT;
+                break;
+            }
+            *(uint64_t *) a1 = t;
+        }
+        ret = (int64_t) t;
+        break;
+    }
+    case 203:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break; /* sched_setaffinity */
+    case 204: {
+        uint64_t sz = a2;
+        if (a3 && sz > 0) {
+            if (!uptr_ok_w((void *) a3, sz)) {
+                ret = -(int64_t) EFAULT;
+                break;
+            }
+            memset((void *) a3, 0, sz);
+            *(uint8_t *) a3 = 1;
+        }
+        ret = 0;
+        break;
+    } /* sched_getaffinity: 1 CPU */
+    case 213:
+        ret = sys_epoll_create1(0);
+        break; /* epoll_create */
+    case 221:
+        ret = sys_epoll_wait((int) a1, (struct epoll_event *) a2, (int) a3, -1);
+        break; /* epoll_wait (old) */
+    case 222:
+    case 224:
+    case 226:
+        ret = 0;
+        break; /* timer_create/gettime/delete stubs */
+    case 223:
+        ret = 0;
+        break; /* timer_settime */
+    case 225:
+        ret = 0;
+        break; /* timer_getoverrun */
+    case 227:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break; /* clock_settime */
+    case 232:
+        ret = sys_epoll_wait((int) a1, (struct epoll_event *) a2, (int) a3, (int) a4);
+        break;
+    case 233:
+        ret = sys_epoll_ctl((int) a1, (int) a2, (int) a3, (struct epoll_event *) a4);
+        break;
+    case 200:
+        ret = sys_kill((int64_t) a1, (int) a2);
+        break; /* tkill */
+    case 202:
+        ret = sys_futex((uint32_t *) a1, (int) a2, (uint32_t) a3, (void *) a4, (uint32_t *) a5,
+                        (uint32_t) a6);
+        break;
+
     case 217:
         ret = fd_getdents64((int) a1, (void *) a2, a3);
+        break;
+    case 218:
+        ret = sys_set_tid_address((void *) a1);
+        break;
+    case 228:
+        ret = sys_clock_gettime(a1, (void *) a2);
+        break;
+    case 229:
+        ret = sys_clock_getres(a1, (void *) a2);
+        break;
+    case 230:
+        ret = sys_nanosleep((void *) a3, (void *) a4); /* clock_nanosleep: ignore clkid/flags */
+        break;
+    case 231:
+        proc_do_exit((int) a1);
+        return;
+    case 234:
+        ret = sys_tgkill((int) a1, (int) a2, (int) a3);
+        break;
+    case 235:
+        ret = 0; /* utimes */
+        break;
+    case 236:
+        ret = -(int64_t) ENOSYS;
+        break; /* vserver */
+    case 240:
+    case 241:
+    case 242:
+    case 243:
+    case 244:
+    case 245:
+        ret = -(int64_t) ENOSYS;
+        break; /* mqueue */
+    case 251:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break; /* ioprio_set */
+    case 252:
+        ret = 0;
+        break; /* ioprio_get */
+    case 253:
+    case 254:
+    case 255:
+        ret = -(int64_t) ENOSYS;
+        break; /* inotify */
+    case 247:  /* waitid */
+        ret = sys_wait4((int) a2, NULL, (int) a4, NULL);
         break;
     case 257:
         ret = fd_openat((int) a1, (const char *) a2, (int) a3, (int) a4);
@@ -1819,7 +2415,7 @@ void syscall_dispatch(syscall_frame_t *f) {
         at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
         ret = (int64_t) vfs_mknod(abs, (uint32_t) a3, a4);
         break;
-    }
+    } /* mknodat */
     case 261: {
         char abs[512];
         at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
@@ -1828,7 +2424,7 @@ void syscall_dispatch(syscall_frame_t *f) {
                      (int) vfs_chown(abs, (uint32_t) a3, (uint32_t) a4);
         ret = _r;
         break;
-    }
+    } /* fchownat */
     case 262:
         ret = fd_fstatat((int) a1, (const char *) a2, (struct linux_stat *) a3, (int) a4);
         break;
@@ -1875,514 +2471,7 @@ void syscall_dispatch(syscall_frame_t *f) {
         at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
         ret = (int64_t) vfs_access(abs, (int) a3);
         break;
-    }
-    case 280:
-        ret = fd_openat((int) a1, (const char *) a2, (int) a3, (int) a4);
-        break;
-    case 285:
-        ret = 0; /* fallocate: no-op */
-        break;
-    case 306: {
-        char ao[512], an[512];
-        at_resolve((int) a1, (const char *) a2, ao, sizeof(ao));
-        at_resolve((int) a3, (const char *) a4, an, sizeof(an));
-        ret = (int64_t) vfs_rename(ao, an);
-        break;
-    }
-    case 319:
-        ret = sys_memfd_create((const char *) a1, (uint32_t) a2);
-        break;
-    case 326:
-        ret = sys_copy_file_range((int) a1, (uint64_t *) a2, (int) a3, (uint64_t *) a4, a5,
-                                  (uint32_t) a6);
-        break;
-    case 327:
-        ret = sys_preadv((int) a1, (const struct iovec *) a2, (int) a3, a4);
-        break;
-    case 328:
-        ret = sys_pwritev((int) a1, (const struct iovec *) a2, (int) a3, a4);
-        break;
-    case 332:
-        ret = sys_statx((int) a1, (const char *) a2, (int) a3, (uint32_t) a4, (struct statx *) a5);
-        break;
-    case 334: {
-        for (int _fd = (int) a1; _fd <= (int) a2 && _fd < VFS_FD_MAX; _fd++)
-            if (fd_valid(_fd)) fd_close(_fd);
-        ret = 0;
-        break;
-    }
-    case 439: {
-        char abs[512];
-        at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
-        ret = (int64_t) vfs_access(abs, (int) a3);
-        break;
-    }
-
-    /* Memory Management */
-    case 9:
-        ret = sys_mmap(a1, a2, a3, a4, a5, a6);
-        break;
-    case 10:
-        ret = sys_mprotect(a1, a2, a3);
-        break;
-    case 11:
-        ret = sys_munmap(a1, a2);
-        break;
-    case 12:
-        ret = sys_brk(a1);
-        break;
-    case 25:
-        ret = sys_mremap(a1, a2, a3, a4, a5);
-        break;
-    case 26:
-        ret = 0;
-        break;
-    case 27:
-        if (a3) {
-            uint64_t vec_len = (a2 + PAGE_SIZE - 1) / PAGE_SIZE;
-            if (!uptr_ok_w((void *) a3, vec_len)) {
-                ret = -(int64_t) EFAULT;
-                break;
-            }
-            memset((void *) a3, 1, vec_len);
-        }
-        ret = 0;
-        break;
-    case 28:
-        ret = sys_madvise((void *) a1, a2, (int) a3);
-        break;
-    case 29:
-        ret = (int64_t) sys_shmget((int) a1, a2, (int) a3);
-        break;
-    case 30:
-        ret = (int64_t) sys_shmat((int) a1, a2, (int) a3);
-        break;
-    case 31:
-        ret = (int64_t) sys_shmctl((int) a1, (int) a2, (void *) a3);
-        break;
-    case 67:
-        ret = (int64_t) sys_shmdt(a1);
-        break;
-
-    /* Sockets */
-    case 41:
-        ret = (int64_t) fd_socket((int) a1, (int) a2, (int) a3);
-        break;
-    case 42:
-        ret = sys_socket_connect((int) a1, (struct sockaddr_un *) a2, a3);
-        break;
-    case 43:
-        ret = sys_socket_accept((int) a1, (struct sockaddr_un *) a2, (int *) a3, 0);
-        break;
-    case 44:
-        ret = fd_write((int) a1, (const void *) a2, a3);
-        break;
-    case 45:
-        ret = fd_read((int) a1, (void *) a2, a3);
-        break;
-    case 46:
-        ret = sys_socket_sendmsg((int) a1, (const void *) a2, (int) a3);
-        break;
-    case 47:
-        ret = sys_socket_recvmsg((int) a1, (void *) a2, (int) a3);
-        break;
-    case 48:
-        ret = 0;
-        break;
-    case 49:
-        ret = sys_socket_bind((int) a1, (struct sockaddr_un *) a2, a3);
-        break;
-    case 50:
-        ret = (int64_t) fd_listen_unix((int) a1, (int) a2);
-        break;
-    case 51:
-        ret = sys_socket_getsockname((int) a1, (struct sockaddr_un *) a2, (int *) a3);
-        break;
-    case 52:
-        ret = sys_socket_getpeername((int) a1, (struct sockaddr_un *) a2, (int *) a3);
-        break;
-    case 53:
-        if (!a4 || !uptr_ok_w((void *) a4, 2 * sizeof(int))) {
-            ret = -(int64_t) EFAULT;
-            break;
-        }
-        ret = fd_socketpair((int *) a4);
-        break;
-    case 54:
-        ret = sys_socket_setsockopt((int) a1, (int) a2, (int) a3, (void *) a4, (int) a5);
-        break;
-    case 55:
-        ret = sys_socket_getsockopt((int) a1, (int) a2, (int) a3, (void *) a4, (int *) a5);
-        break;
-    case 282:
-        ret = sys_socket_accept((int) a1, (struct sockaddr_un *) a2, (int *) a3, (int) a4);
-        break;
-
-    /* FD management */
-    case 16:
-        ret = fd_ioctl((int) a1, a2, a3);
-        break;
-    case 32:
-        ret = fd_dup((int) a1);
-        break;
-    case 33:
-        ret = fd_dup2((int) a1, (int) a2);
-        break;
-    case 72:
-        ret = fd_fcntl((int) a1, (int) a2, a3);
-        break;
-    case 73:
-        ret = fd_valid((int) a1) ? 0 : -(int64_t) EBADF;
-        break;
-    case 74:
-    case 75:
-        ret = fd_valid((int) a1) ? 0 : -(int64_t) EBADF;
-        break;
-    case 76:
-        ret = sys_truncate((const char *) a1, a2);
-        break;
-    case 77:
-        ret = sys_ftruncate((int) a1, a2);
-        break;
-    case 292:
-        ret = fd_dup3((int) a1, (int) a2, (int) a3);
-        break;
-
-    /* Signals */
-    case 13:
-        ret = sys_rt_sigaction((int) a1, (const k_sigaction_t *) a2, (k_sigaction_t *) a3, a4);
-        break;
-    case 14:
-        ret = sys_rt_sigprocmask((int) a1, (const uint64_t *) a2, (uint64_t *) a3, a4);
-        break;
-    case 15:
-        ret = sys_rt_sigreturn(f);
-        break;
-    case 34:
-        ret = sys_pause();
-        break;
-    case 62:
-        ret = sys_kill(a1, (int) a2);
-        break;
-    case 127: {
-        if (a1) {
-            if (!uptr_ok_w((void *) a1, 8)) {
-                ret = -(int64_t) EFAULT;
-                break;
-            }
-            *(uint64_t *) a1 = cur() ? (cur()->pending_sigs & cur()->sig_mask) : 0;
-        }
-        ret = 0;
-        break;
-    }
-    case 128:
-        ret = sys_rt_sigtimedwait((const uint64_t *) a1, (void *) a2, (const void *) a3, a4);
-        break;
-    case 129:
-        ret = 0;
-        break;
-    case 130:
-        ret = sys_rt_sigsuspend((const uint64_t *) a1, a2);
-        break;
-    case 131:
-        ret = sys_sigaltstack((const void *) a1, (void *) a2);
-        break;
-    case 200:
-        ret = sys_kill((int64_t) a1, (int) a2);
-        break;
-    case 234:
-        ret = sys_tgkill((int) a1, (int) a2, (int) a3);
-        break;
-    /* Processes */
-    case 39:
-        ret = sys_getpid();
-        break;
-    case 56:
-        ret = sys_clone(a1, a2, (uint32_t *) a3, (uint32_t *) a4, a5, f);
-        break;
-    case 57:
-        ret = sys_fork(f);
-        break;
-    case 58:
-        ret = sys_fork(f);
-        break;
-    case 59:
-        ret = sys_execve((const char *) a1, (const char **) a2, (const char **) a3);
-        break;
-    case 60:
-        proc_do_exit((int) a1);
-        return;
-    case 61:
-        ret = sys_wait4((int) a1, (int *) a2, (int) a3, (void *) a4);
-        break;
-    case 63:
-        ret = sys_uname((struct utsname *) a1);
-        break;
-    case 110:
-        ret = sys_getppid();
-        break;
-    case 186:
-        ret = sys_gettid();
-        break;
-    case 231:
-        proc_do_exit((int) a1);
-        return;
-    case 247:
-        ret = sys_wait4((int) a2, NULL, (int) a4, NULL);
-        break;
-    case 218:
-        ret = sys_set_tid_address((void *) a1);
-        break;
-    case 273:
-        ret = sys_set_robust_list((void *) a1, a2);
-        break;
-
-    /* Credentials / UID/GID */
-    case 102:
-        ret = sys_getuid();
-        break;
-    case 104:
-        ret = sys_getgid();
-        break;
-    case 105:
-        ret = sys_setuid((uint32_t) a1);
-        break;
-    case 106:
-        ret = sys_setgid((uint32_t) a1);
-        break;
-    case 107:
-        ret = sys_geteuid();
-        break;
-    case 108:
-        ret = sys_getegid();
-        break;
-    case 109:
-        ret = sys_setpgid(a1, a2);
-        break;
-    case 111:
-        ret = sys_getpgrp();
-        break;
-    case 112:
-        ret = sys_setsid();
-        break;
-    case 113:
-        ret = sys_setreuid((uint32_t) a1, (uint32_t) a2);
-        break;
-    case 114:
-        ret = sys_setregid((uint32_t) a1, (uint32_t) a2);
-        break;
-    case 115:
-        ret = sys_getgroups((int) a1, (uint32_t *) a2);
-        break;
-    case 116:
-        ret = sys_setgroups((int) a1, (uint32_t *) a2);
-        break;
-    case 117:
-        ret = sys_setresuid((uint32_t) a1, (uint32_t) a2, (uint32_t) a3);
-        break;
-    case 118:
-        ret = sys_getresuid((uint32_t *) a1, (uint32_t *) a2, (uint32_t *) a3);
-        break;
-    case 119:
-        ret = sys_setresgid((uint32_t) a1, (uint32_t) a2, (uint32_t) a3);
-        break;
-    case 120:
-        ret = sys_getresgid((uint32_t *) a1, (uint32_t *) a2, (uint32_t *) a3);
-        break;
-    case 121:
-        ret = sys_getpgid(a1);
-        break;
-    case 122:
-        ret = sys_setfsuid((uint32_t) a1);
-        break;
-    case 123:
-        ret = sys_setfsgid((uint32_t) a1);
-        break;
-    case 124: {
-        proc_t *_p = a1 ? proc_find((uint32_t) a1) : cur();
-        ret = _p ? (int64_t) _p->pgid : -(int64_t) ESRCH;
-        break;
-    }
-    case 125: {
-        if (a2) {
-            if (!uptr_ok_w((void *) a2, 40)) {
-                ret = -(int64_t) EFAULT;
-                break;
-            }
-            memset((void *) a2, 0, 40);
-        }
-        ret = 0;
-        break;
-    }
-    case 126:
-        ret = -(int64_t) EPERM;
-        break;
-
-    /* Time */
-    case 35:
-        ret = sys_nanosleep((void *) a1, (void *) a2);
-        break;
-    case 36:
-        ret = sys_getitimer((int) a1, (void *) a2);
-        break;
-    case 37:
-        ret = sys_alarm((uint32_t) a1);
-        break;
-    case 38:
-        ret = sys_setitimer((int) a1, (const void *) a2, (void *) a3);
-        break;
-    case 96:
-        ret = sys_gettimeofday((void *) a1, (void *) a2);
-        break;
-    case 100:
-        ret = sys_times((void *) a1);
-        break;
-    case 201: {
-        uint64_t t = g_epoch_base + g_ticks / 1000;
-        if (a1) {
-            if (!uptr_ok_w((void *) a1, 8)) {
-                ret = -(int64_t) EFAULT;
-                break;
-            }
-            *(uint64_t *) a1 = t;
-        }
-        ret = (int64_t) t;
-        break;
-    }
-    case 222:
-    case 224:
-    case 226:
-        ret = 0;
-        break;
-    case 223:
-        ret = 0;
-        break;
-    case 225:
-        ret = 0;
-        break;
-    case 227:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 228:
-        ret = sys_clock_gettime(a1, (void *) a2);
-        break;
-    case 229:
-        ret = sys_clock_getres(a1, (void *) a2);
-        break;
-    case 230:
-        ret = sys_nanosleep((void *) a3, (void *) a4);
-        break;
-    case 235:
-        ret = 0;
-        break;
-    case 279:
-        ret = 0;
-        break;
-    case 164:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-
-    /* Scheduling */
-    case 24:
-        sched_yield_blocking();
-        ret = 0;
-        break;
-    case 140:
-        ret = 0;
-        break;
-    case 141:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 142:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 143: {
-        if (a2) {
-            if (!uptr_ok_w((void *) a2, 4)) {
-                ret = -(int64_t) EFAULT;
-                break;
-            }
-            ((int *) a2)[0] = 0;
-        }
-        ret = 0;
-        break;
-    }
-    case 144:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 145:
-        ret = 0;
-        break;
-    case 146:
-        ret = 0;
-        break;
-    case 147:
-        ret = 0;
-        break;
-    case 148: {
-        if (a2) {
-            if (!uptr_ok_w((void *) a2, 16)) {
-                ret = -(int64_t) EFAULT;
-                break;
-            }
-            ((uint64_t *) a2)[0] = 0;
-            ((uint64_t *) a2)[1] = 10000000ULL;
-        }
-        ret = 0;
-        break;
-    }
-    case 203:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 204: {
-        uint64_t sz = a2;
-        if (a3 && sz > 0) {
-            if (!uptr_ok_w((void *) a3, sz)) {
-                ret = -(int64_t) EFAULT;
-                break;
-            }
-            memset((void *) a3, 0, sz);
-            *(uint8_t *) a3 = 1;
-        }
-        ret = 0;
-        break;
-    }
-    case 304:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 305: {
-        if (a2) {
-            if (!uptr_ok_w((void *) a2, 56)) {
-                ret = -(int64_t) EFAULT;
-                break;
-            }
-            memset((void *) a2, 0, 56);
-        }
-        ret = 0;
-        break;
-    }
-
-    /* Epoll */
-    case 213:
-        ret = sys_epoll_create1(0);
-        break;
-    case 221:
-        ret = sys_epoll_wait((int) a1, (struct epoll_event *) a2, (int) a3, -1);
-        break;
-    case 232:
-        ret = sys_epoll_wait((int) a1, (struct epoll_event *) a2, (int) a3, (int) a4);
-        break;
-    case 233:
-        ret = sys_epoll_ctl((int) a1, (int) a2, (int) a3, (struct epoll_event *) a4);
-        break;
-    case 281:
-        ret = sys_epoll_wait((int) a1, (struct epoll_event *) a2, (int) a3, (int) a4);
-        break;
-    case 291:
-        ret = sys_epoll_create1((int) a1);
-        break;
-
-    /* Poll */
+    } /* faccessat */
     case 270:
         ret =
             sys_pselect6((int) a1, (void *) a2, (void *) a3, (void *) a4, (void *) a5, (void *) a6);
@@ -2390,128 +2479,53 @@ void syscall_dispatch(syscall_frame_t *f) {
     case 271:
         ret = sys_ppoll((struct pollfd_s *) a1, a2, (void *) a3, (const void *) a4, a5);
         break;
-
-    /* Futex / Synchronization */
-    case 202:
-        ret = sys_futex((uint32_t *) a1, (int) a2, (uint32_t) a3, (void *) a4, (uint32_t *) a5,
-                        (uint32_t) a6);
+    case 272:
+        ret = -(int64_t) ENOSYS;
+        break; /* unshare */
+    case 273:
+        ret = sys_set_robust_list((void *) a1, a2);
         break;
-
-    /* Misc */
-    case 97:
-        ret = sys_getrlimit(a1, (void *) a2);
+    case 274:
+    case 275:
+    case 276:
+    case 277:
+        ret = -(int64_t) ENOSYS;
+        break; /* splice/tee/sync_file_range/vmsplice */
+    case 278:
+        ret = -(int64_t) ENOSYS;
+        break; /* move_pages */
+    case 279:
+        ret = 0; /* utimensat */
         break;
-    case 98: {
-        if (a2) {
-            if (!uptr_ok_w((void *) a2, 144)) {
-                ret = -(int64_t) EFAULT;
-                break;
-            }
-            memset((void *) a2, 0, 144);
-        }
+    case 280:
+        ret = fd_openat((int) a1, (const char *) a2, (int) a3, (int) a4);
+        break; /* openat2 */
+    case 281:
+        ret = sys_epoll_wait((int) a1, (struct epoll_event *) a2, (int) a3, (int) a4);
+        break; /* epoll_pwait */
+    case 282:  /* accept4(fd, addr, addrlen, flags) */
+        ret = sys_socket_accept((int) a1, (struct sockaddr_un *) a2, (int *) a3, (int) a4);
+        break;
+    case 283:
+    case 284:
+        ret = -(int64_t) ENOSYS;
+        break; /* signalfd4, eventfd2 */
+    case 285:
         ret = 0;
+        break; /* fallocate: no-op */
+    case 286:
+        ret = -(int64_t) ENOSYS;
+        break; /* inotify_init1 */
+    case 288:  /* accept4(fd, addr, addrlen, flags) */
+        ret = sys_socket_accept((int) a1, (struct sockaddr_un *) a2, (int *) a3, (int) a4);
         break;
-    }
-    case 99:
-        ret = sys_sysinfo((struct sysinfo_s *) a1);
-        break;
-    case 101:
-        ret = -(int64_t) EPERM;
-        break;
-    case 103:
-        ret = -(int64_t) EPERM;
-        break;
-    case 133: {
-        char abs[512];
-        int _r = copy_user_path((const char *) a1, abs, sizeof(abs));
-        if (_r < 0) {
-            ret = (int64_t) _r;
-            break;
-        }
-        ret = (int64_t) vfs_mknod(abs, (uint32_t) a2, a3);
-        break;
-    }
-    case 135:
-        ret = 0;
-        break;
-    case 153:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 159:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 160:
-        ret = sys_getrlimit(a1, (void *) a2);
-        break;
-    case 161:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 169: {
-        if (!is_root()) {
-            ret = -(int64_t) EPERM;
-            break;
-        }
-        cpu_halt();
-        ret = 0;
-        break;
-    }
-    case 170:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 171:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 172: {
-        if (!is_root()) {
-            ret = -(int64_t) EPERM;
-            break;
-        }
-        int level = (int) a1 & 3;
-        f->r11 = (f->r11 & ~0x3000ULL) | ((uint64_t) level << 12);
-        ret = 0;
-        break;
-    }
-    case 173: {
-        if (!is_root()) {
-            ret = -(int64_t) EPERM;
-            break;
-        }
-        (void) a1;
-        (void) a2;
-        if (a3) f->r11 |= 0x3000ULL;
-        ret = 0;
-        break;
-    }
-    case 251:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 252:
-        ret = 0;
-        break;
-    case 300:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break;
-    case 301:
-        ret = 0;
-        break;
-    case 302:
-        ret = sys_prlimit64(a1, a2, (void *) a3, (void *) a4);
-        break;
-    case 318:
-        ret = sys_getrandom((void *) a1, a2, (uint32_t) a3);
-        break;
-    case 324:
-        ret = 0;
-        break;
-
-    /* Pipe2 */
-    case 287: {
+    case 287:
         if (!a1 || !uptr_ok_w((void *) a1, 2 * sizeof(int))) {
             ret = -(int64_t) EFAULT;
             break;
         }
         ret = fd_pipe((int *) a1);
-        if (ret == 0 && (a2 & (O_CLOEXEC | O_NONBLOCK))) {
+        if (ret == 0 && (a2 & (O_CLOEXEC | O_NONBLOCK))) { /* pipe2 flags */
             int *pf = (int *) a1;
             for (int _e = 0; _e < 2; _e++) {
                 vfs_file_t *pe = fd_get_file(pf[_e]);
@@ -2521,104 +2535,101 @@ void syscall_dispatch(syscall_frame_t *f) {
             }
         }
         break;
-    }
-    case 293: {
+    case 289:
+        ret = sys_preadv((int) a1, (const struct iovec *) a2, (int) a3, a4);
+        break;
+    case 290:
+        ret = sys_pwritev((int) a1, (const struct iovec *) a2, (int) a3, a4);
+        break;
+    case 291:
+        ret = sys_epoll_create1((int) a1);
+        break; /* epoll_create1 */
+    case 292:
+        ret = fd_dup3((int) a1, (int) a2, (int) a3);
+        break;
+    case 293:
         if (!a1 || !uptr_ok_w((void *) a1, 2 * sizeof(int))) {
             ret = -(int64_t) EFAULT;
             break;
         }
         ret = fd_pipe((int *) a1);
         break;
-    }
-
-    /* Not implemented / stubs */
-    case 64:
-    case 65:
-    case 66:
-    case 68:
-    case 69:
-    case 70:
-    case 71:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 139:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 149:
-    case 150:
-    case 151:
-    case 152:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 175:
-    case 176:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 188:
-    case 189:
-    case 190:
-    case 191:
-    case 192:
-    case 193:
-    case 194:
-    case 195:
-    case 196:
-    case 197:
-    case 198:
-    case 199:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 236:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 240:
-    case 241:
-    case 242:
-    case 243:
-    case 244:
-    case 245:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 253:
-    case 254:
-    case 255:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 272:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 274:
-    case 275:
-    case 276:
-    case 277:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 278:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 283:
-    case 284:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 286:
-        ret = -(int64_t) ENOTSUP;
-        break;
-    case 288:
-        ret = -(int64_t) ENOTSUP;
-        break;
     case 295:
     case 296:
-        ret = -(int64_t) ENOTSUP;
+        ret = -(int64_t) ENOSYS;
+        break; /* fanotify */
+    case 300:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break; /* clock_adjtime */
+    case 301:
+        ret = 0;
+        break; /* syncfs: no-op */
+    case 302:
+        ret = sys_prlimit64(a1, a2, (void *) a3, (void *) a4);
         break;
     case 303:
-        ret = -(int64_t) ENOTSUP;
+        ret = -(int64_t) ENOSYS;
+        break; /* finit_module */
+    case 304:
+        ret = is_root() ? 0 : -(int64_t) EPERM;
+        break; /* sched_setattr */
+    case 305:
+        if (a2) {
+            if (!uptr_ok_w((void *) a2, 56)) {
+                ret = -(int64_t) EFAULT;
+                break;
+            }
+            memset((void *) a2, 0, 56);
+        }
+        ret = 0;
+        break; /* sched_getattr */
+    case 306: {
+        char ao[512], an[512];
+        at_resolve((int) a1, (const char *) a2, ao, sizeof(ao));
+        at_resolve((int) a3, (const char *) a4, an, sizeof(an));
+        ret = (int64_t) vfs_rename(ao, an);
         break;
+    } /* renameat2 */
     case 307:
-        ret = -(int64_t) ENOTSUP;
+        ret = -(int64_t) ENOSYS;
+        break; /* seccomp not implemented */
+    case 318:
+        ret = sys_getrandom((void *) a1, a2, (uint32_t) a3);
         break;
+    case 319:
+        ret = sys_memfd_create((const char *) a1, (uint32_t) a2);
+        break;
+    case 324:
+        ret = 0;
+        break; /* membarrier: no-op on single-CPU */
     case 325:
-        ret = -(int64_t) ENOTSUP;
+        ret = -(int64_t) ENOSYS;
+        break; /* mlock2 */
+    case 326:
+        ret = sys_copy_file_range((int) a1, (uint64_t *) a2, (int) a3, (uint64_t *) a4, a5,
+                                  (uint32_t) a6);
         break;
+    case 327:
+        ret = sys_preadv((int) a1, (const struct iovec *) a2, (int) a3, a4);
+        break; /* preadv2 */
+    case 328:
+        ret = sys_pwritev((int) a1, (const struct iovec *) a2, (int) a3, a4);
+        break; /* pwritev2 */
+    case 332:
+        ret = sys_statx((int) a1, (const char *) a2, (int) a3, (uint32_t) a4, (struct statx *) a5);
+        break;
+    case 334: {
+        for (int _fd = (int) a1; _fd <= (int) a2 && _fd < VFS_FD_MAX; _fd++)
+            if (fd_valid(_fd)) fd_close(_fd);
+        ret = 0;
+        break;
+    } /* close_range */
+    case 439: {
+        char abs[512];
+        at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
+        ret = (int64_t) vfs_access(abs, (int) a3);
+        break;
+    } /* faccessat2 */
 
     default:
         log_debug("[syscall %lu  a1=%lx a2=%lx a3=%lx]", nr, a1, a2, a3);

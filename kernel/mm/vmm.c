@@ -3,7 +3,6 @@
 #include "lib/log.h"
 #include "lib/string.h"
 #include "pmm.h"
-#include "syscall/syscall.h"
 #include "vma.h"
 
 vmm_space_t g_kernel_space;
@@ -41,7 +40,9 @@ void vmm_init(void) {
 }
 
 int vmm_map(vmm_space_t *sp, uint64_t virt, uint64_t phys, uint64_t flags) {
+    // a user-accessible mapping must never land in the kernel half 256+ pml4
     if ((flags & VMM_USER) && virt >= USER_LIMIT) return -1;
+
     uint64_t *pml4 = (uint64_t *) phys_to_virt(sp->pml4_phys);
 
     uint64_t *pdpt = descend(pml4, PML4_IDX(virt));
@@ -97,6 +98,33 @@ bool vmm_user_range_ok(vmm_space_t *sp, uint64_t virt, uint64_t len, bool write)
     return true;
 }
 
+bool vmm_user_range_fault_in(vmm_space_t *sp, uint64_t virt, uint64_t len, bool write) {
+    if (!sp) return false;
+    if (len == 0) return true;
+    if (virt + len < virt) return false;
+    uint64_t pg = virt & ~0xFFFULL;
+    uint64_t last = (virt + len - 1) & ~0xFFFULL;
+    for (;; pg += 0x1000) {
+        uint64_t pte = vmm_leaf_pte(sp, pg);
+        if (pte & VMM_PRESENT) {
+            if (!(pte & VMM_USER)) return false;
+            if (write && !(pte & VMM_WRITE)) return false;
+        } else {
+            /* not present: only ok if a vma covers it - then fault it in now */
+            if (!vma_page_fault_allowed(sp, pg, write, false)) return false;
+            void *phys = pmm_alloc_zeroed();
+            if (!phys) return false;
+            uint64_t flags = vma_page_flags(sp, pg);
+            if (vmm_map(sp, pg, (uint64_t) phys, flags) != 0) {
+                pmm_free(phys);
+                return false;
+            }
+        }
+        if (pg == last) break;
+    }
+    return true;
+}
+
 int vmm_protect(vmm_space_t *sp, uint64_t virt, uint64_t flags) {
     uint64_t *pml4 = (uint64_t *) phys_to_virt(sp->pml4_phys);
     if (!(pml4[PML4_IDX(virt)] & VMM_PRESENT)) return -1;
@@ -141,7 +169,7 @@ vmm_space_t *vmm_space_new(void) {
     uint64_t pml4_phys = (uint64_t) pmm_alloc_zeroed();
     if (!pml4_phys) return NULL;
 
-    /* share kernel half (pml4 entries 256-511); user half starts zeroed */
+    // share kernel half (pml4 256-511); user half starts zeroed
     uint64_t *new_pml4 = (uint64_t *) phys_to_virt(pml4_phys);
     uint64_t *kern_pml4 = (uint64_t *) phys_to_virt(g_kernel_space.pml4_phys);
     for (int i = 256; i < 512; i++) new_pml4[i] = kern_pml4[i];
@@ -200,10 +228,7 @@ void vmm_switch(vmm_space_t *sp) {
 }
 
 int vmm_fork_user(vmm_space_t *dst, vmm_space_t *src) {
-    vma_copy(dst, src); /* VMA metadata; pages copied by the page-table walk below */
-
-    /* Walk the actual page tables so we copy every mapped user page, including
-       demand-grown stack pages that have no VMA record. */
+    vma_copy(dst, src); /* vma metadata; pages copied by the page-table walk below */
     uint64_t *src_pml4 = (uint64_t *) phys_to_virt(src->pml4_phys);
 
     for (int i = 0; i < 256; i++) {

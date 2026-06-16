@@ -127,9 +127,13 @@ int fd_fcntl(int fd, int cmd, uint64_t arg) {
         return 0;
     case F_GETFL:
         return f->flags;
-    case F_SETFL:
-        f->flags = (int) arg;
+    case F_SETFL: {
+        /* F_SETFL may only change status flags; access mode (O_ACCMODE) and
+           creation flags stay fixed, else a RO fd could be promoted to RW. */
+        int changeable = O_APPEND | O_NONBLOCK;
+        f->flags = (f->flags & ~changeable) | ((int) arg & changeable);
         return 0;
+    }
     case F_DUPFD:
     case F_DUPFD_CLOEXEC: {
         int newfd = vfs_fd_alloc_from((int) arg);

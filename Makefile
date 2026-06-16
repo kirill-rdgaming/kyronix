@@ -13,11 +13,14 @@ else
     LD := ld
 endif
 
+LWIP_SRC := kernel/net/lwip/src
+
 CFLAGS := \
     -std=c11           \
     -O2                \
     -Wall -Wextra      \
     -Wno-unused-parameter \
+    -Wno-error         \
     -ffreestanding     \
     -fno-stack-protector \
     -fno-pic -fno-pie  \
@@ -28,8 +31,11 @@ CFLAGS := \
     -mno-sse2          \
     -mno-red-zone      \
     -mcmodel=kernel    \
+    -U_FORTIFY_SOURCE  \
     -Ikernel           \
-    -Ikernel/boot
+    -Ikernel/boot      \
+    -Ikernel/net       \
+    -I$(LWIP_SRC)/include
 
 LDFLAGS := \
     -T linker.ld       \
@@ -65,6 +71,7 @@ SRCS := \
     kernel/fs/fdpipe.c                 \
     kernel/fs/procfs.c                 \
     kernel/fs/unix_socket.c            \
+    kernel/fs/inet_socket.c            \
     kernel/fs/pipe.c                   \
     kernel/fs/cpio.c                   \
     kernel/drivers/serial.c           \
@@ -72,6 +79,33 @@ SRCS := \
     kernel/drivers/tty.c              \
     kernel/drivers/fb.c               \
     kernel/drivers/pci.c              \
+    kernel/drivers/virtio_net.c       \
+    kernel/net/net.c                  \
+    kernel/net/lwip_glue.c            \
+    kernel/net/netif/kyronix_netif.c  \
+    $(LWIP_SRC)/core/init.c           \
+    $(LWIP_SRC)/core/def.c            \
+    $(LWIP_SRC)/core/dns.c            \
+    $(LWIP_SRC)/core/inet_chksum.c    \
+    $(LWIP_SRC)/core/ip.c             \
+    $(LWIP_SRC)/core/mem.c            \
+    $(LWIP_SRC)/core/memp.c           \
+    $(LWIP_SRC)/core/netif.c          \
+    $(LWIP_SRC)/core/pbuf.c           \
+    $(LWIP_SRC)/core/raw.c            \
+    $(LWIP_SRC)/core/stats.c          \
+    $(LWIP_SRC)/core/sys.c            \
+    $(LWIP_SRC)/core/tcp.c            \
+    $(LWIP_SRC)/core/tcp_in.c         \
+    $(LWIP_SRC)/core/tcp_out.c        \
+    $(LWIP_SRC)/core/timeouts.c       \
+    $(LWIP_SRC)/core/udp.c            \
+    $(LWIP_SRC)/core/ipv4/etharp.c    \
+    $(LWIP_SRC)/core/ipv4/icmp.c      \
+    $(LWIP_SRC)/core/ipv4/ip4.c       \
+    $(LWIP_SRC)/core/ipv4/ip4_addr.c  \
+    $(LWIP_SRC)/core/ipv4/ip4_frag.c  \
+    $(LWIP_SRC)/netif/ethernet.c      \
     kernel/drivers/uio.c              \
     kernel/drivers/fbdev.c            \
     kernel/drivers/input.c            \
@@ -167,7 +201,9 @@ run: iso
 	    -boot d                     \
 	    -serial stdio               \
 	    -vga qxl                    \
-	    -global qxl-vga.vgamem_mb=1024
+	    -global qxl-vga.vgamem_mb=1024 \
+	    -netdev user,id=n0          \
+	    -device virtio-net-pci,netdev=n0
 
 run-serial: iso
 	qemu-system-x86_64              \
@@ -208,8 +244,8 @@ test-initrd: $(TARGET) testrunner build/libatomic_asneeded.a
 	cp build/bin/ksh        $(TEST_ROOTFS)/bin/
 	ln -sf ksh $(TEST_ROOTFS)/bin/sh
 	for app in basename cat chgrp chmod chown cksum clear cmp cp cut date dd dirname du echo env false \
-	    find grep head hostname kill link ln ls mkdir mktemp mv printenv printf pwd readlink reboot rm rmdir \
-	    sed seq sleep sort sync tail tee test touch tr true tty uname uniq unlink wc which whoami yes; do \
+	    find grep head hostname kill link ln ls mkdir mktemp mv ping printenv printf pwd readlink reboot rm rmdir \
+	    sed seq sleep sort sync tail tee test touch tr true tty uname uniq unlink wc wget which whoami yes; do \
 	    cp build/bin/$$app $(TEST_ROOTFS)/bin/; \
 	done
 	cp build/bin/fetch     $(TEST_ROOTFS)/bin/
@@ -249,6 +285,8 @@ test-run: test-iso
 	    -cdrom $(TEST_ISO)          \
 	    -display none               \
 	    -serial stdio               \
+	    -netdev user,id=n0          \
+	    -device virtio-net-pci,netdev=n0 \
 	    -no-reboot
 
 test-run-log: test-iso
@@ -258,6 +296,8 @@ test-run-log: test-iso
 	    -cdrom $(TEST_ISO)          \
 	    -device isa-debug-exit,iobase=0x501 \
 	    -display none               \
+	    -netdev user,id=n0          \
+	    -device virtio-net-pci,netdev=n0 \
 	    -serial file:test.log       \
 	    -no-reboot 2>/dev/null;     \
 	grep -E "(TEST|RESULT|ALL|SOME)" test.log 2>/dev/null; \

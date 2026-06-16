@@ -18,6 +18,7 @@
 #include "drivers/serial.h"
 #include "drivers/tty.h"
 #include "drivers/uio.h"
+#include "drivers/virtio_net.h"
 #include "drivers/vt.h"
 #include "exec/process.h"
 #include "fs/cpio.h"
@@ -29,6 +30,7 @@
 #include "mm/heap.h"
 #include "mm/pmm.h"
 #include "mm/vmm.h"
+#include "net/net.h"
 #include "proc/proc.h"
 
 #define STATUS_COL 72
@@ -181,6 +183,10 @@ void kmain(void) {
     }
     pci_enumerate();
     kstatus("Enumerating PCI", true);
+    virtnet_init();
+    kstatus("virtio-net", virtnet_ready());
+    net_init();
+    kstatus("lwIP network stack", true);
     uio_init();
     kstatus("Initialising UIO", true);
     fbdev_init();

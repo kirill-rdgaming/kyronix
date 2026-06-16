@@ -11,9 +11,10 @@
 #define PROC_READY 2
 #define PROC_WAITING 3 /* blocked in wait4 */
 #define PROC_ZOMBIE 4
+#define PROC_DYING 5 /* thread exited; kstack freed later from another stack */
 
 #define PROC_MAX 64
-#define KSTACK_PAGES 8
+#define KSTACK_PAGES 16
 #define KSTACK_SIZE (KSTACK_PAGES * 4096ULL)
 
 typedef struct proc {
@@ -52,7 +53,7 @@ typedef struct proc {
     uint64_t itimer_value_ms;
     uint64_t itimer_interval_ms;
     uint64_t itimer_next_tick;
-    void *blocked_pipe;    /* pipe_t* this proc is sleeping on, NULL ifnone */
+    void *blocked_pipe;    /* pipe_t* this proc is sleeping on, null ifnone */
     int blocked_pipe_read; /* 1 = waiting_reader, 0 = waiting_writer */
     uint8_t fpu_state[512] __attribute__((aligned(16)));
 } proc_t;
@@ -63,8 +64,11 @@ extern proc_t *g_current_proc;
 void proc_init(void);
 proc_t *proc_alloc(uint32_t ppid);
 void proc_kstack_free(proc_t *p);
+void proc_defer_thread_reap(proc_t *p);
+void proc_reap_pending(void); /* free a deferred kstack - call only when not on it */
 proc_t *proc_find(uint32_t pid);
 proc_t *proc_next_ready(proc_t *skip);
+proc_t *proc_idle_until_ready(proc_t *skip);
 void sched_switch(proc_t *next);
 void sched_yield_blocking(void);
 extern void proc_resume_frame(void);

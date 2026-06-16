@@ -65,6 +65,8 @@ int64_t sys_sendfile(int outfd, int infd, uint64_t *offp, uint64_t count) {
 }
 
 int64_t sys_preadv(int fd, const struct iovec *iov, int n, uint64_t off) {
+    if (n < 0 || n > 1024) return -(int64_t) EINVAL;
+    if (n && (!iov || !uptr_ok(iov, (uint64_t) n * sizeof(*iov)))) return -(int64_t) EFAULT;
     int64_t total = 0;
     for (int i = 0; i < n; i++) {
         int64_t r = fd_pread(fd, (void *) iov[i].iov_base, iov[i].iov_len, off + (uint64_t) total);
@@ -76,6 +78,8 @@ int64_t sys_preadv(int fd, const struct iovec *iov, int n, uint64_t off) {
 }
 
 int64_t sys_pwritev(int fd, const struct iovec *iov, int n, uint64_t off) {
+    if (n < 0 || n > 1024) return -(int64_t) EINVAL;
+    if (n && (!iov || !uptr_ok(iov, (uint64_t) n * sizeof(*iov)))) return -(int64_t) EFAULT;
     int64_t total = 0;
     for (int i = 0; i < n; i++) {
         int64_t r =

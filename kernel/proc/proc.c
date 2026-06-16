@@ -95,6 +95,20 @@ proc_t *proc_alloc(uint32_t ppid) {
     }
     return NULL;
 }
+static proc_t *g_reap_thread;
+
+void proc_reap_pending(void) {
+    proc_t *p = g_reap_thread;
+    if (!p || p == g_current_proc) return; /* never free the stack we are running on */
+    g_reap_thread = NULL;
+    proc_kstack_free(p);    /* idempotent: clears kstack_guard */
+    p->state = PROC_UNUSED; /* slot reusable only now that its stack is gone */
+}
+
+void proc_defer_thread_reap(proc_t *p) {
+    proc_reap_pending(); /* flush any previous one first (not on its stack) */
+    g_reap_thread = p;
+}
 
 void proc_kstack_free(proc_t *p) {
     if (!p->kstack_guard) return;
@@ -122,6 +136,16 @@ proc_t *proc_next_ready(proc_t *skip) {
     }
     return NULL;
 }
+// WTF IM G
+proc_t *proc_idle_until_ready(proc_t *skip) {
+    for (;;) {
+        proc_t *nt = proc_next_ready(skip);
+        if (nt) return nt;
+        sti();
+        hlt();
+        cli();
+    }
+}
 
 void sched_yield_blocking(void) {
     proc_t *p = g_current_proc;
@@ -129,7 +153,7 @@ void sched_yield_blocking(void) {
     if (!next) {
         sti();
         hlt();
-        cli(); /* let IRQ0/IRQ1 fire when idle */
+        cli();
         return;
     }
 
@@ -138,6 +162,7 @@ void sched_yield_blocking(void) {
     vfs_set_fdtable(next->fds);
     g_current_space = next->space;
     cpu_set_kernel_stack(next->kstack_top);
+
     sched_switch(next);
 
     p->state = PROC_RUNNING;

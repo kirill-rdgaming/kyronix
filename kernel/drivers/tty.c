@@ -22,16 +22,15 @@ static struct termios_s tty_termios = {
     .c_oflag = OPOST | ONLCR,
     .c_cflag = CS8 | CREAD,
     .c_lflag = ISIG | ICANON,
-    .c_cc =
-        {
-            [VINTR] = 0x03,  /* Ctrl-C */
-            [VQUIT] = 0x1C,  /* Ctrl-\ */
-            [VERASE] = 0x7F, /* DEL */
-            [VKILL] = 0x15,  /* Ctrl-U */
-            [VEOF] = 0x04,   /* Ctrl-D */
-            [VMIN] = 1,
-            [VTIME] = 0,
-        },
+    .c_cc = {
+        [VINTR] = 0x03,  /* Ctrl-C */
+        [VQUIT] = 0x1C,  /* Ctrl-\ */
+        [VERASE] = 0x7F, /* DEL */
+        [VKILL] = 0x15,  /* Ctrl-U */
+        [VEOF] = 0x04,   /* Ctrl-D */
+        [VMIN] = 1,
+        [VTIME] = 0,
+    },
 };
 
 static bool tty_buf_empty(void) { return tty_buf_head == tty_buf_tail; }
@@ -111,17 +110,17 @@ static void tty_input_char(uint8_t c) {
 }
 
 void tty_process_input(void) {
-    uint64_t _f = irq_save();
+    uint64_t flags = irq_save();
     if (serial_data_ready(COM1)) {
         uint8_t c = serial_getchar(COM1);
         tty_input_char(c);
     }
 
     if (kbd_data_ready()) {
-        int c = kbd_getchar(); /* always drain PS/2 buffer; evdev hook fires inside */
+        int c = kbd_getchar(); /* always drain ps/2 buffer; evdev hook fires inside */
         if (c > 0 && !g_evdev_kbd_open) tty_input_char((uint8_t) c);
     }
-    irq_restore(_f);
+    irq_restore(flags);
 }
 
 int64_t tty_read(char *buf, uint64_t len) {

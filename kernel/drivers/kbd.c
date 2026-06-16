@@ -289,7 +289,5 @@ int kbd_getchar(void) {
 bool kbd_data_ready(void) {
     if (g_ext_seq_idx >= 0) return true;
     uint8_t st = inb(KBD_STAT);
-    /* a pending aux (mouse) byte is not keyboard input: leave it for IRQ12 so
-       the tty input loop never spins on a byte kbd_getchar refuses to drain */
     return (st & KBS_OBF) && !(st & KBS_AUXB);
 }

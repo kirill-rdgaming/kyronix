@@ -2,7 +2,9 @@
 #include "mm/vmm.h"
 #include <stdbool.h>
 #include <stdint.h>
+#ifndef USER_LIMIT
 #define USER_LIMIT 0x800000000000ULL
+#endif
 
 extern vmm_space_t *g_current_space;
 
@@ -10,14 +12,14 @@ static inline bool uptr_ok(const void *p, uint64_t len) {
     uint64_t base = (uint64_t) (uintptr_t) p;
     if (base >= USER_LIMIT) return false;
     if (len && base > USER_LIMIT - len) return false;
-    return vmm_user_range_ok(g_current_space, base, len, false);
+    return vmm_user_range_fault_in(g_current_space, base, len, false);
 }
 
 static inline bool uptr_ok_w(const void *p, uint64_t len) {
     uint64_t base = (uint64_t) (uintptr_t) p;
     if (base >= USER_LIMIT) return false;
     if (len && base > USER_LIMIT - len) return false;
-    return vmm_user_range_ok(g_current_space, base, len, true);
+    return vmm_user_range_fault_in(g_current_space, base, len, true);
 }
 
 typedef struct {

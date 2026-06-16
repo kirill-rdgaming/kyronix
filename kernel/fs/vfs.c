@@ -3,6 +3,7 @@
 #include "devfs.h"
 #include "drivers/tty.h"
 #include "eventfd.h"
+#include "inet_socket.h"
 #include "lib/log.h"
 #include "lib/printf.h"
 #include "lib/string.h"
@@ -87,7 +88,7 @@ static vfs_node_t *dir_find(vfs_node_t *dir, const char *name) {
 
 vfs_node_t *vfs_dir_find_internal(vfs_node_t *dir, const char *name) { return dir_find(dir, name); }
 
-/* Atomically bump refcnt on the node about to be returned from lookup. */
+/* atomically bump refcnt on the node about to be returned from lookup. */
 static vfs_node_t *lookup_ref(vfs_node_t *n) {
     if (!n) return NULL;
     uint64_t f = irq_save();
@@ -179,15 +180,17 @@ static bool may_create_in(vfs_node_t *dir) {
     return dir && dir->type == VFS_TYPE_DIR && may_access(dir, 3u);
 }
 
-int may_delete_in(vfs_node_t *dir, vfs_node_t *node) {
-    if (!dir || !node) return -EPERM;
-    if (cred_is_root()) return 0;
-    if (!(dir->mode & S_ISVTX)) return may_create_in(dir) ? 0 : -EACCES;
-    if (node->uid == cred_fsuid()) return 0;
-    return -EPERM;
-}
-
 bool vfs_may_create_in_internal(vfs_node_t *dir) { return may_create_in(dir); }
+
+/* stickybit deletion check: in a sticky dir , a non-root caller may
+   only remove/rename an entry it owns, or whose containing dir it owns. */
+static bool may_delete_in(vfs_node_t *dir, vfs_node_t *victim) {
+    if (!may_create_in(dir)) return false;
+    if (!(dir->mode & S_ISVTX)) return true;
+    if (cred_fsroot()) return true;
+    uint32_t u = cred_fsuid();
+    return (victim && victim->uid == u) || dir->uid == u;
+}
 
 static uint32_t mode_without_priv_bits(uint32_t mode) {
     return cred_is_root() ? (mode & 07777U) : (mode & 01777U);
@@ -222,24 +225,6 @@ static void vfs_abs_path(char *out, size_t sz, const char *in) {
     if (out[cl - 1] != '/') out[cl++] = '/';
     strncpy(out + cl, in, sz - cl - 1);
     out[sz - 1] = '\0';
-}
-
-static int vfs_copy_user_path(const char *upath, char *abspath, size_t sz) {
-    if (!upath) return -EFAULT;
-    if (!uptr_ok(upath, 1)) return -EFAULT;
-    size_t plen = 0;
-    while (plen < sz && upath[plen]) plen++;
-    if (plen >= sz) return -ENAMETOOLONG;
-    char tmp[512];
-    memcpy(tmp, upath, plen);
-    tmp[plen] = '\0';
-    if (tmp[0] != '/') {
-        vfs_abs_path(abspath, sz, tmp);
-    } else {
-        strncpy(abspath, tmp, sz - 1);
-        abspath[sz - 1] = '\0';
-    }
-    return 0;
 }
 
 static int vfs_node_path(vfs_node_t *n, char *buf, size_t sz) {
@@ -555,10 +540,9 @@ int vfs_unlink(const char *path) {
         node_unref(n);
         return -(int) EINVAL;
     }
-    int md = may_delete_in(n->parent, n);
-    if (md < 0) {
+    if (!may_delete_in(n->parent, n)) {
         node_unref(n);
-        return md;
+        return -(int) EACCES;
     }
     dir_remove(n->parent, n);
     node_unlink_or_destroy(n);
@@ -581,10 +565,9 @@ int vfs_rmdir(const char *path) {
         node_unref(n);
         return -(int) EINVAL;
     }
-    int md = may_delete_in(n->parent, n);
-    if (md < 0) {
+    if (!may_delete_in(n->parent, n)) {
         node_unref(n);
-        return md;
+        return -(int) EACCES;
     }
     dir_remove(n->parent, n);
     node_unlink_or_destroy(n);
@@ -610,13 +593,7 @@ int vfs_rename(const char *oldpath, const char *newpath) {
         node_unref(new_parent);
         return -(int) EINVAL;
     }
-    int md = may_delete_in(n->parent, n);
-    if (md < 0) {
-        node_unref(n);
-        node_unref(new_parent);
-        return md;
-    }
-    if (!may_create_in(new_parent)) {
+    if (!may_delete_in(n->parent, n) || !may_create_in(new_parent)) {
         node_unref(n);
         node_unref(new_parent);
         return -(int) EACCES;
@@ -626,6 +603,13 @@ int vfs_rename(const char *oldpath, const char *newpath) {
     vfs_node_t *existing = dir_find(new_parent, new_leaf);
     if (existing) existing->refcnt++;
     irq_restore(_f);
+
+    if (existing && !may_delete_in(new_parent, existing)) {
+        node_unref(existing);
+        node_unref(n);
+        node_unref(new_parent);
+        return -(int) EACCES;
+    }
 
     if (existing) {
         if (existing->type == VFS_TYPE_DIR) {
@@ -713,6 +697,7 @@ int fd_open_node(vfs_node_t *n, int flags) {
     int fd = fd_alloc_from(0);
     if (fd < 0) return -(int) EMFILE;
     vfs_file_t *f = file_alloc();
+    // ok fixed
     if (!f) return -(int) ENOMEM;
     f->node = n;
     f->flags = flags;
@@ -766,6 +751,7 @@ bool fd_pollin(int fd) {
     if (!f) return false;
     if (f->efd) return f->efd->counter > 0;
     if (f->tfd) return f->tfd->next_tick && g_ticks >= f->tfd->next_tick;
+    if (f->inet) return inet_poll_in(f->inet);
     if (f->wpipe) /* socket - readable when read-pipe has data */
         return f->pipe->count > 0 || f->pipe->write_refs == 0;
     if (f->pipe)
@@ -782,6 +768,7 @@ bool fd_pollin(int fd) {
 bool fd_pollout(int fd) {
     vfs_file_t *f = fd_get(fd);
     if (!f) return false;
+    if (f->inet) return inet_poll_out(f->inet);
     if (f->wpipe) /* socket - writable when write-pipe has space */
         return f->wpipe->count < PIPE_BUFSZ && f->wpipe->read_refs > 0;
     if (f->node && f->node->type == VFS_TYPE_SOCK) return false;
@@ -822,6 +809,12 @@ static void file_close(vfs_file_t *f) {
         kfree(f);
         return;
     }
+    if (f->inet) {
+        inet_conn_close(f->inet);
+        f->magic = 0;
+        kfree(f);
+        return;
+    }
     if (!f->pipe && !f->wpipe && f->node && f->node->type == VFS_TYPE_SOCK) {
         unix_socket_close(f);
         node_unref(f->node);
@@ -844,8 +837,8 @@ static void file_close(vfs_file_t *f) {
     }
     if (f->node) {
         vfs_node_t *n = f->node;
-        bool last_ref = (n->refcnt == 1);
-        if (n->type == VFS_TYPE_CHR && n->chr_close && last_ref) n->chr_close(n);
+        void (*cc)(vfs_node_t *) = (n->type == VFS_TYPE_CHR) ? n->chr_close : NULL;
+        if (cc && n->refcnt <= 1) cc(n);
         node_unref(n);
     }
     f->magic = 0;
@@ -968,8 +961,31 @@ static void fill_stat(vfs_node_t *n, struct linux_stat *st) {
     st->st_blocks = (int64_t) ((n->size + 511) / 512);
 }
 
+const char *vfs_copy_user_path(const char *path, char *kbuf) {
+    if (!path) return NULL;
+    if ((uint64_t) (uintptr_t) path >= USER_LIMIT) {
+        /* kernel-originated path (e.g. at_resolve output): trust and copy */
+        size_t i = 0;
+        for (; i < 511 && path[i]; i++) kbuf[i] = path[i];
+        kbuf[i] = '\0';
+        return kbuf;
+    }
+    for (size_t i = 0; i < 511; i++) {
+        const char *a = path + i;
+        if (i == 0 || ((uint64_t) (uintptr_t) a & 0xFFF) == 0) {
+            if (!uptr_ok(a, 1)) return NULL;
+        }
+        char c = *a;
+        kbuf[i] = c;
+        if (!c) return kbuf;
+    }
+    kbuf[511] = '\0';
+    return kbuf;
+}
+
 int fd_open(const char *path, int flags, int mode) {
-    if (!path) return -(int) ENOENT;
+    char _pbuf[512];
+    if (!(path = vfs_copy_user_path(path, _pbuf))) return -(int) EFAULT;
 
     /* /proc/self/fd/N and /dev/fd/N - dup the existing fd */
     const char *fd_prefix = NULL;
@@ -1044,7 +1060,7 @@ int fd_open(const char *path, int flags, int mode) {
     f->flags = flags;
     f->pos = 0;
     f->cloexec = (flags & O_CLOEXEC) ? 1 : 0;
-    /* n is already reffed: from_lookup → lookup_ref bumped it; !from_lookup → node_ref above */
+    /* n is already reffed: from_lookup -> lookup_ref bumped it; !from_lookup -> node_ref above */
     (void) from_lookup;
     if ((flags & O_TRUNC) && n->type == VFS_TYPE_REG) n->size = 0;
     if (flags & O_APPEND) f->pos = n->size;
@@ -1077,6 +1093,7 @@ int64_t fd_read(int fd, void *buf, uint64_t len) {
         return -(int64_t) EFAULT;
     if (f->efd) return eventfd_read(f, (char *) buf, len);
     if (f->tfd) return timerfd_read(f, (char *) buf, len);
+    if (f->inet) return inet_fd_read(f->inet, buf, len, f->flags);
 
     if (!f->pipe && !f->wpipe && (f->flags & O_ACCMODE) == O_WRONLY) return -(int64_t) EBADF;
 
@@ -1138,6 +1155,8 @@ int64_t fd_peek(int fd, void *buf, uint64_t len, uint64_t skip) {
 }
 
 static int64_t fd_write_dispatch(vfs_file_t *f, const void *buf, uint64_t len) {
+    if (f->inet) return inet_fd_write(f->inet, buf, len);
+
     if (!f->pipe && !f->wpipe && (f->flags & O_ACCMODE) == O_RDONLY) return -(int64_t) EBADF;
 
     if (f->wpipe) /* socket */
@@ -1191,7 +1210,7 @@ int64_t fd_write(int fd, const void *buf, uint64_t len) {
     return fd_write_dispatch(f, buf, len);
 }
 
-/* skips user-pointer check */
+/* skips user-pointwr check */
 int64_t fd_write_kbuf(int fd, const void *buf, uint64_t len) {
     vfs_file_t *f = fd_get(fd);
     if (!f) return -(int64_t) EBADF;
@@ -1246,8 +1265,10 @@ int fd_fstat(int fd, struct linux_stat *st) {
 }
 
 int fd_fstatat(int dirfd, const char *path, struct linux_stat *st, int flags) {
+    char _pbuf[512];
     if (!path || !st) return -(int) EINVAL;
     if (!uptr_ok_w(st, sizeof(*st))) return -(int) EFAULT;
+    if (!(path = vfs_copy_user_path(path, _pbuf))) return -(int) EFAULT;
     if (path[0] == '\0' && (flags & AT_EMPTY_PATH)) return fd_fstat(dirfd, st);
     if (path[0] == '/' || dirfd == AT_FDCWD) {
         vfs_node_t *n =
@@ -1267,8 +1288,10 @@ int fd_fstatat(int dirfd, const char *path, struct linux_stat *st, int flags) {
 }
 
 int fd_stat(const char *path, struct linux_stat *st) {
+    char _pbuf[512];
     if (!path || !st) return -(int) EINVAL;
     if (!uptr_ok_w(st, sizeof(*st))) return -(int) EFAULT;
+    if (!(path = vfs_copy_user_path(path, _pbuf))) return -(int) EFAULT;
     vfs_node_t *n = vfs_lookup(path);
     if (!n) return -(int) ENOENT;
     fill_stat(n, st);
@@ -1277,8 +1300,10 @@ int fd_stat(const char *path, struct linux_stat *st) {
 }
 
 int fd_lstat(const char *path, struct linux_stat *st) {
+    char _pbuf[512];
     if (!path || !st) return -(int) EINVAL;
     if (!uptr_ok_w(st, sizeof(*st))) return -(int) EFAULT;
+    if (!(path = vfs_copy_user_path(path, _pbuf))) return -(int) EFAULT;
     vfs_node_t *n = vfs_lookup_nofollow(path);
     if (!n) return -(int) ENOENT;
     fill_stat(n, st);
@@ -1361,8 +1386,10 @@ int fd_getdents64(int fd, void *buf, uint64_t count) {
 }
 
 int fd_readlink(const char *path, char *buf, uint64_t bufsz) {
+    char _pbuf[512];
     if (!path || !buf || !bufsz) return -(int) EINVAL;
     if (!uptr_ok_w(buf, bufsz)) return -(int) EFAULT;
+    if (!(path = vfs_copy_user_path(path, _pbuf))) return -(int) EFAULT;
     int proc_ret = 0;
     if (procfs_readlink(path, buf, bufsz, &proc_ret)) return proc_ret;
     vfs_node_t *n = vfs_lookup_nofollow(path);
@@ -1612,7 +1639,9 @@ int vfs_mknod(const char *path, uint32_t mode, uint64_t dev) {
 }
 
 int at_resolve(int dirfd, const char *path, char *out, size_t sz) {
-    if (!path) return -(int) EFAULT;
+    char _pbuf[512];
+    if (sz) out[0] = '\0';
+    if (!(path = vfs_copy_user_path(path, _pbuf))) return -(int) EFAULT;
     if (path[0] == '/' || dirfd == AT_FDCWD) {
         vfs_abs_path(out, sz, path);
         return 0;

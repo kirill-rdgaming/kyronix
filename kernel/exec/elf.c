@@ -4,7 +4,6 @@
 #include "mm/pmm.h"
 #include "mm/vma.h"
 #include "mm/vmm.h"
-#include "syscall/syscall.h"
 
 #define PIE_BASE 0x400000ULL
 #define INTERP_BASE 0x7f0000000000ULL
@@ -19,7 +18,6 @@ static int elf_valid(const Elf64_Ehdr *eh, uint64_t size) {
     if (eh->e_type != ET_EXEC && eh->e_type != ET_DYN) return 0;
     if (eh->e_machine != EM_X86_64) return 0;
     if (eh->e_phentsize < sizeof(Elf64_Phdr) || eh->e_phnum == 0) return 0;
-    if (eh->e_phoff + (uint64_t) eh->e_phnum * sizeof(Elf64_Phdr) > size) return 0;
     return 1;
 }
 
@@ -32,14 +30,17 @@ int elf_load_into(vmm_space_t *space, const void *data, uint64_t size, uint64_t 
     out->interp[0] = '\0';
     uint64_t brk = 0, phdr_va = 0;
 
+    /* the phdr array itself is attacker controlled: bound it against the file. */
+    uint64_t ph_total = (uint64_t) eh->e_phnum * eh->e_phentsize;
+    if (eh->e_phoff > size || ph_total > size - eh->e_phoff) return -1;
+
     for (uint16_t i = 0; i < eh->e_phnum; i++) {
         const Elf64_Phdr *ph = (const Elf64_Phdr *) ((const uint8_t *) data + eh->e_phoff +
                                                      (uint64_t) i * eh->e_phentsize);
 
-        if ((uintptr_t) (ph + 1) > (uintptr_t) ((const uint8_t *) data + size)) return -1;
-
-        if (ph->p_type == PT_INTERP && ph->p_filesz > 0 && ph->p_filesz < 255 &&
-            ph->p_offset + ph->p_filesz <= size) {
+        if (ph->p_type == PT_INTERP && ph->p_filesz > 0 && ph->p_filesz < 255) {
+            /* p_offset is from the file: validate the source range first. */
+            if (ph->p_offset > size || ph->p_filesz > size - ph->p_offset) return -1;
             memcpy(out->interp, (const uint8_t *) data + ph->p_offset, ph->p_filesz);
             out->interp[ph->p_filesz] = '\0';
             size_t n = strlen(out->interp);
@@ -47,20 +48,24 @@ int elf_load_into(vmm_space_t *space, const void *data, uint64_t size, uint64_t 
         }
 
         if (ph->p_type == PT_LOAD && !phdr_va) {
-            if (eh->e_phoff >= ph->p_offset && eh->e_phoff < ph->p_offset + ph->p_filesz &&
-                ph->p_offset + ph->p_filesz <= size)
+            if (eh->e_phoff >= ph->p_offset && eh->e_phoff < ph->p_offset + ph->p_filesz)
                 phdr_va = bias + ph->p_vaddr + (eh->e_phoff - ph->p_offset);
         }
 
         if (ph->p_type != PT_LOAD || !ph->p_memsz) continue;
-        if (ph->p_offset + ph->p_filesz > size) return -1;
+        // overflow-safe source bounds, and file part must fit the mem part
+        if (ph->p_offset > size || ph->p_filesz > size - ph->p_offset) return -1;
+        if (ph->p_filesz > ph->p_memsz) return -1;
 
         uint64_t vflags = VMM_PRESENT | VMM_USER;
         if (ph->p_flags & PF_W) vflags |= VMM_WRITE | VMM_NX;
         if (!(ph->p_flags & PF_X)) vflags |= VMM_NX;
 
         uint64_t vaddr = bias + ph->p_vaddr;
-        if (vaddr + ph->p_memsz > USER_LIMIT) return -1;
+        // reject wrap and any segment that would touch the kernel half
+        if (vaddr < bias) return -1;                     /* bias + p_vaddr overflow */
+        if (vaddr + ph->p_memsz < vaddr) return -1;      /* vaddr + memsz overflow */
+        if (vaddr + ph->p_memsz > USER_LIMIT) return -1; /* maps into kernel half */
         uint64_t page_base = PAGE_ALIGN_DOWN(vaddr);
         uint64_t page_end = PAGE_ALIGN_UP(vaddr + ph->p_memsz);
 

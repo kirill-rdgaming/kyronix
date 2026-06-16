@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y musl-tools qemu-system-x86 xorriso
       - name: Build test ISO

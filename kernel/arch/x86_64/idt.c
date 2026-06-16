@@ -8,6 +8,7 @@
 #include "mm/pmm.h"
 #include "mm/vma.h"
 #include "mm/vmm.h"
+#include "net/net.h"
 #include "pic.h"
 #include "pit.h"
 #include "proc/proc.h"
@@ -54,7 +55,9 @@ void idt_init(void) {
 
     for (uint8_t i = 0; i < 32; i++) idt_set_gate(i, isr_stub_table[i], IDT_INT_GATE);
 
-    idt_set_gate(3, isr_stub_table[3], IDT_TRAP_GATE); /* #BP: trap so debugger can resume */
+    idt_set_gate(3, isr_stub_table[3], IDT_TRAP_GATE); /* #BP -  trap so debugger can resume */
+    g_idt[8].ist = 1;                                  /* #DF -> g_tss.ist[0] */
+    g_idt[2].ist = 2;                                  /* NMI -> g_tss.ist[1] */
 
     for (uint8_t i = 0; i < 16; i++) idt_set_gate(32 + i, isr_stub_table[32 + i], IDT_INT_GATE);
 
@@ -158,6 +161,34 @@ static int exception_signal(uint64_t n) {
     return (n < 32) ? exc_sig[n] : SIGSEGV;
 }
 
+/* print return addrs on the faulting kstack*/
+#define KTEXT_LO 0xffffffff80000000ULL
+#define KTEXT_HI 0xffffffff80040000ULL
+
+static void kernel_backtrace(uint64_t sp) {
+    static volatile int in_bt = 0;
+    if (in_bt) return; /* dont recurse if the scan itself faults */
+    in_bt = 1;
+
+    /* scan only this procs mapped kstack so we never touch the guard page */
+    if (g_current_proc && g_current_proc->kstack_guard) {
+        uint64_t lo = g_current_proc->kstack_guard + 0x1000;
+        uint64_t top = g_current_proc->kstack_top;
+        uint64_t from = (sp + 7) & ~7ULL;
+        if (from > lo && from < top) lo = from;
+        kprintf("  kstack return-addr scan [0x%016lx..0x%016lx):\n", lo, top);
+        int n = 0;
+        for (uint64_t a = lo; a < top && n < 48; a += 8) {
+            uint64_t v = *(volatile uint64_t *) a;
+            if (v >= KTEXT_LO && v < KTEXT_HI) {
+                kprintf("    0x%016lx\n", v);
+                n++;
+            }
+        }
+    }
+    in_bt = 0;
+}
+
 void isr_dispatch(cpu_state_t *state) {
     uint64_t n = state->int_no;
 
@@ -180,6 +211,7 @@ void isr_dispatch(cpu_state_t *state) {
 
         kprintf("\n\n!!! KERNEL EXCEPTION !!! pid=%u\n", g_current_proc ? g_current_proc->pid : 0);
         kprintf("  %s  (vector %lu)\n", exc_name[n], n);
+        if (n == 8) kprintf("  (double fault - usually a kernel stack overflow)\n");
         kprintf("  error = 0x%016lx\n", state->error_code);
         kprintf("  RIP   = 0x%016lx   CS     = 0x%04lx\n", state->rip, state->cs);
         kprintf("  RFLAGS= 0x%016lx\n", state->rflags);
@@ -204,6 +236,8 @@ void isr_dispatch(cpu_state_t *state) {
 
         if ((state->cs & 3) == 3)
             kprintf("  RSP   = 0x%016lx   SS     = 0x%04lx  (ring-3)\n", state->rsp, state->ss);
+        else
+            kernel_backtrace(state->rsp);
 
         cpu_halt();
     } else if (n < 48) {
@@ -211,6 +245,8 @@ void isr_dispatch(cpu_state_t *state) {
         if (irq == 0) {
             g_ticks++;
             fb_cursor_blink_tick(g_ticks);
+            proc_reap_pending(); /* free a dead threads kstack off its own stack */
+            net_poll();
             pic_send_eoi(0);
             for (int i = 0; i < PROC_MAX; i++) {
                 proc_t *pc = &g_proctable[i];
