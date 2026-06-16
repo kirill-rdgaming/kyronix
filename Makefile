@@ -31,6 +31,7 @@ CFLAGS := \
     -mno-sse2          \
     -mno-red-zone      \
     -mcmodel=kernel    \
+    -U_FORTIFY_SOURCE  \
     -Ikernel           \
     -Ikernel/boot      \
     -Ikernel/net       \
