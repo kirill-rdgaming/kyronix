@@ -11,10 +11,8 @@ _Static_assert(sizeof(siginfo_t) == 128, "siginfo_t must be 128 bytes");
 _Static_assert(sizeof(ucontext_t) == 304, "ucontext_t must be 304 bytes");
 _Static_assert(sizeof(rt_sigframe_t) == 440, "rt_sigframe_t must be 440 bytes");
 
-static int sig_default_fatal(int sig)
-{
-    switch (sig)
-    {
+static int sig_default_fatal(int sig) {
+    switch (sig) {
     case SIGCHLD:
     case SIGCONT:
     case SIGWINCH:
@@ -24,37 +22,31 @@ static int sig_default_fatal(int sig)
     }
 }
 
-void proc_send_signal(struct proc* p, int sig)
-{
-    if (sig < 1 || sig >= NSIG)
-        return;
-    proc_t* pp = (proc_t*) p;
-    if (!pp || pp->state == PROC_UNUSED)
-        return;
+void proc_send_signal(struct proc *p, int sig) {
+    if (sig < 1 || sig >= NSIG) return;
+    proc_t *pp = (proc_t *) p;
+    if (!pp || pp->state == PROC_UNUSED) return;
 
     pp->pending_sigs |= (1ULL << (sig - 1));
 
-    if (pp->state == PROC_WAITING)
-        pp->state = PROC_READY;
+    if (pp->state == PROC_WAITING) pp->state = PROC_READY;
 }
 
-static void setup_sigframe(proc_t* p, int sig, syscall_frame_t* f)
-{
+static void setup_sigframe(proc_t *p, int sig, syscall_frame_t *f) {
     uint64_t user_rsp = cpu_get_user_rsp();
 
     uint64_t sp = user_rsp - 128 - sizeof(rt_sigframe_t);
     sp = ((sp - 8) & ~(uint64_t) 0xF) + 8;
 
-    if (!uptr_ok_w((void*) sp, sizeof(rt_sigframe_t)))
-        proc_do_exit(-SIGSEGV);
+    if (!uptr_ok_w((void *) sp, sizeof(rt_sigframe_t))) proc_do_exit(-SIGSEGV);
 
-    rt_sigframe_t* frame = (rt_sigframe_t*) sp;
+    rt_sigframe_t *frame = (rt_sigframe_t *) sp;
     memset(frame, 0, sizeof(*frame));
 
     frame->pretcode = p->sig_actions[sig - 1].sa_restorer;
     frame->info.si_signo = sig;
 
-    mcontext_t* mc = &frame->uc.uc_mcontext;
+    mcontext_t *mc = &frame->uc.uc_mcontext;
     mc->r8 = f->r8;
     mc->r9 = f->r9;
     mc->r10 = f->r10;
@@ -93,22 +85,17 @@ static void setup_sigframe(proc_t* p, int sig, syscall_frame_t* f)
         p->sig_actions[sig - 1].sa_handler = SIG_DFL;
 }
 
-static void deliver_signal(proc_t* p, int sig, syscall_frame_t* f)
-{
+static void deliver_signal(proc_t *p, int sig, syscall_frame_t *f) {
     uint64_t handler = p->sig_actions[sig - 1].sa_handler;
 
-    if (handler == SIG_IGN)
-        return;
+    if (handler == SIG_IGN) return;
 
-    if (handler == SIG_DFL)
-    {
-        if (!sig_default_fatal(sig))
-            return;
+    if (handler == SIG_DFL) {
+        if (!sig_default_fatal(sig)) return;
         proc_do_exit(-sig);
     }
 
-    if (!p->sig_actions[sig - 1].sa_restorer)
-    {
+    if (!p->sig_actions[sig - 1].sa_restorer) {
         log_warn("signal: sig %d has no restorer", sig);
         proc_do_exit(-sig);
     }
@@ -116,17 +103,14 @@ static void deliver_signal(proc_t* p, int sig, syscall_frame_t* f)
     setup_sigframe(p, sig, f);
 }
 
-void signal_check(syscall_frame_t* f)
-{
-    proc_t* p = g_current_proc;
-    if (!p)
-        return;
+void signal_check(syscall_frame_t *f) {
+    proc_t *p = g_current_proc;
+    if (!p) return;
 
     tty_check_signals();
 
     uint64_t pending = p->pending_sigs & ~p->sig_mask;
-    if (!pending)
-        return;
+    if (!pending) return;
 
     int idx = __builtin_ctzll(pending);
     int sig = idx + 1;

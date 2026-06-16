@@ -1,8 +1,7 @@
 #include "gdt.h"
 #include <stddef.h>
 
-typedef struct
-{
+typedef struct {
     uint32_t reserved0;
     uint64_t rsp0;
     uint64_t rsp1;
@@ -14,8 +13,7 @@ typedef struct
     uint16_t iopb_offset; /* beyond tss limit -> no IOPB -> deny all user i/o */
 } __attribute__((packed)) tss_t;
 
-typedef struct
-{
+typedef struct {
     uint16_t limit_lo;
     uint16_t base_lo;
     uint8_t base_mid;
@@ -26,8 +24,7 @@ typedef struct
     uint32_t zero;
 } __attribute__((packed)) tss_desc_t;
 
-typedef struct
-{
+typedef struct {
     uint64_t null;
     uint64_t kernel_code;
     uint64_t kernel_data;
@@ -41,11 +38,10 @@ static tss_t g_tss __attribute__((aligned(16)));
 
 // fauld stacks
 #define IST_STACK_SIZE 16384u
-static uint8_t g_ist_df[IST_STACK_SIZE]  __attribute__((aligned(16)));
+static uint8_t g_ist_df[IST_STACK_SIZE] __attribute__((aligned(16)));
 static uint8_t g_ist_nmi[IST_STACK_SIZE] __attribute__((aligned(16)));
 
-void gdt_init(void)
-{
+void gdt_init(void) {
     g_gdt.null = 0ULL;
     g_gdt.kernel_code = 0x00AF9A000000FFFFULL;
     g_gdt.kernel_data = 0x00CF92000000FFFFULL;
@@ -55,7 +51,7 @@ void gdt_init(void)
     g_tss.iopb_offset = (uint16_t) sizeof(tss_t);
 
     /* IST1 -> #DF, IST2 -> NMI (stacks grow down, point at the top) */
-    g_tss.ist[0] = (uint64_t) (g_ist_df  + IST_STACK_SIZE);
+    g_tss.ist[0] = (uint64_t) (g_ist_df + IST_STACK_SIZE);
     g_tss.ist[1] = (uint64_t) (g_ist_nmi + IST_STACK_SIZE);
 
     uint64_t base = (uint64_t) &g_tss;
@@ -72,8 +68,7 @@ void gdt_init(void)
         .zero = 0,
     };
 
-    struct
-    {
+    struct {
         uint16_t limit;
         uint64_t base;
     } __attribute__((packed)) gdtr = {
@@ -101,7 +96,4 @@ void gdt_init(void)
                      : "rax", "memory");
 }
 
-void gdt_set_kernel_stack(uint64_t rsp0)
-{
-    g_tss.rsp0 = rsp0;
-}
+void gdt_set_kernel_stack(uint64_t rsp0) { g_tss.rsp0 = rsp0; }

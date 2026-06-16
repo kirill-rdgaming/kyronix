@@ -8,8 +8,7 @@ struct net_conn; /* forward declaration for inet sockets */
 
 extern char g_cwd[512];
 
-struct linux_stat
-{
+struct linux_stat {
     uint64_t st_dev;
     uint64_t st_ino;
     uint64_t st_nlink;
@@ -30,8 +29,7 @@ struct linux_stat
     int64_t _unused[3];
 };
 
-struct linux_dirent64
-{
+struct linux_dirent64 {
     uint64_t d_ino;
     int64_t d_off;
     uint16_t d_reclen;
@@ -72,17 +70,16 @@ struct linux_dirent64
 #define SEEK_CUR 1
 #define SEEK_END 2
 
-#define VFS_TYPE_REG  1
-#define VFS_TYPE_DIR  2
-#define VFS_TYPE_SYM  3
-#define VFS_TYPE_CHR  4
+#define VFS_TYPE_REG 1
+#define VFS_TYPE_DIR 2
+#define VFS_TYPE_SYM 3
+#define VFS_TYPE_CHR 4
 #define VFS_TYPE_SOCK 5
 
 #define S_IFSOCK 0140000U
-#define S_ISVTX  0001000U /* sticky bit: restrict deletion in a shared dir */
+#define S_ISVTX 0001000U /* sticky bit: restrict deletion in a shared dir */
 
-typedef struct vfs_node
-{
+typedef struct vfs_node {
     char name[256];
     uint8_t type;
     uint32_t mode;
@@ -91,51 +88,51 @@ typedef struct vfs_node
     uint32_t refcnt;
     uint8_t deleted;
     uint64_t size;
-    uint8_t* data;
+    uint8_t *data;
     uint64_t capacity;
-    struct vfs_node* children;
-    struct vfs_node* next;  
-    struct vfs_node* parent;
-    char* symlink;
-    int64_t (*chr_read)(struct vfs_node*, char*, uint64_t, uint64_t);
-    int64_t (*chr_write)(struct vfs_node*, const char*, uint64_t);
-    int64_t (*chr_ioctl)(struct vfs_node*, uint64_t req, uint64_t arg);
-    bool    (*chr_pollin)(struct vfs_node*);
-    int     (*chr_open)(struct vfs_node*, int flags);
-    void    (*chr_close)(struct vfs_node*);
-    int64_t (*chr_mmap)(struct vfs_node*, uint64_t off, uint64_t len, uint64_t va, uint64_t vflags);
+    struct vfs_node *children;
+    struct vfs_node *next;
+    struct vfs_node *parent;
+    char *symlink;
+    int64_t (*chr_read)(struct vfs_node *, char *, uint64_t, uint64_t);
+    int64_t (*chr_write)(struct vfs_node *, const char *, uint64_t);
+    int64_t (*chr_ioctl)(struct vfs_node *, uint64_t req, uint64_t arg);
+    bool (*chr_pollin)(struct vfs_node *);
+    int (*chr_open)(struct vfs_node *, int flags);
+    void (*chr_close)(struct vfs_node *);
+    int64_t (*chr_mmap)(struct vfs_node *, uint64_t off, uint64_t len, uint64_t va,
+                        uint64_t vflags);
 
     volatile int sock_backlog;
 } vfs_node_t;
 
 typedef struct {
     volatile uint64_t counter;
-    uint32_t          semaphore;  
-    void*             waiter;     
+    uint32_t semaphore;
+    void *waiter;
 } eventfd_state_t;
 
 typedef struct {
-    int      clockid;
-    uint64_t interval_ms;   
-    uint64_t next_tick;     
-    uint64_t overruns;      
+    int clockid;
+    uint64_t interval_ms;
+    uint64_t next_tick;
+    uint64_t overruns;
 } timerfd_state_t;
 
-typedef struct
-{
+typedef struct {
     uint64_t magic;
-    vfs_node_t* node;  
+    vfs_node_t *node;
     uint64_t pos;
     int flags;
-    pipe_t* pipe;
-    int pipe_end;  
-    pipe_t* wpipe;  
+    pipe_t *pipe;
+    int pipe_end;
+    pipe_t *wpipe;
     uint32_t peer_pid, peer_uid, peer_gid;
     int passcred;
     uint8_t cloexec;
-    eventfd_state_t* efd;
-    timerfd_state_t* tfd;
-    struct net_conn* inet;  /* non-null for AF_INET sockets */
+    eventfd_state_t *efd;
+    timerfd_state_t *tfd;
+    struct net_conn *inet; /* non-null for AF_INET sockets */
 
 } vfs_file_t;
 
@@ -144,76 +141,83 @@ typedef struct
 void vfs_init(void);
 
 void vfs_cloexec_flush(void);
-void vfs_set_fdtable(vfs_file_t** fds);
-vfs_file_t** vfs_get_fdtable(void);
-void vfs_copy_fdtable(vfs_file_t** dst, vfs_file_t** src);
-void vfs_free_fdtable(vfs_file_t** fds);
+void vfs_set_fdtable(vfs_file_t **fds);
+vfs_file_t **vfs_get_fdtable(void);
+void vfs_copy_fdtable(vfs_file_t **dst, vfs_file_t **src);
+void vfs_free_fdtable(vfs_file_t **fds);
 
-const char* vfs_copy_user_path(const char* path, char* kbuf);
-int fd_open(const char* path, int flags, int mode);
-int fd_openat(int dirfd, const char* path, int flags, int mode);
+const char *vfs_copy_user_path(const char *path, char *kbuf);
+int fd_open(const char *path, int flags, int mode);
+int fd_openat(int dirfd, const char *path, int flags, int mode);
 int fd_close(int fd);
-int64_t fd_read(int fd, void* buf, uint64_t len);
-int64_t fd_write(int fd, const void* buf, uint64_t len);
-int64_t fd_write_kbuf(int fd, const void* buf, uint64_t len);
+int64_t fd_read(int fd, void *buf, uint64_t len);
+int64_t fd_write(int fd, const void *buf, uint64_t len);
+int64_t fd_write_kbuf(int fd, const void *buf, uint64_t len);
 int64_t fd_lseek(int fd, int64_t off, int whence);
-int fd_stat(const char* path, struct linux_stat* st);
-int fd_lstat(const char* path, struct linux_stat* st);
-int fd_fstatat(int dirfd, const char* path, struct linux_stat* st, int flags);
-int fd_fstat(int fd, struct linux_stat* st);
-int fd_getdents64(int fd, void* buf, uint64_t count);
-int fd_readlink(const char* path, char* buf, uint64_t bufsz);
+int fd_stat(const char *path, struct linux_stat *st);
+int fd_lstat(const char *path, struct linux_stat *st);
+int fd_fstatat(int dirfd, const char *path, struct linux_stat *st, int flags);
+int fd_fstat(int fd, struct linux_stat *st);
+int fd_getdents64(int fd, void *buf, uint64_t count);
+int fd_readlink(const char *path, char *buf, uint64_t bufsz);
 int fd_ioctl(int fd, uint64_t req, uint64_t arg);
 int fd_fcntl(int fd, int cmd, uint64_t arg);
 int fd_dup(int oldfd);
 int fd_dup2(int oldfd, int newfd);
 bool fd_valid(int fd);
-vfs_node_t* fd_get_node(int fd);
-vfs_file_t* fd_get_file(int fd);
-int64_t     fd_pread(int fd, void* buf, uint64_t len, uint64_t off);
-int64_t     fd_pwrite(int fd, const void* buf, uint64_t len, uint64_t off);
-int64_t     fd_peek(int fd, void* buf, uint64_t len, uint64_t skip);
+vfs_node_t *fd_get_node(int fd);
+vfs_file_t *fd_get_file(int fd);
+int64_t fd_pread(int fd, void *buf, uint64_t len, uint64_t off);
+int64_t fd_pwrite(int fd, const void *buf, uint64_t len, uint64_t off);
+int64_t fd_peek(int fd, void *buf, uint64_t len, uint64_t skip);
 bool fd_pollin(int fd);
 bool fd_pollout(int fd);
 int fd_pipe(int pipefd[2]);
 int fd_socketpair(int sv[2]);
 int fd_eventfd(uint32_t initval, int eflags);
-int64_t eventfd_read(vfs_file_t* f, char* buf, uint64_t len);
-int64_t eventfd_write(vfs_file_t* f, const char* buf, uint64_t len);
+int64_t eventfd_read(vfs_file_t *f, char *buf, uint64_t len);
+int64_t eventfd_write(vfs_file_t *f, const char *buf, uint64_t len);
 int fd_timerfd_create(int clockid, int tflags);
-typedef struct { uint64_t sec; uint64_t nsec; } ktimespec_t;
-typedef struct { ktimespec_t interval; ktimespec_t value; } kitimerspec_t;
-int fd_timerfd_settime(int fd, int flags, const kitimerspec_t* new_val, kitimerspec_t* old_val);
-int fd_timerfd_gettime(int fd, kitimerspec_t* cur_val);
+typedef struct {
+    uint64_t sec;
+    uint64_t nsec;
+} ktimespec_t;
+typedef struct {
+    ktimespec_t interval;
+    ktimespec_t value;
+} kitimerspec_t;
+int fd_timerfd_settime(int fd, int flags, const kitimerspec_t *new_val, kitimerspec_t *old_val);
+int fd_timerfd_gettime(int fd, kitimerspec_t *cur_val);
 
 int fd_socket(int domain, int type, int proto);
-int fd_bind_unix(int fd, const char* path);
+int fd_bind_unix(int fd, const char *path);
 int fd_listen_unix(int fd, int backlog);
-int fd_accept_unix(int fd, char* path_out, int path_max, int flags);
-int fd_connect_unix(int fd, const char* path);
+int fd_accept_unix(int fd, char *path_out, int path_max, int flags);
+int fd_connect_unix(int fd, const char *path);
 
-vfs_node_t* vfs_lookup(const char* path);
-vfs_node_t* vfs_lookup_nofollow(const char* path);
-vfs_node_t* vfs_mkdir_p(const char* path, uint32_t mode);
-vfs_node_t* vfs_create_file(const char* path, uint32_t mode, const void* data, uint64_t size);
-vfs_node_t* vfs_create_symlink(const char* path, const char* target);
-vfs_node_t* vfs_create_chr(const char* path, int64_t (*rfn)(vfs_node_t*, char*, uint64_t, uint64_t),
-                           int64_t (*wfn)(vfs_node_t*, const char*, uint64_t));
+vfs_node_t *vfs_lookup(const char *path);
+vfs_node_t *vfs_lookup_nofollow(const char *path);
+vfs_node_t *vfs_mkdir_p(const char *path, uint32_t mode);
+vfs_node_t *vfs_create_file(const char *path, uint32_t mode, const void *data, uint64_t size);
+vfs_node_t *vfs_create_symlink(const char *path, const char *target);
+vfs_node_t *vfs_create_chr(const char *path,
+                           int64_t (*rfn)(vfs_node_t *, char *, uint64_t, uint64_t),
+                           int64_t (*wfn)(vfs_node_t *, const char *, uint64_t));
 
-int vfs_mkdir(const char* path, uint32_t mode);
-int vfs_unlink(const char* path);
-int vfs_rmdir(const char* path);
-int vfs_rename(const char* oldpath, const char* newpath);
-int vfs_link(const char* oldpath, const char* newpath);
-int vfs_chmod(const char* path, uint32_t mode);
+int vfs_mkdir(const char *path, uint32_t mode);
+int vfs_unlink(const char *path);
+int vfs_rmdir(const char *path);
+int vfs_rename(const char *oldpath, const char *newpath);
+int vfs_link(const char *oldpath, const char *newpath);
+int vfs_chmod(const char *path, uint32_t mode);
 int vfs_fchmod(int fd, uint32_t mode);
-int vfs_chown(const char* path, uint32_t uid, uint32_t gid);
-int vfs_lchown(const char* path, uint32_t uid, uint32_t gid);
+int vfs_chown(const char *path, uint32_t uid, uint32_t gid);
+int vfs_lchown(const char *path, uint32_t uid, uint32_t gid);
 int vfs_fchown(int fd, uint32_t uid, uint32_t gid);
-int vfs_truncate(const char* path, uint64_t len);
-int vfs_access(const char* path, int mode);
-int vfs_mknod(const char* path, uint32_t mode, uint64_t dev);
-char* vfs_node_abspath(vfs_node_t* n, char* buf, size_t sz);
-int   at_resolve(int dirfd, const char* path, char* out, size_t sz);
-int   fd_dup3(int oldfd, int newfd, int flags);
-int   fd_open_node(vfs_node_t* n, int flags);
+int vfs_truncate(const char *path, uint64_t len);
+int vfs_access(const char *path, int mode);
+int vfs_mknod(const char *path, uint32_t mode, uint64_t dev);
+char *vfs_node_abspath(vfs_node_t *n, char *buf, size_t sz);
+int at_resolve(int dirfd, const char *path, char *out, size_t sz);
+int fd_dup3(int oldfd, int newfd, int flags);
+int fd_open_node(vfs_node_t *n, int flags);

@@ -243,8 +243,8 @@ test-initrd: $(TARGET) testrunner build/libatomic_asneeded.a
 	cp build/bin/ksh        $(TEST_ROOTFS)/bin/
 	ln -sf ksh $(TEST_ROOTFS)/bin/sh
 	for app in basename cat chgrp chmod chown cksum clear cmp cp cut date dd dirname du echo env false \
-	    find grep head hostname kill link ln ls mkdir mktemp mv printenv printf pwd readlink reboot rm rmdir \
-	    sed seq sleep sort sync tail tee test touch tr true tty uname uniq unlink wc which whoami yes; do \
+	    find grep head hostname kill link ln ls mkdir mktemp mv ping printenv printf pwd readlink reboot rm rmdir \
+	    sed seq sleep sort sync tail tee test touch tr true tty uname uniq unlink wc wget which whoami yes; do \
 	    cp build/bin/$$app $(TEST_ROOTFS)/bin/; \
 	done
 	cp build/bin/fetch     $(TEST_ROOTFS)/bin/
@@ -284,6 +284,8 @@ test-run: test-iso
 	    -cdrom $(TEST_ISO)          \
 	    -display none               \
 	    -serial stdio               \
+	    -netdev user,id=n0          \
+	    -device virtio-net-pci,netdev=n0 \
 	    -no-reboot
 
 test-run-log: test-iso
@@ -293,6 +295,8 @@ test-run-log: test-iso
 	    -cdrom $(TEST_ISO)          \
 	    -device isa-debug-exit,iobase=0x501 \
 	    -display none               \
+	    -netdev user,id=n0          \
+	    -device virtio-net-pci,netdev=n0 \
 	    -serial file:test.log       \
 	    -no-reboot 2>/dev/null;     \
 	grep -E "(TEST|RESULT|ALL|SOME)" test.log 2>/dev/null; \
