@@ -15,7 +15,7 @@
 #define VMM_UCODE (VMM_PRESENT | VMM_USER)
 #define VMM_UDATA (VMM_PRESENT | VMM_WRITE | VMM_USER | VMM_NX)
 
-#define VMM_VMA_MAX 512
+#define VMM_VMA_MAX 2048
 
 /* Top of the user address half; everything >= this is the shared kernel half. */
 #ifndef USER_LIMIT
