@@ -190,6 +190,8 @@ static void unmap_owned_pages(proc_t *p, uint64_t addr, uint64_t len) {
     }
 }
 
+static void reap_sibling_threads(proc_t *caller);
+
 static void rollback_new_mapping(proc_t *p, uint64_t addr, uint64_t mapped_len, uint64_t vma_len) {
     if (mapped_len) unmap_owned_pages(p, addr, mapped_len);
     vma_remove(p->space, addr, vma_len);
@@ -710,6 +712,8 @@ static int64_t sys_execve(const char *path, const char **uargv, const char **uen
     proc_t *p = cur();
     vmm_space_t *old = p->space;
 
+    reap_sibling_threads(p);
+
     p->space = res.space;
     p->brk = PAGE_ALIGN_UP(res.brk);
     p->brk_base = p->brk;
@@ -733,6 +737,35 @@ static int64_t sys_execve(const char *path, const char **uargv, const char **uen
 
     log_info("[exec] pid=%u entry=0x%lx rsp=0x%lx", p->pid, res.entry, rsp);
     enter_userspace_exec(res.entry, rsp, 0x202ULL);
+}
+
+static void reap_sibling_threads(proc_t *caller) {
+    vmm_space_t *sp = caller->space;
+    if (!sp) return;
+    for (int i = 0; i < PROC_MAX; i++) {
+        proc_t *t = &g_proctable[i];
+        if (t == caller || t->state == PROC_UNUSED) continue;
+        if (t->space != sp) continue;
+        if (t->blocked_pipe) {
+            pipe_t *bp = (pipe_t *) t->blocked_pipe;
+            if (t->blocked_pipe_read) {
+                if (bp->waiting_reader == t) bp->waiting_reader = NULL;
+            } else {
+                if (bp->waiting_writer == t) bp->waiting_writer = NULL;
+            }
+            t->blocked_pipe = NULL;
+        }
+        proc_release_fdtable(t);
+        proc_kstack_free(t);
+        t->space = NULL;
+        t->is_thread = 0;
+        t->state = PROC_UNUSED;
+    }
+}
+
+__attribute__((noreturn)) void proc_exit_group(int code) {
+    reap_sibling_threads(cur());
+    proc_do_exit(code);
 }
 
 __attribute__((noreturn)) void proc_do_exit(int code) {
@@ -2368,7 +2401,7 @@ void syscall_dispatch(syscall_frame_t *f) {
         ret = sys_nanosleep((void *) a3, (void *) a4); /* clock_nanosleep: ignore clkid/flags */
         break;
     case 231:
-        proc_do_exit((int) a1);
+        proc_exit_group((int) a1);
         return;
     case 234:
         ret = sys_tgkill((int) a1, (int) a2, (int) a3);

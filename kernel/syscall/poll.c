@@ -50,7 +50,10 @@ int64_t sys_poll(struct pollfd_s *fds, uint64_t nfds, int timeout) {
             cli();
         }
         p->wakeup_tick = 0;
-        if (nfds) ready = poll_check(fds, nfds);
+        if (nfds) {
+            if (!uptr_ok_w(fds, nfds * sizeof(*fds))) return -(int64_t) EFAULT;
+            ready = poll_check(fds, nfds);
+        }
     }
     return (int64_t) ready;
 }
