@@ -127,7 +127,7 @@ DEPS := $(OBJS:.o=.d)
 SRC_DIR  := .
 INITRD   := initrd.cpio
 
-.PHONY: all iso run run-serial run-uefi clean user-build xorg testrunner test-initrd test-iso test-run test-run-log fmt fmt-check
+.PHONY: all iso run run-serial clean user-build xorg testrunner test-initrd test-iso test-run test-run-log
 
 all: $(TARGET) $(INITRD)
 
@@ -196,6 +196,8 @@ iso: $(TARGET) $(INITRD) $(LIMINE_DIR)/limine
 run: iso
 	qemu-system-x86_64              \
 	    -M q35                      \
+	    -enable-kvm                 \
+	    -cpu host                   \
 	    -m 2G                       \
 	    -cdrom $(ISO)               \
 	    -boot d                     \
@@ -214,19 +216,6 @@ run-serial: iso
 	    -display none               \
 	    -serial stdio
 
-OVMF ?= /usr/share/edk2/x64/OVMF.fd
-
-run-uefi: iso
-	qemu-system-x86_64              \
-	    -M q35                      \
-	    -m 2G                       \
-	    -cdrom $(ISO)               \
-	    -bios $(OVMF)               \
-	    -boot d                     \
-	    -serial stdio               \
-	    -vga qxl                    \
-	    -global qxl-vga.vgamem_mb=1024
-
 TEST_ROOTFS := test_rootfs
 TEST_INITRD := test-initrd.cpio
 TEST_ISO    := kyronix-test.iso
@@ -244,7 +233,7 @@ test-initrd: $(TARGET) testrunner build/libatomic_asneeded.a
 	cp build/bin/ksh        $(TEST_ROOTFS)/bin/
 	ln -sf ksh $(TEST_ROOTFS)/bin/sh
 	for app in basename cat chgrp chmod chown cksum clear cmp cp cut date dd dirname du echo env false \
-	    find grep head hostname kill link ln ls mkdir mktemp mv ping printenv printf pwd readlink reboot rm rmdir \
+	    find grep head hostname kill link ln ls mkdir mktemp mv nc nslookup ping printenv printf pwd readlink reboot rm rmdir \
 	    sed seq sleep sort sync tail tee test touch tr true tty uname uniq unlink wc wget which whoami yes; do \
 	    cp build/bin/$$app $(TEST_ROOTFS)/bin/; \
 	done
@@ -310,14 +299,6 @@ test-run-log: test-iso
 	    exit 1; \
 	fi
 
-fmt:
-	@echo "Formatting code..."
-	@find $(SRC_DIR) -type f \( -name "*.c" -o -name "*.h" \) -exec clang-format -i {} \;
-	@echo "Format complete"
-
-fmt-check:
-	@echo "Checking code style..."
-	@find $(SRC_DIR) -type f \( -name "*.c" -o -name "*.h" \) -exec clang-format --dry-run -Werror {} +
 clean:
 	rm -f $(TARGET) $(ISO) $(INITRD) $(TEST_ISO) $(TEST_INITRD)
 	rm -rf $(BUILD_DIR) iso_root rootfs/bin $(TEST_ROOTFS)

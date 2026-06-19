@@ -22,7 +22,8 @@
 #define USER_LIMIT 0x800000000000ULL
 #endif
 
-typedef struct {
+typedef struct
+{
     uint64_t start;
     uint64_t end;
     uint32_t prot;
@@ -31,7 +32,8 @@ typedef struct {
     uint8_t free_on_unmap;
 } vmm_vma_t;
 
-typedef struct {
+typedef struct
+{
     uint64_t pml4_phys;
     vmm_vma_t vmas[VMM_VMA_MAX];
 } vmm_space_t;
@@ -39,13 +41,13 @@ typedef struct {
 extern vmm_space_t g_kernel_space;
 
 void vmm_init(void);
-int vmm_map(vmm_space_t *sp, uint64_t virt, uint64_t phys, uint64_t flags);
-void vmm_unmap(vmm_space_t *sp, uint64_t virt);
-uint64_t vmm_virt_to_phys(vmm_space_t *sp, uint64_t virt);
-bool vmm_user_range_ok(vmm_space_t *sp, uint64_t virt, uint64_t len, bool write);
-bool vmm_user_range_fault_in(vmm_space_t *sp, uint64_t virt, uint64_t len, bool write);
-int vmm_protect(vmm_space_t *sp, uint64_t virt, uint64_t flags);
-vmm_space_t *vmm_space_new(void);
-void vmm_space_free(vmm_space_t *sp);
-void vmm_switch(vmm_space_t *sp);
-int vmm_fork_user(vmm_space_t *dst, vmm_space_t *src);
+int vmm_map(vmm_space_t* sp, uint64_t virt, uint64_t phys, uint64_t flags);
+void vmm_unmap(vmm_space_t* sp, uint64_t virt);
+uint64_t vmm_virt_to_phys(vmm_space_t* sp, uint64_t virt);
+bool vmm_user_range_ok(vmm_space_t* sp, uint64_t virt, uint64_t len, bool write);
+bool vmm_user_range_fault_in(vmm_space_t* sp, uint64_t virt, uint64_t len, bool write);
+int vmm_protect(vmm_space_t* sp, uint64_t virt, uint64_t flags);
+vmm_space_t* vmm_space_new(void);
+void vmm_space_free(vmm_space_t* sp);
+void vmm_switch(vmm_space_t* sp);
+int vmm_fork_user(vmm_space_t* dst, vmm_space_t* src);
