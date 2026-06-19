@@ -2,6 +2,7 @@
 
 TARGET     := kernel.elf
 ISO        := kyronix.iso
+DISK_IMG   := disk.img
 LIMINE_DIR := limine
 BUILD_DIR  := build
 
@@ -64,6 +65,7 @@ SRCS := \
     kernel/exec/process.c              \
     kernel/proc/proc.c                 \
     kernel/proc/signal.c               \
+    kernel/fs/ext2.c                   \
     kernel/fs/vfs.c                    \
     kernel/fs/devfs.c                  \
     kernel/fs/eventfd.c                \
@@ -74,6 +76,7 @@ SRCS := \
     kernel/fs/inet_socket.c            \
     kernel/fs/pipe.c                   \
     kernel/fs/cpio.c                   \
+    kernel/drivers/ahci.c             \
     kernel/drivers/serial.c           \
     kernel/drivers/kbd.c              \
     kernel/drivers/tty.c              \
@@ -127,9 +130,16 @@ DEPS := $(OBJS:.o=.d)
 SRC_DIR  := .
 INITRD   := initrd.cpio
 
-.PHONY: all iso run run-serial clean user-build xorg testrunner test-initrd test-iso test-run test-run-log
+.PHONY: all iso run run-serial run-uefi clean user-build xorg testrunner test-initrd test-iso test-run test-run-log fmt fmt-check disk
 
-all: $(TARGET) $(INITRD)
+all: $(TARGET) $(INITRD) $(DISK_IMG)
+
+$(DISK_IMG):
+	dd if=/dev/zero of=$@ bs=1M count=128 status=none
+	mkfs.ext2 -b 4096 -L kyronix $@
+	@echo "  Built: $@"
+
+disk: $(DISK_IMG)
 
 build/libatomic_asneeded.a:
 	@mkdir -p $(@D)
@@ -193,7 +203,7 @@ iso: $(TARGET) $(INITRD) $(LIMINE_DIR)/limine
 	@echo ""
 	@echo "  Built: $(ISO)"
 
-run: iso
+run: iso $(DISK_IMG)
 	qemu-system-x86_64              \
 	    -M q35                      \
 	    -enable-kvm                 \
@@ -205,16 +215,38 @@ run: iso
 	    -vga qxl                    \
 	    -global qxl-vga.vgamem_mb=1024 \
 	    -netdev user,id=n0          \
-	    -device virtio-net-pci,netdev=n0
+	    -device virtio-net-pci,netdev=n0 \
+	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+	    -device ahci,id=ahci \
+	    -device ide-hd,drive=hd0,bus=ahci.0
 
-run-serial: iso
+run-serial: iso $(DISK_IMG)
 	qemu-system-x86_64              \
 	    -M q35                      \
 	    -m 2G                       \
 	    -cdrom $(ISO)               \
 	    -boot d                     \
 	    -display none               \
-	    -serial stdio
+	    -serial stdio               \
+	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+	    -device ahci,id=ahci \
+	    -device ide-hd,drive=hd0,bus=ahci.0
+
+OVMF ?= /usr/share/edk2/x64/OVMF.fd
+
+run-uefi: iso $(DISK_IMG)
+	qemu-system-x86_64              \
+	    -M q35                      \
+	    -m 2G                       \
+	    -cdrom $(ISO)               \
+	    -bios $(OVMF)               \
+	    -boot d                     \
+	    -serial stdio               \
+	    -vga qxl                    \
+	    -global qxl-vga.vgamem_mb=1024 \
+	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+	    -device ahci,id=ahci \
+	    -device ide-hd,drive=hd0,bus=ahci.0
 
 TEST_ROOTFS := test_rootfs
 TEST_INITRD := test-initrd.cpio
@@ -228,7 +260,7 @@ test-initrd: $(TARGET) testrunner build/libatomic_asneeded.a
 	$(MAKE) -C user/fetch
 	$(MAKE) -C user/shell
 	rm -rf $(TEST_ROOTFS) $(TEST_INITRD)
-	mkdir -p $(TEST_ROOTFS)/bin
+	mkdir -p $(TEST_ROOTFS)/bin $(TEST_ROOTFS)/mnt
 	cp build/bin/testrunner $(TEST_ROOTFS)/init
 	cp build/bin/ksh        $(TEST_ROOTFS)/bin/
 	ln -sf ksh $(TEST_ROOTFS)/bin/sh
@@ -267,7 +299,7 @@ test-iso: $(TARGET) test-initrd $(LIMINE_DIR)/limine
 	@echo ""
 	@echo "  Built: $(TEST_ISO)"
 
-test-run: test-iso
+test-run: test-iso $(DISK_IMG)
 	qemu-system-x86_64              \
 	    -M q35                      \
 	    -m 512M                     \
@@ -276,9 +308,12 @@ test-run: test-iso
 	    -serial stdio               \
 	    -netdev user,id=n0          \
 	    -device virtio-net-pci,netdev=n0 \
+	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+	    -device ahci,id=ahci \
+	    -device ide-hd,drive=hd0,bus=ahci.0 \
 	    -no-reboot
 
-test-run-log: test-iso
+test-run-log: test-iso $(DISK_IMG)
 	@qemu-system-x86_64              \
 	    -M q35                      \
 	    -m 512M                     \
@@ -287,6 +322,9 @@ test-run-log: test-iso
 	    -display none               \
 	    -netdev user,id=n0          \
 	    -device virtio-net-pci,netdev=n0 \
+	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+	    -device ahci,id=ahci \
+	    -device ide-hd,drive=hd0,bus=ahci.0 \
 	    -serial file:test.log       \
 	    -no-reboot 2>/dev/null;     \
 	grep -E "(TEST|RESULT|ALL|SOME)" test.log 2>/dev/null; \
@@ -300,7 +338,7 @@ test-run-log: test-iso
 	fi
 
 clean:
-	rm -f $(TARGET) $(ISO) $(INITRD) $(TEST_ISO) $(TEST_INITRD)
+	rm -f $(TARGET) $(ISO) $(INITRD) $(TEST_ISO) $(TEST_INITRD) $(DISK_IMG)
 	rm -rf $(BUILD_DIR) iso_root rootfs/bin $(TEST_ROOTFS)
 	$(MAKE) -C user clean
 	$(MAKE) -C $(LIMINE_DIR) clean 2>/dev/null; true
