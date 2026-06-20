@@ -188,6 +188,24 @@ static int64_t proc_devices_read(vfs_node_t *n, char *buf, uint64_t len, uint64_
     return read_buf(buf, len, off, devices, sizeof(devices) - 1);
 }
 
+static int64_t proc_pids_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
+    (void) n;
+    char tmp[2048];
+    int pos = 0;
+    for (int i = 0; i < PROC_MAX; i++) {
+        proc_t *p = &g_proctable[i];
+        if (p->state == PROC_UNUSED) continue;
+        if (!jail_can_see(g_current_proc, p)) continue;
+        const char *name = p->exe_path[0] ? p->exe_path : "unknown";
+        int n = snprintf(tmp + pos, sizeof(tmp) - (uint64_t) pos,
+                         "%u %u %c %u %s\n",
+                         p->pid, p->ppid, proc_state_char(p), p->uid, name);
+        if (n < 0 || (uint64_t) pos + (uint64_t) n >= sizeof(tmp)) break;
+        pos += n;
+    }
+    return read_buf(buf, len, off, tmp, (uint64_t) pos);
+}
+
 static int64_t proc_kmsg_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
     (void) n;
     (void) buf;
@@ -436,6 +454,7 @@ void procfs_init(void) {
     vfs_create_chr("/proc/version", proc_version_read, NULL);
     vfs_create_chr("/proc/kmsg", proc_kmsg_read, NULL);
     vfs_create_chr("/proc/cpuinfo", proc_cpuinfo_read, NULL);
+    vfs_create_chr("/proc/pids", proc_pids_read, NULL);
     vfs_create_chr("/proc/meminfo", proc_meminfo_read, NULL);
     vfs_create_chr("/proc/uptime", proc_uptime_read, NULL);
     vfs_create_chr("/proc/loadavg", proc_loadavg_read, NULL);
