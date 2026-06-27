@@ -149,6 +149,34 @@ static const uint32_t ansi_bg[8] = {
     COLOR_BLUE,  RGB(198, 120, 221), COLOR_CYAN,  COLOR_WHITE,
 };
 
+static const uint32_t ansi_bright[8] = {
+    RGB(128, 128, 128), RGB(255, 85, 85),   RGB(150, 255, 85),
+    RGB(255, 255, 85),  RGB(85, 170, 255),  RGB(215, 150, 255),
+    RGB(85, 255, 255),  RGB(255, 255, 255),
+};
+
+static uint32_t ansi_256(int idx) {
+    if (idx < 0) return COLOR_BLACK;
+    if (idx < 8) return ansi_fg[idx];
+    if (idx < 16) return ansi_bright[idx - 8];
+    if (idx < 232) {
+        idx -= 16;
+        int r = (idx / 36) * 255 / 5;
+        int g = ((idx / 6) % 6) * 255 / 5;
+        int b = (idx % 6) * 255 / 5;
+        if (r == 0) r = 0;
+        if (g == 0) g = 0;
+        if (b == 0) b = 0;
+        return RGB(r, g, b);
+    }
+    if (idx < 256) {
+        int v = (idx - 232) * 256 / 24 + 8;
+        if (v > 255) v = 255;
+        return RGB(v, v, v);
+    }
+    return COLOR_WHITE;
+}
+
 static void fb_erase_to_eol(void) {
     uint32_t cols = (uint32_t) (g_fb.width / FONT_W);
     uint32_t c = g_fb.col;
@@ -178,6 +206,20 @@ static void fb_sgr(void) {
             g_fb.fg = ansi_fg[p - 30];
             break;
         case 38:
+            if (i + 1 <= g_esc_np) {
+                i++;
+                int st = g_esc_params[i];
+                if (st == 5 && i + 1 <= g_esc_np) {
+                    i++;
+                    g_fb.fg = ansi_256(g_esc_params[i]);
+                } else if (st == 2 && i + 3 <= g_esc_np) {
+                    i++;
+                    int r = g_esc_params[i]; i++;
+                    int gv = g_esc_params[i]; i++;
+                    int b = g_esc_params[i];
+                    g_fb.fg = RGB(r & 0xFF, gv & 0xFF, b & 0xFF);
+                }
+            }
             break;
         case 39:
             g_fb.fg = COLOR_WHITE;
@@ -186,6 +228,20 @@ static void fb_sgr(void) {
             g_fb.bg = ansi_bg[p - 40];
             break;
         case 48:
+            if (i + 1 <= g_esc_np) {
+                i++;
+                int st = g_esc_params[i];
+                if (st == 5 && i + 1 <= g_esc_np) {
+                    i++;
+                    g_fb.bg = ansi_256(g_esc_params[i]);
+                } else if (st == 2 && i + 3 <= g_esc_np) {
+                    i++;
+                    int r = g_esc_params[i]; i++;
+                    int gv = g_esc_params[i]; i++;
+                    int b = g_esc_params[i];
+                    g_fb.bg = RGB(r & 0xFF, gv & 0xFF, b & 0xFF);
+                }
+            }
             break;
         case 49:
             g_fb.bg = COLOR_BG;

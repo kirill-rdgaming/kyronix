@@ -217,10 +217,7 @@ run: iso $(DISK_IMG)
 	    -vga qxl                    \
 	    -global qxl-vga.vgamem_mb=1024 \
 	    -netdev user,id=n0          \
-	    -device virtio-net-pci,netdev=n0 \
-	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
-	    -device ahci,id=ahci \
-	    -device ide-hd,drive=hd0,bus=ahci.0
+	    -device virtio-net-pci,netdev=n0 
 
 run-serial: iso $(DISK_IMG)
 	qemu-system-x86_64              \
