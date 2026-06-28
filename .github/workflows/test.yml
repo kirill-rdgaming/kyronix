@@ -13,7 +13,7 @@ jobs:
         with:
           submodules: true
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y musl-tools qemu-system-x86 xorriso
+        run: sudo apt-get update && sudo apt-get install -y musl-tools qemu-system-x86 xorriso automake
       - name: Build test ISO
         run: make test-iso
       - name: Run tests in QEMU
