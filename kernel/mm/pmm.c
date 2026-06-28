@@ -13,6 +13,9 @@ typedef struct {
 
 static pmm_t g_pmm;
 
+static uint64_t g_alloc_total = 0;
+static uint64_t g_free_total = 0;
+
 static inline void bitmap_set_free(uint64_t page) {
     g_pmm.words[page >> 6] |= (1ULL << (page & 63));
 }
@@ -92,6 +95,7 @@ void *pmm_alloc(void) {
 
         g_pmm.words[wi] &= ~(1ULL << bit); /* mark used */
         g_pmm.free_pages--;
+        g_alloc_total++;
         return (void *) (page << PAGE_SHIFT);
     }
     return NULL; /* out of phys memory */
@@ -113,6 +117,7 @@ void *pmm_alloc_contiguous(uint64_t n) {
             bitmap_set_used(s + i);
             g_pmm.free_pages--;
         }
+        g_alloc_total += n;
         return (void *) (s << PAGE_SHIFT);
     }
     return NULL;
@@ -123,7 +128,10 @@ void pmm_free(void *phys) {
     if (!phys || page >= g_pmm.total_pages) return;
     bitmap_set_free(page);
     g_pmm.free_pages++;
+    g_free_total++;
 }
 
 uint64_t pmm_free_pages(void) { return g_pmm.free_pages; }
 uint64_t pmm_total_pages(void) { return g_pmm.total_pages; }
+uint64_t pmm_alloc_total(void) { return g_alloc_total; }
+uint64_t pmm_free_total(void) { return g_free_total; }

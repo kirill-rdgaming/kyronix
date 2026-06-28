@@ -100,12 +100,14 @@ static int64_t sys_brk(uint64_t addr)
     if (addr <= p->brk) {
         uint64_t new_end = PAGE_ALIGN_UP(addr);
         uint64_t old_end = PAGE_ALIGN_UP(p->brk);
+        uint64_t nfreed = (old_end - new_end) / PAGE_SIZE;
         for (uint64_t va = new_end; va < old_end; va += PAGE_SIZE) {
             uint64_t phys = vmm_virt_to_phys(p->space, va);
             vmm_unmap(p->space, va);
             if (phys)
                 pmm_free((void*) phys);
         }
+        p->pages_freed += nfreed;
         if (old_end > p->brk_base)
             vma_remove_overlaps(p->space, p->brk_base, old_end - p->brk_base);
         if (new_end > p->brk_base)
@@ -117,6 +119,7 @@ static int64_t sys_brk(uint64_t addr)
 
     uint64_t old = PAGE_ALIGN_UP(p->brk);
     uint64_t new = PAGE_ALIGN_UP(addr);
+    uint64_t nallocd = 0;
     for (uint64_t va = old; va < new; va += PAGE_SIZE)
     {
         void* ph = pmm_alloc_zeroed();
@@ -140,7 +143,9 @@ static int64_t sys_brk(uint64_t addr)
             }
             return (int64_t) p->brk;
         }
+        nallocd++;
     }
+    p->pages_alloc += nallocd;
     if (old > p->brk_base)
         vma_remove_overlaps(p->space, p->brk_base, old - p->brk_base);
     vma_add(p->space, p->brk_base, new - p->brk_base, PROT_READ | PROT_WRITE, 0, true);
@@ -210,6 +215,7 @@ static int mmap_pick_addr(proc_t* p, uint64_t addr, uint64_t length, uint64_t fl
 
 static void unmap_owned_pages(proc_t* p, uint64_t addr, uint64_t len)
 {
+    uint64_t nfreed = 0;
     for (uint64_t o = 0; o < len; o += PAGE_SIZE) {
         uint64_t va = addr + o;
         bool tracked = vma_page_mapped(p->space, va);
@@ -217,9 +223,12 @@ static void unmap_owned_pages(proc_t* p, uint64_t addr, uint64_t len)
         uint64_t phys = vmm_virt_to_phys(p->space, va);
         if (tracked)
             vmm_unmap(p->space, va);
-        if (owned && phys)
+        if (owned && phys) {
             pmm_free((void*) phys);
+            nfreed++;
+        }
     }
+    p->pages_freed += nfreed;
 }
 
 static void rollback_new_mapping(proc_t* p, uint64_t addr, uint64_t mapped_len, uint64_t vma_len)
@@ -297,6 +306,7 @@ static int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t 
 
         /* file-backed: MAP_PRIVATE - allocate pages and copy file content */
         uint64_t file_size = fn->size;
+        uint64_t nallocd_file = 0;
         for (uint64_t o = 0; o < length; o += PAGE_SIZE)
         {
             void* ph = pmm_alloc_zeroed();
@@ -316,7 +326,9 @@ static int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t 
                 if (copy > PAGE_SIZE) copy = PAGE_SIZE;
                 memcpy(phys_to_virt((uint64_t) ph), fn->data + off + o, copy);
             }
+            nallocd_file++;
         }
+        p->pages_alloc += nallocd_file;
         return (int64_t) va;
     }
 
@@ -326,6 +338,7 @@ static int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t 
     if (reserve_only)
         return (int64_t) va;
 
+    uint64_t nallocd = 0;
     for (uint64_t o = 0; o < length; o += PAGE_SIZE)
     {
         void* ph = pmm_alloc_zeroed();
@@ -339,7 +352,9 @@ static int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t 
             rollback_new_mapping(p, va, o, length);
             return -(int64_t) ENOMEM;
         }
+        nallocd++;
     }
+    p->pages_alloc += nallocd;
     return (int64_t) va;
 }
 

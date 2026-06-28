@@ -20,6 +20,8 @@ typedef struct block_hdr {
 
 static block_hdr_t *g_head = NULL;
 static uint64_t g_brk = HEAP_START;
+static uint64_t g_kmalloc_total = 0;
+static uint64_t g_kfree_total = 0;
 
 static block_hdr_t *heap_grow(uint64_t min_payload) {
     uint64_t need = min_payload + HDR_SIZE;
@@ -102,6 +104,7 @@ void *kmalloc(uint64_t size) {
     }
 
     blk->free = 0;
+    g_kmalloc_total += blk->size;
     irq_restore(flags);
     return (uint8_t *) blk + HDR_SIZE;
 }
@@ -117,6 +120,7 @@ void kfree(void *ptr) {
         return;
     }
     blk->free = 1;
+    g_kfree_total += blk->size;
 
     if (blk->next && blk->next->free) {
         blk->size += HDR_SIZE + blk->next->size;
@@ -157,6 +161,10 @@ void *krealloc(void *ptr, uint64_t new_size) {
     memcpy(new_ptr, ptr, blk->size);
     kfree(ptr);
     return new_ptr;
+}
+
+int64_t heap_alloc_delta(void) {
+    return (int64_t)(g_kmalloc_total - g_kfree_total);
 }
 
 void heap_stats(void) {

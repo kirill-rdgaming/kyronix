@@ -25,3 +25,5 @@ void pmm_free(void *phys);
 
 uint64_t pmm_free_pages(void);
 uint64_t pmm_total_pages(void);
+uint64_t pmm_alloc_total(void);
+uint64_t pmm_free_total(void);

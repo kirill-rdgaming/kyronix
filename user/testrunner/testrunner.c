@@ -23,16 +23,35 @@ static const char *cur_phase = NULL;
 static int ph_total = 0;
 static int ph_passed = 0;
 static int ph_failed = 0;
+static int ph_leak = 0;
+
+static int total_leak = 0;
+static int leaky_tests = 0;
+
+static int64_t read_physdelta(void) {
+    char buf[256];
+    int fd = open("/proc/memstats", O_RDONLY);
+    if (fd < 0) return -1;
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return -1;
+    buf[n] = '\0';
+    const char *p = strstr(buf, "PhysDelta:");
+    if (!p) return -1;
+    p += 10;
+    while (*p == ' ' || *p == '\t') p++;
+    return (int64_t)atol(p);
+}
 
 static void phase_summary(void) {
-    fprintf(stderr, "  " ANSI_CYAN "--- %s: %d/%d PASS, %d FAIL" ANSI_RESET "\n", cur_phase,
-            ph_passed, ph_total, ph_failed);
+    fprintf(stderr, "  " ANSI_CYAN "--- %s: %d/%d PASS, %d FAIL, %d pages leaked" ANSI_RESET "\n", cur_phase,
+            ph_passed, ph_total, ph_failed, ph_leak);
 }
 
 static void phase_begin(const char *phase) {
     if (cur_phase) phase_summary();
     cur_phase = phase;
-    ph_total = ph_passed = ph_failed = 0;
+    ph_total = ph_passed = ph_failed = ph_leak = 0;
     fprintf(stderr, "\n" ANSI_CYAN "[%s]" ANSI_RESET "\n", phase);
 }
 
@@ -308,27 +327,50 @@ int main(void) {
         if (!cur_phase || strcmp(cur_phase, e->phase) != 0) phase_begin(e->phase);
 
         fflush(stderr);
+        int64_t mem_before = read_physdelta();
         fprintf(stderr, "  %-30s ", e->name);
         fflush(stderr);
 
         int result = run_sandbox(e->name, e->func);
 
+        int64_t mem_after = read_physdelta();
+        int leak = 0;
+        if (mem_before >= 0 && mem_after >= 0) {
+            leak = (int)(mem_after - mem_before);
+            if (leak > 0) {
+                leaky_tests++;
+                total_leak += leak;
+                ph_leak += leak;
+            }
+        }
+
         if (result == TEST_PASS) {
             passed++;
             ph_passed++;
-            fprintf(stderr, ANSI_GREEN "PASS" ANSI_RESET "\n");
+            if (leak > 0)
+                fprintf(stderr, ANSI_GREEN "PASS" ANSI_RESET "  [+%d pages]\n", leak);
+            else
+                fprintf(stderr, ANSI_GREEN "PASS" ANSI_RESET "\n");
         } else {
             failed++;
             ph_failed++;
-            fprintf(stderr, ANSI_RED "FAIL" ANSI_RESET "\n");
+            if (leak > 0)
+                fprintf(stderr, ANSI_RED "FAIL" ANSI_RESET "  [+%d pages]\n", leak);
+            else
+                fprintf(stderr, ANSI_RED "FAIL" ANSI_RESET "\n");
         }
         total++;
     }
 
     if (cur_phase) phase_summary();
 
-    fprintf(stderr, "\n" ANSI_CYAN "RESULT:" ANSI_RESET " %d/%d PASS, %d FAIL\n", passed, total,
+    fprintf(stderr, "\n" ANSI_CYAN "RESULT:" ANSI_RESET " %d/%d PASS, %d FAIL", passed, total,
             failed);
+    if (total_leak > 0)
+        fprintf(stderr, "  " ANSI_RED "+%d pages leaked across %d test(s)" ANSI_RESET, total_leak, leaky_tests);
+    else
+        fprintf(stderr, "  " ANSI_GREEN "no memory leaks" ANSI_RESET);
+    fprintf(stderr, "\n");
 
     if (nfailures > 0) {
         fprintf(stderr, "\n" ANSI_RED "FAILED TESTS:" ANSI_RESET "\n");

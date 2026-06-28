@@ -2,6 +2,7 @@
 #include "arch/x86_64/pit.h"
 #include "lib/printf.h"
 #include "lib/string.h"
+#include "mm/heap.h"
 #include "mm/pmm.h"
 #include "mm/vmm.h"
 #include "proc/jail.h"
@@ -95,6 +96,22 @@ static int64_t proc_cpuinfo_read(vfs_node_t *n, char *buf, uint64_t len, uint64_
                       "apicid\t\t: 0\n"
                       "flags\t\t: fpu tsc msr pae cx8 apic sep mtrr pge cmov pat mmx fxsr sse sse2 "
                       "syscall nx lm\n\n");
+    return read_buf(buf, len, off, tmp, (uint64_t) sz);
+}
+
+static int64_t proc_memstats_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
+    (void) n;
+    uint64_t pa = pmm_alloc_total();
+    uint64_t pf = pmm_free_total();
+    int64_t pd = (int64_t)(pa - pf);
+    int64_t hd = heap_alloc_delta();
+    char tmp[256];
+    int sz = snprintf(tmp, sizeof(tmp),
+                      "PhysAlloc: %lu\n"
+                      "PhysFree:  %lu\n"
+                      "PhysDelta: %ld\n"
+                      "HeapDelta: %ld\n",
+                      pa, pf, pd, hd);
     return read_buf(buf, len, off, tmp, (uint64_t) sz);
 }
 
@@ -275,10 +292,14 @@ static int64_t proc_self_status_read(vfs_node_t *n, char *buf, uint64_t len, uin
                       "SigPnd:\t%016lx\n"
                       "SigBlk:\t%016lx\n"
                       "VmPeak:\t0 kB\n"
-                      "VmSize:\t0 kB\n",
+                      "VmSize:\t0 kB\n"
+                      "VmRSS:\t%lu kB\n"
+                      "VmLeak:\t%ld kB\n",
                       proc_name(p), proc_state_char(p), p->pid, p->pid, p->ppid, p->uid, p->euid,
                       p->suid, p->fsuid, p->gid, p->egid, p->sgid, p->fsgid, VFS_FD_MAX,
-                      threads ? threads : 1, p->pending_sigs, p->sig_mask);
+                      threads ? threads : 1, p->pending_sigs, p->sig_mask,
+                      (unsigned long)((p->pages_alloc * PAGE_SIZE) / 1024),
+                      (long)((int64_t)(p->pages_alloc - p->pages_freed) * (int64_t)(PAGE_SIZE / 1024)));
     return read_buf(buf, len, off, tmp, (uint64_t) sz);
 }
 
@@ -456,6 +477,7 @@ void procfs_init(void) {
     vfs_create_chr("/proc/cpuinfo", proc_cpuinfo_read, NULL);
     vfs_create_chr("/proc/pids", proc_pids_read, NULL);
     vfs_create_chr("/proc/meminfo", proc_meminfo_read, NULL);
+    vfs_create_chr("/proc/memstats", proc_memstats_read, NULL);
     vfs_create_chr("/proc/uptime", proc_uptime_read, NULL);
     vfs_create_chr("/proc/loadavg", proc_loadavg_read, NULL);
     vfs_create_chr("/proc/stat", proc_stat_read, NULL);
