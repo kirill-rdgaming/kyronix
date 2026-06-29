@@ -18,6 +18,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools qemu-system-x86 xorriso autoconf automake
           sudo ln -sf /usr/bin/aclocal /usr/bin/aclocal-1.15
+          sudo ln -sf /usr/bin/automake /usr/bin/automake-1.15
       
       - name: Build test ISO
         run: make test-iso
