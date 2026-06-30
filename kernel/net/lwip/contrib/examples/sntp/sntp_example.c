@@ -29,38 +29,34 @@
 
 #include <time.h>
 
-#include "lwip/opt.h"
 #include "lwip/apps/sntp.h"
-#include "sntp_example.h"
 #include "lwip/netif.h"
+#include "lwip/opt.h"
+#include "sntp_example.h"
 
-void
-sntp_set_system_time(u32_t sec)
-{
-  char buf[32];
-  struct tm current_time_val;
-  time_t current_time = (time_t)sec;
+void sntp_set_system_time(u32_t sec) {
+    char buf[32];
+    struct tm current_time_val;
+    time_t current_time = (time_t) sec;
 
 #if defined(_WIN32) || defined(WIN32)
-  localtime_s(&current_time_val, &current_time);
+    localtime_s(&current_time_val, &current_time);
 #else
-  localtime_r(&current_time, &current_time_val);
+    localtime_r(&current_time, &current_time_val);
 #endif
 
-  strftime(buf, sizeof(buf), "%d.%m.%Y %H:%M:%S", &current_time_val);
-  LWIP_PLATFORM_DIAG(("SNTP time: %s\n", buf));
+    strftime(buf, sizeof(buf), "%d.%m.%Y %H:%M:%S", &current_time_val);
+    LWIP_PLATFORM_DIAG(("SNTP time: %s\n", buf));
 }
 
-void
-sntp_example_init(void)
-{
-  sntp_setoperatingmode(SNTP_OPMODE_POLL);
+void sntp_example_init(void) {
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
 #if LWIP_DHCP
-  sntp_servermode_dhcp(1); /* get SNTP server via DHCP */
-#else /* LWIP_DHCP */
+    sntp_servermode_dhcp(1); /* get SNTP server via DHCP */
+#else                        /* LWIP_DHCP */
 #if LWIP_IPV4
-  sntp_setserver(0, netif_ip_gw4(netif_default));
+    sntp_setserver(0, netif_ip_gw4(netif_default));
 #endif /* LWIP_IPV4 */
 #endif /* LWIP_DHCP */
-  sntp_init();
+    sntp_init();
 }

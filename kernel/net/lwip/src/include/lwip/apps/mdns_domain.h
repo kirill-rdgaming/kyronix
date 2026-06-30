@@ -1,9 +1,9 @@
 /**
  * @file
- * MDNS responder - domain related functionalities 
+ * MDNS responder - domain related functionalities
  */
 
- /*
+/*
  * Copyright (c) 2015 Verisure Innovation AB
  * All rights reserved.
  *
@@ -64,9 +64,11 @@ err_t mdns_build_reverse_v6_domain(struct mdns_domain *domain, const ip6_addr_t 
 #endif
 err_t mdns_build_host_domain(struct mdns_domain *domain, struct mdns_host *mdns);
 err_t mdns_build_dnssd_domain(struct mdns_domain *domain);
-err_t mdns_build_service_domain(struct mdns_domain *domain, struct mdns_service *service, int include_name);
+err_t mdns_build_service_domain(struct mdns_domain *domain, struct mdns_service *service,
+                                int include_name);
 #if LWIP_MDNS_SEARCH
-err_t mdns_build_request_domain(struct mdns_domain *domain, struct mdns_request *request, int include_name);
+err_t mdns_build_request_domain(struct mdns_domain *domain, struct mdns_request *request,
+                                int include_name);
 #endif
 u16_t mdns_compress_domain(struct pbuf *pbuf, u16_t *offset, struct mdns_domain *domain);
 err_t mdns_write_domain(struct mdns_outpacket *outpkt, struct mdns_domain *domain);

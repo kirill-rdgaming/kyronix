@@ -47,26 +47,24 @@
 
 #include "lwip/netif.h"
 /* #include "lwip/udp.h" */
-#include "lwip/etharp.h"
 #include "lwip/acd.h"
+#include "lwip/etharp.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /** AutoIP state information per netif */
-struct autoip
-{
-  /** the currently selected, probed, announced or used LL IP-Address */
-  ip4_addr_t llipaddr;
-  /** current AutoIP state machine state */
-  u8_t state;
-  /** total number of probed/used Link Local IP-Addresses */
-  u8_t tried_llipaddr;
-  /** acd struct */
-  struct acd acd;
+struct autoip {
+    /** the currently selected, probed, announced or used LL IP-Address */
+    ip4_addr_t llipaddr;
+    /** current AutoIP state machine state */
+    u8_t state;
+    /** total number of probed/used Link Local IP-Addresses */
+    u8_t tried_llipaddr;
+    /** acd struct */
+    struct acd acd;
 };
-
 
 void autoip_set_struct(struct netif *netif, struct autoip *autoip);
 void autoip_remove_struct(struct netif *netif);
@@ -79,7 +77,8 @@ u8_t autoip_supplied_address(struct netif *netif);
 /* for lwIP internal use by ip4.c */
 u8_t autoip_accept_packet(struct netif *netif, const ip4_addr_t *addr);
 
-#define netif_autoip_data(netif) ((struct autoip*)netif_get_client_data(netif, LWIP_NETIF_CLIENT_DATA_INDEX_AUTOIP))
+#define netif_autoip_data(netif)                                                                   \
+    ((struct autoip *) netif_get_client_data(netif, LWIP_NETIF_CLIENT_DATA_INDEX_AUTOIP))
 
 #ifdef __cplusplus
 }

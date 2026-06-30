@@ -6,7 +6,7 @@
 
 #if PPP_SUPPORT && PPPOS_SUPPORT
 
-Suite* pppos_suite(void);
+Suite *pppos_suite(void);
 
 #endif /* PPP_SUPPORT && PPPOS_SUPPORT */
 

@@ -83,8 +83,7 @@ static shm_seg_t *seg_by_id(int id) {
 
 static shm_seg_t *seg_by_key(int key) {
     for (int i = 0; i < SHM_MAX_SEGS; i++)
-        if (g_segs[i].shmid && g_segs[i].key == key && seg_visible(&g_segs[i]))
-            return &g_segs[i];
+        if (g_segs[i].shmid && g_segs[i].key == key && seg_visible(&g_segs[i])) return &g_segs[i];
     return NULL;
 }
 

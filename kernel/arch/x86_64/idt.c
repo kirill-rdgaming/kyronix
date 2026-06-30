@@ -38,7 +38,7 @@ void request_irq(uint8_t irq, void (*fn)(int, void *), void *arg) {
 extern uint64_t isr_stub_table[];
 
 static void idt_set_gate(uint8_t vec, uint64_t handler, uint8_t type) {
-    g_idt[vec] = (idt_entry_t) {
+    g_idt[vec] = (idt_entry_t){
         .offset_low = (uint16_t) (handler & 0xFFFF),
         .selector = GDT_KERNEL_CODE,
         .ist = 0,

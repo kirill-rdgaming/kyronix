@@ -14,11 +14,10 @@ typedef int ssize_t;
 #define _CRT_SECURE_NO_WARNINGS
 
 /* disable some warnings */
-#pragma warning (disable: 4090) /* const assigned to non-const */
-#pragma warning (disable: 4996) /* fileno is deprecated */
+#pragma warning(disable : 4090) /* const assigned to non-const */
+#pragma warning(disable : 4996) /* fileno is deprecated */
 
 #endif /* _ MSC_VER */
-
 
 #define LWIP_UNITTESTS_NOFORK
 

@@ -34,7 +34,7 @@
 #ifndef LWIP_PERF_H
 #define LWIP_PERF_H
 
-#define PERF_START    /* null definition */
-#define PERF_STOP(x)  /* null definition */
+#define PERF_START   /* null definition */
+#define PERF_STOP(x) /* null definition */
 
 #endif /* LWIP_PERF_H */

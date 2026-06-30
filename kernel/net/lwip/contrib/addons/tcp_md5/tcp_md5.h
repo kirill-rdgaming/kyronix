@@ -29,19 +29,22 @@
  * To use the hooks in this file, make sure this file is included in LWIP_HOOK_FILENAME
  * and define these hooks:
  *
- * #define LWIP_HOOK_TCP_INPACKET_PCB(pcb, hdr, optlen, opt1len, opt2, p) tcp_md5_check_inpacket(pcb, hdr, optlen, opt1len, opt2, p)
- * #define LWIP_HOOK_TCP_OPT_LENGTH_SEGMENT(pcb, internal_len)            tcp_md5_get_additional_option_length(pcb, internal_len)
- * #define LWIP_HOOK_TCP_ADD_TX_OPTIONS(p, hdr, pcb, opts)                tcp_md5_add_tx_options(p, hdr, pcb,  opts)
+ * #define LWIP_HOOK_TCP_INPACKET_PCB(pcb, hdr, optlen, opt1len, opt2, p)
+ * tcp_md5_check_inpacket(pcb, hdr, optlen, opt1len, opt2, p) #define
+ * LWIP_HOOK_TCP_OPT_LENGTH_SEGMENT(pcb, internal_len) tcp_md5_get_additional_option_length(pcb,
+ * internal_len) #define LWIP_HOOK_TCP_ADD_TX_OPTIONS(p, hdr, pcb, opts) tcp_md5_add_tx_options(p,
+ * hdr, pcb,  opts)
  *
- * #define LWIP_HOOK_SOCKETS_SETSOCKOPT(s, sock, level, optname, optval, optlen, err) tcp_md5_setsockopt_hook(sock, level, optname, optval, optlen, err)
+ * #define LWIP_HOOK_SOCKETS_SETSOCKOPT(s, sock, level, optname, optval, optlen, err)
+ * tcp_md5_setsockopt_hook(sock, level, optname, optval, optlen, err)
  */
 
 #ifndef LWIP_HDR_CONTRIB_ADDONS_TCP_MD5_H
 #define LWIP_HDR_CONTRIB_ADDONS_TCP_MD5_H
 
-#include "lwip/opt.h"
-#include "lwip/ip_addr.h"
 #include "lwip/err.h"
+#include "lwip/ip_addr.h"
+#include "lwip/opt.h"
 
 #include "lwip/priv/sockets_priv.h"
 #include "lwip/priv/tcp_priv.h"
@@ -61,21 +64,24 @@ extern "C" {
 
 /* This is the optval type */
 struct tcp_md5sig {
-  struct  sockaddr_storage tcpm_addr;
-  u16_t   __tcpm_pad1;
-  u16_t   tcpm_keylen;
-  u32_t   __tcpm_pad2;
-  u8_t    tcpm_key[TCP_MD5SIG_MAXKEYLEN];
+    struct sockaddr_storage tcpm_addr;
+    u16_t __tcpm_pad1;
+    u16_t tcpm_keylen;
+    u32_t __tcpm_pad2;
+    u8_t tcpm_key[TCP_MD5SIG_MAXKEYLEN];
 };
 
 /* socket setsockopt hook: */
-int tcp_md5_setsockopt_hook(struct lwip_sock *sock, int level, int optname, const void *optval, u32_t optlen, int *err);
+int tcp_md5_setsockopt_hook(struct lwip_sock *sock, int level, int optname, const void *optval,
+                            u32_t optlen, int *err);
 
 /* Internal hook functions */
 void tcp_md5_init(void);
-err_t tcp_md5_check_inpacket(struct tcp_pcb* pcb, struct tcp_hdr *hdr, u16_t optlen, u16_t opt1len, u8_t *opt2, struct pbuf *p);
+err_t tcp_md5_check_inpacket(struct tcp_pcb *pcb, struct tcp_hdr *hdr, u16_t optlen, u16_t opt1len,
+                             u8_t *opt2, struct pbuf *p);
 u8_t tcp_md5_get_additional_option_length(const struct tcp_pcb *pcb, u8_t internal_option_length);
-u32_t *tcp_md5_add_tx_options(struct pbuf *p, struct tcp_hdr *hdr, const struct tcp_pcb *pcb, u32_t *opts);
+u32_t *tcp_md5_add_tx_options(struct pbuf *p, struct tcp_hdr *hdr, const struct tcp_pcb *pcb,
+                              u32_t *opts);
 
 #ifdef __cplusplus
 }

@@ -34,19 +34,19 @@
 
 /* HANDLE is used for sys_sem_t but we won't include windows.h */
 struct _sys_sem {
-  void *sem;
+    void *sem;
 };
 typedef struct _sys_sem sys_sem_t;
-#define sys_sem_valid_val(sema) (((sema).sem != NULL)  && ((sema).sem != (void*)-1))
+#define sys_sem_valid_val(sema) (((sema).sem != NULL) && ((sema).sem != (void *) -1))
 #define sys_sem_valid(sema) (((sema) != NULL) && sys_sem_valid_val(*(sema)))
 #define sys_sem_set_invalid(sema) ((sema)->sem = NULL)
 
 /* HANDLE is used for sys_mutex_t but we won't include windows.h */
 struct _sys_mut {
-  void *mut;
+    void *mut;
 };
 typedef struct _sys_mut sys_mutex_t;
-#define sys_mutex_valid_val(mutex) (((mutex).mut != NULL)  && ((mutex).mut != (void*)-1))
+#define sys_mutex_valid_val(mutex) (((mutex).mut != NULL) && ((mutex).mut != (void *) -1))
 #define sys_mutex_valid(mutex) (((mutex) != NULL) && sys_mutex_valid_val(*(mutex)))
 #define sys_mutex_set_invalid(mutex) ((mutex)->mut = NULL)
 
@@ -54,38 +54,38 @@ typedef struct _sys_mut sys_mutex_t;
 #define MAX_QUEUE_ENTRIES 100
 #endif
 struct lwip_mbox {
-  void* sem;
-  void* q_mem[MAX_QUEUE_ENTRIES];
-  u32_t head, tail;
+    void *sem;
+    void *q_mem[MAX_QUEUE_ENTRIES];
+    u32_t head, tail;
 };
 typedef struct lwip_mbox sys_mbox_t;
 #define SYS_MBOX_NULL NULL
-#define sys_mbox_valid_val(mbox) (((mbox).sem != NULL)  && ((mbox).sem != (void*)-1))
+#define sys_mbox_valid_val(mbox) (((mbox).sem != NULL) && ((mbox).sem != (void *) -1))
 #define sys_mbox_valid(mbox) ((mbox != NULL) && sys_mbox_valid_val(*(mbox)))
 #define sys_mbox_set_invalid(mbox) ((mbox)->sem = NULL)
 
 /* DWORD (thread id) is used for sys_thread_t but we won't include windows.h */
 typedef u32_t sys_thread_t;
 
-sys_sem_t* sys_arch_netconn_sem_get(void);
+sys_sem_t *sys_arch_netconn_sem_get(void);
 void sys_arch_netconn_sem_alloc(void);
 void sys_arch_netconn_sem_free(void);
-#define LWIP_NETCONN_THREAD_SEM_GET()   sys_arch_netconn_sem_get()
+#define LWIP_NETCONN_THREAD_SEM_GET() sys_arch_netconn_sem_get()
 #define LWIP_NETCONN_THREAD_SEM_ALLOC() sys_arch_netconn_sem_alloc()
-#define LWIP_NETCONN_THREAD_SEM_FREE()  sys_arch_netconn_sem_free()
+#define LWIP_NETCONN_THREAD_SEM_FREE() sys_arch_netconn_sem_free()
 
 #define LWIP_EXAMPLE_APP_ABORT() lwip_win32_keypressed()
 int lwip_win32_keypressed(void);
 
 /* Threading options */
 void sys_mark_tcpip_thread(void);
-#define LWIP_MARK_TCPIP_THREAD()   sys_mark_tcpip_thread()
+#define LWIP_MARK_TCPIP_THREAD() sys_mark_tcpip_thread()
 
 #if LWIP_TCPIP_CORE_LOCKING
 void sys_lock_tcpip_core(void);
-#define LOCK_TCPIP_CORE()          sys_lock_tcpip_core()
+#define LOCK_TCPIP_CORE() sys_lock_tcpip_core()
 void sys_unlock_tcpip_core(void);
-#define UNLOCK_TCPIP_CORE()        sys_unlock_tcpip_core()
+#define UNLOCK_TCPIP_CORE() sys_unlock_tcpip_core()
 #endif
 
 #endif /* LWIP_ARCH_SYS_ARCH_H */

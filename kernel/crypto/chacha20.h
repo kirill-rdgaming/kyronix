@@ -1,12 +1,12 @@
 #pragma once
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
-#define CHACHA20_KEY_SIZE   32
+#define CHACHA20_KEY_SIZE 32
 #define CHACHA20_NONCE_SIZE 12
 #define CHACHA20_BLOCK_SIZE 64
-#define CHACHA20_ROUNDS     20
+#define CHACHA20_ROUNDS 20
 
 struct chacha20_ctx {
     uint32_t state[16];

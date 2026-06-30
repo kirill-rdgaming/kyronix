@@ -38,16 +38,16 @@
 
 #include "lwip/opt.h"
 
-#if LWIP_IPV6  /* don't build if not configured for use in lwipopts.h */
+#if LWIP_IPV6 /* don't build if not configured for use in lwipopts.h */
 
 #include "ip6_route_table.h"
+#include "lwip/debug.h"
 #include "lwip/def.h"
-#include "lwip/mem.h"
-#include "lwip/netif.h"
 #include "lwip/ip6.h"
 #include "lwip/ip6_addr.h"
+#include "lwip/mem.h"
 #include "lwip/nd6.h"
-#include "lwip/debug.h"
+#include "lwip/netif.h"
 #include "lwip/stats.h"
 
 #include "string.h"
@@ -72,53 +72,50 @@ static struct ip6_route_entry static_route_table[LWIP_IPV6_NUM_ROUTE_ENTRIES];
  *         ERR_MEM if table is already full.
  *         ERR_ARG if passed argument is bad or route already exists in table.
  */
-err_t
-ip6_add_route_entry(const struct ip6_prefix *ip6_prefix, struct netif *netif, const ip6_addr_t *gateway, s8_t *idx)
-{
-  s8_t i = -1;
-  err_t retval = ERR_OK;
+err_t ip6_add_route_entry(const struct ip6_prefix *ip6_prefix, struct netif *netif,
+                          const ip6_addr_t *gateway, s8_t *idx) {
+    s8_t i = -1;
+    err_t retval = ERR_OK;
 
-  if (!ip6_prefix_valid(ip6_prefix->prefix_len) || (netif == NULL)) {
-    retval = ERR_ARG;
-    goto exit;
-  }
-
-  /* Check if an entry already exists with matching prefix; If so, replace it. */
-  for (i = 0; i < LWIP_IPV6_NUM_ROUTE_ENTRIES; i++) {
-    if ((ip6_prefix->prefix_len == static_route_table[i].prefix.prefix_len) &&
-        memcmp(&ip6_prefix->addr, &static_route_table[i].prefix.addr,
-               ip6_prefix->prefix_len / 8) == 0) {
-      /* Prefix matches; replace the netif with the one being added. */
-      goto insert;
+    if (!ip6_prefix_valid(ip6_prefix->prefix_len) || (netif == NULL)) {
+        retval = ERR_ARG;
+        goto exit;
     }
-  }
 
-  /* Check if the table is full */
-  if (static_route_table[LWIP_IPV6_NUM_ROUTE_ENTRIES - 1].netif != NULL) {
-    retval = ERR_MEM;
-    goto exit;
-  }
+    /* Check if an entry already exists with matching prefix; If so, replace it. */
+    for (i = 0; i < LWIP_IPV6_NUM_ROUTE_ENTRIES; i++) {
+        if ((ip6_prefix->prefix_len == static_route_table[i].prefix.prefix_len) &&
+            memcmp(&ip6_prefix->addr, &static_route_table[i].prefix.addr,
+                   ip6_prefix->prefix_len / 8) == 0) {
+            /* Prefix matches; replace the netif with the one being added. */
+            goto insert;
+        }
+    }
 
-  /* Shift all entries down the table until slot is found */
-  for (i = LWIP_IPV6_NUM_ROUTE_ENTRIES - 1;
-       i > 0 && (ip6_prefix->prefix_len > static_route_table[i - 1].prefix.prefix_len); i--) {
-    SMEMCPY(&static_route_table[i], &static_route_table[i - 1], sizeof(struct ip6_route_entry));
-  }
+    /* Check if the table is full */
+    if (static_route_table[LWIP_IPV6_NUM_ROUTE_ENTRIES - 1].netif != NULL) {
+        retval = ERR_MEM;
+        goto exit;
+    }
+
+    /* Shift all entries down the table until slot is found */
+    for (i = LWIP_IPV6_NUM_ROUTE_ENTRIES - 1;
+         i > 0 && (ip6_prefix->prefix_len > static_route_table[i - 1].prefix.prefix_len); i--) {
+        SMEMCPY(&static_route_table[i], &static_route_table[i - 1], sizeof(struct ip6_route_entry));
+    }
 
 insert:
-  /* Insert into the slot selected */
-  SMEMCPY(&static_route_table[i].prefix, ip6_prefix, sizeof(struct ip6_prefix));
-  static_route_table[i].netif = netif;
+    /* Insert into the slot selected */
+    SMEMCPY(&static_route_table[i].prefix, ip6_prefix, sizeof(struct ip6_prefix));
+    static_route_table[i].netif = netif;
 
-  /* Add gateway to route table */
-  static_route_table[i].gateway = gateway;
+    /* Add gateway to route table */
+    static_route_table[i].gateway = gateway;
 
-  if (idx != NULL) {
-    *idx = i;
-  }
+    if (idx != NULL) { *idx = i; }
 
 exit:
-  return retval;
+    return retval;
 }
 
 /**
@@ -126,35 +123,32 @@ exit:
  *
  * @param ip6_prefix the route prefix entry to delete.
  */
-void
-ip6_remove_route_entry(const struct ip6_prefix *ip6_prefix)
-{
-  int i, pos = -1;
+void ip6_remove_route_entry(const struct ip6_prefix *ip6_prefix) {
+    int i, pos = -1;
 
-  for (i = 0; i < LWIP_IPV6_NUM_ROUTE_ENTRIES; i++) {
-    /* compare prefix to find position to delete */
-    if (ip6_prefix->prefix_len == static_route_table[i].prefix.prefix_len &&
-        memcmp(&ip6_prefix->addr, &static_route_table[i].prefix.addr,
-               ip6_prefix->prefix_len / 8) == 0) {
-      pos = i;
-      break;
+    for (i = 0; i < LWIP_IPV6_NUM_ROUTE_ENTRIES; i++) {
+        /* compare prefix to find position to delete */
+        if (ip6_prefix->prefix_len == static_route_table[i].prefix.prefix_len &&
+            memcmp(&ip6_prefix->addr, &static_route_table[i].prefix.addr,
+                   ip6_prefix->prefix_len / 8) == 0) {
+            pos = i;
+            break;
+        }
     }
-  }
 
-  if (pos >= 0) {
-    /* Shift everything beyond pos one slot up */
-    for (i = pos; i < LWIP_IPV6_NUM_ROUTE_ENTRIES - 1; i++) {
-      SMEMCPY(&static_route_table[i], &static_route_table[i+1], sizeof(struct ip6_route_entry));
-      if (static_route_table[i].netif == NULL) {
-        break;
-      }
+    if (pos >= 0) {
+        /* Shift everything beyond pos one slot up */
+        for (i = pos; i < LWIP_IPV6_NUM_ROUTE_ENTRIES - 1; i++) {
+            SMEMCPY(&static_route_table[i], &static_route_table[i + 1],
+                    sizeof(struct ip6_route_entry));
+            if (static_route_table[i].netif == NULL) { break; }
+        }
+        /* Zero the remaining entries */
+        for (; i < LWIP_IPV6_NUM_ROUTE_ENTRIES; i++) {
+            ip6_addr_set_zero((&static_route_table[i].prefix.addr));
+            static_route_table[i].netif = NULL;
+        }
     }
-    /* Zero the remaining entries */
-    for (; i < LWIP_IPV6_NUM_ROUTE_ENTRIES; i++) {
-      ip6_addr_set_zero((&static_route_table[i].prefix.addr));
-      static_route_table[i].netif = NULL;
-    }
-  }
 }
 
 /**
@@ -166,21 +160,19 @@ ip6_remove_route_entry(const struct ip6_prefix *ip6_prefix)
  * @param ip6_dest_addr the destination address to match
  * @return the idx of the found route entry; -1 if not found.
  */
-s8_t
-ip6_find_route_entry(const ip6_addr_t *ip6_dest_addr)
-{
-  s8_t i, idx = -1;
+s8_t ip6_find_route_entry(const ip6_addr_t *ip6_dest_addr) {
+    s8_t i, idx = -1;
 
-  /* Search prefix in the sorted(decreasing order of prefix length) list */
-  for(i = 0; i < LWIP_IPV6_NUM_ROUTE_ENTRIES; i++) {
-    if (memcmp(ip6_dest_addr, &static_route_table[i].prefix.addr,
-        static_route_table[i].prefix.prefix_len / 8) == 0) {
-      idx = i;
-      break;
+    /* Search prefix in the sorted(decreasing order of prefix length) list */
+    for (i = 0; i < LWIP_IPV6_NUM_ROUTE_ENTRIES; i++) {
+        if (memcmp(ip6_dest_addr, &static_route_table[i].prefix.addr,
+                   static_route_table[i].prefix.prefix_len / 8) == 0) {
+            idx = i;
+            break;
+        }
     }
-  }
 
-  return idx;
+    return idx;
 }
 
 /**
@@ -191,21 +183,19 @@ ip6_find_route_entry(const ip6_addr_t *ip6_dest_addr)
  * @param dest the destination IPv6 address for which to find the route
  * @return the netif on which to send to reach dest
  */
-struct netif *
-ip6_static_route(const ip6_addr_t *src, const ip6_addr_t *dest)
-{
-  int i;
+struct netif *ip6_static_route(const ip6_addr_t *src, const ip6_addr_t *dest) {
+    int i;
 
-  LWIP_UNUSED_ARG(src);
+    LWIP_UNUSED_ARG(src);
 
-  /* Perform table lookup */
-  i = ip6_find_route_entry(dest);
+    /* Perform table lookup */
+    i = ip6_find_route_entry(dest);
 
-  if (i >= 0) {
-    return static_route_table[i].netif;
-  } else {
-    return NULL;
-  }
+    if (i >= 0) {
+        return static_route_table[i].netif;
+    } else {
+        return NULL;
+    }
 }
 
 /**
@@ -216,21 +206,17 @@ ip6_static_route(const ip6_addr_t *src, const ip6_addr_t *dest)
  * @param dest the destination IPv6 address
  * @return the ip6 address of the gateway to forward packet to
  */
-const ip6_addr_t *
-ip6_get_gateway(struct netif *netif, const ip6_addr_t *dest)
-{
-  const ip6_addr_t *ret_gw = NULL;
-  const int i = ip6_find_route_entry(dest);
+const ip6_addr_t *ip6_get_gateway(struct netif *netif, const ip6_addr_t *dest) {
+    const ip6_addr_t *ret_gw = NULL;
+    const int i = ip6_find_route_entry(dest);
 
-  LWIP_UNUSED_ARG(netif);
+    LWIP_UNUSED_ARG(netif);
 
-  if (i >= 0) {
-    if (static_route_table[i].gateway != NULL) {
-      ret_gw = static_route_table[i].gateway;
+    if (i >= 0) {
+        if (static_route_table[i].gateway != NULL) { ret_gw = static_route_table[i].gateway; }
     }
-  }
 
-  return ret_gw;
+    return ret_gw;
 }
 
 /**
@@ -239,10 +225,6 @@ ip6_get_gateway(struct netif *netif, const ip6_addr_t *dest)
  *
  * @return the top of the route table.
  */
-const struct ip6_route_entry *
-ip6_get_route_table(void)
-{
-    return static_route_table;
-}
+const struct ip6_route_entry *ip6_get_route_table(void) { return static_route_table; }
 
 #endif /* LWIP_IPV6 */

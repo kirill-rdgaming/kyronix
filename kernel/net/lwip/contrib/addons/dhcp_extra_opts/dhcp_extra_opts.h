@@ -28,7 +28,8 @@
  * To use these additional DHCP options, make sure this file is included in LWIP_HOOK_FILENAME
  * and define these hooks:
  *
- * #define LWIP_HOOK_DHCP_PARSE_OPTION(netif, dhcp, state, msg, msg_type, option, len, pbuf, offset)   \
+ * #define LWIP_HOOK_DHCP_PARSE_OPTION(netif, dhcp, state, msg, msg_type, option, len, pbuf, offset)
+ * \
  *         do {    LWIP_UNUSED_ARG(msg);                                           \
  *                 dhcp_parse_extra_opts(dhcp, state, option, len, pbuf, offset);  \
  *             } while(0)
@@ -55,7 +56,9 @@ struct netif;
 struct dhcp_msg;
 
 /* Internal hook functions */
-void dhcp_parse_extra_opts(struct dhcp *dhcp, uint8_t state, uint8_t option, uint8_t len, struct pbuf* p, uint16_t offset);
-void dhcp_append_extra_opts(struct netif *netif, uint8_t state, struct dhcp_msg *msg_out, uint16_t *options_out_len);
+void dhcp_parse_extra_opts(struct dhcp *dhcp, uint8_t state, uint8_t option, uint8_t len,
+                           struct pbuf *p, uint16_t offset);
+void dhcp_append_extra_opts(struct netif *netif, uint8_t state, struct dhcp_msg *msg_out,
+                            uint16_t *options_out_len);
 
 #endif /* LWIP_HDR_CONTRIB_ADDONS_DHCP_OPTS_H */

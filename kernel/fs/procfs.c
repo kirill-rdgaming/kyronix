@@ -103,7 +103,7 @@ static int64_t proc_memstats_read(vfs_node_t *n, char *buf, uint64_t len, uint64
     (void) n;
     uint64_t pa = pmm_alloc_total();
     uint64_t pf = pmm_free_total();
-    int64_t pd = (int64_t)(pa - pf);
+    int64_t pd = (int64_t) (pa - pf);
     int64_t hd = heap_alloc_delta();
     char tmp[256];
     int sz = snprintf(tmp, sizeof(tmp),
@@ -214,9 +214,8 @@ static int64_t proc_pids_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t o
         if (p->state == PROC_UNUSED) continue;
         if (!jail_can_see(g_current_proc, p)) continue;
         const char *name = p->exe_path[0] ? p->exe_path : "unknown";
-        int n = snprintf(tmp + pos, sizeof(tmp) - (uint64_t) pos,
-                         "%u %u %c %u %s\n",
-                         p->pid, p->ppid, proc_state_char(p), p->uid, name);
+        int n = snprintf(tmp + pos, sizeof(tmp) - (uint64_t) pos, "%u %u %c %u %s\n", p->pid,
+                         p->ppid, proc_state_char(p), p->uid, name);
         if (n < 0 || (uint64_t) pos + (uint64_t) n >= sizeof(tmp)) break;
         pos += n;
     }
@@ -279,27 +278,27 @@ static int64_t proc_self_status_read(vfs_node_t *n, char *buf, uint64_t len, uin
     int threads = 0;
     for (int i = 0; i < PROC_MAX; i++)
         if (g_proctable[i].state != PROC_UNUSED && g_proctable[i].space == p->space) threads++;
-    int sz = snprintf(tmp, sizeof(tmp),
-                      "Name:\t%s\n"
-                      "State:\t%c\n"
-                      "Tgid:\t%u\n"
-                      "Pid:\t%u\n"
-                      "PPid:\t%u\n"
-                      "Uid:\t%u\t%u\t%u\t%u\n"
-                      "Gid:\t%u\t%u\t%u\t%u\n"
-                      "FDSize:\t%d\n"
-                      "Threads:\t%d\n"
-                      "SigPnd:\t%016lx\n"
-                      "SigBlk:\t%016lx\n"
-                      "VmPeak:\t0 kB\n"
-                      "VmSize:\t0 kB\n"
-                      "VmRSS:\t%lu kB\n"
-                      "VmLeak:\t%ld kB\n",
-                      proc_name(p), proc_state_char(p), p->pid, p->pid, p->ppid, p->uid, p->euid,
-                      p->suid, p->fsuid, p->gid, p->egid, p->sgid, p->fsgid, VFS_FD_MAX,
-                      threads ? threads : 1, p->pending_sigs, p->sig_mask,
-                      (unsigned long)((p->pages_alloc * PAGE_SIZE) / 1024),
-                      (long)((int64_t)(p->pages_alloc - p->pages_freed) * (int64_t)(PAGE_SIZE / 1024)));
+    int sz = snprintf(
+        tmp, sizeof(tmp),
+        "Name:\t%s\n"
+        "State:\t%c\n"
+        "Tgid:\t%u\n"
+        "Pid:\t%u\n"
+        "PPid:\t%u\n"
+        "Uid:\t%u\t%u\t%u\t%u\n"
+        "Gid:\t%u\t%u\t%u\t%u\n"
+        "FDSize:\t%d\n"
+        "Threads:\t%d\n"
+        "SigPnd:\t%016lx\n"
+        "SigBlk:\t%016lx\n"
+        "VmPeak:\t0 kB\n"
+        "VmSize:\t0 kB\n"
+        "VmRSS:\t%lu kB\n"
+        "VmLeak:\t%ld kB\n",
+        proc_name(p), proc_state_char(p), p->pid, p->pid, p->ppid, p->uid, p->euid, p->suid,
+        p->fsuid, p->gid, p->egid, p->sgid, p->fsgid, VFS_FD_MAX, threads ? threads : 1,
+        p->pending_sigs, p->sig_mask, (unsigned long) ((p->pages_alloc * PAGE_SIZE) / 1024),
+        (long) ((int64_t) (p->pages_alloc - p->pages_freed) * (int64_t) (PAGE_SIZE / 1024)));
     return read_buf(buf, len, off, tmp, (uint64_t) sz);
 }
 

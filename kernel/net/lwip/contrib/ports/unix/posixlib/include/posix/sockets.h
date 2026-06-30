@@ -27,9 +27,9 @@
 #ifndef HURD_LWIP_POSIX_SOCKET_H
 #define HURD_LWIP_POSIX_SOCKET_H
 
-#include <sys/socket.h>
-#include <poll.h>
 #include <errno.h>
+#include <poll.h>
+#include <sys/socket.h>
 #include LWIP_SOCKET_EXTERNAL_HEADER_INET_H
 typedef size_t msg_iovlen_t;
 
@@ -38,31 +38,27 @@ extern "C" {
 #endif
 
 #ifdef _HAVE_SA_LEN
-#define HAVE_SA_LEN	_HAVE_SA_LEN
+#define HAVE_SA_LEN _HAVE_SA_LEN
 #else
-#define HAVE_SA_LEN	0
+#define HAVE_SA_LEN 0
 #endif /* _HAVE_SA_LEN */
 
 /* Address length safe read and write */
 #if HAVE_SA_LEN
-#define IP4ADDR_SOCKADDR_SET_LEN(sin) \
-      (sin)->sin_len = sizeof(struct sockaddr_in)
-#define IP6ADDR_SOCKADDR_SET_LEN(sin6) \
-      (sin6)->sin6_len = sizeof(struct sockaddr_in6)
-#define IPADDR_SOCKADDR_GET_LEN(addr) \
-      (addr)->sa.sa_len
+#define IP4ADDR_SOCKADDR_SET_LEN(sin) (sin)->sin_len = sizeof(struct sockaddr_in)
+#define IP6ADDR_SOCKADDR_SET_LEN(sin6) (sin6)->sin6_len = sizeof(struct sockaddr_in6)
+#define IPADDR_SOCKADDR_GET_LEN(addr) (addr)->sa.sa_len
 #else
 #define IP4ADDR_SOCKADDR_SET_LEN(addr)
 #define IP6ADDR_SOCKADDR_SET_LEN(addr)
-#define IPADDR_SOCKADDR_GET_LEN(addr) \
-      ((addr)->sa.sa_family == AF_INET ? sizeof(struct sockaddr_in) \
-        : ((addr)->sa.sa_family == AF_INET6 ? sizeof(struct sockaddr_in6) : 0))
+#define IPADDR_SOCKADDR_GET_LEN(addr)                                                              \
+    ((addr)->sa.sa_family == AF_INET ?                                                             \
+         sizeof(struct sockaddr_in) :                                                              \
+         ((addr)->sa.sa_family == AF_INET6 ? sizeof(struct sockaddr_in6) : 0))
 #endif /* HAVE_SA_LEN */
 
-#define SIN_ZERO_LEN	sizeof (struct sockaddr) - \
-                           __SOCKADDR_COMMON_SIZE - \
-                           sizeof (in_port_t) - \
-                           sizeof (struct in_addr)
+#define SIN_ZERO_LEN                                                                               \
+    sizeof(struct sockaddr) - __SOCKADDR_COMMON_SIZE - sizeof(in_port_t) - sizeof(struct in_addr)
 
 #if !defined IOV_MAX
 #define IOV_MAX 0xFFFF
@@ -78,7 +74,7 @@ extern "C" {
  */
 #define UDPLITE_SEND_CSCOV 0x01 /* sender checksum coverage */
 #define UDPLITE_RECV_CSCOV 0x02 /* minimal receiver checksum coverage */
-#endif /* LWIP_UDP && LWIP_UDPLITE*/
+#endif                          /* LWIP_UDP && LWIP_UDPLITE*/
 
 #if 0
 void lwip_socket_thread_init(void); /* LWIP_NETCONN_SEM_PER_THREAD==1: initialize thread-local semaphore */
@@ -122,25 +118,25 @@ int lwip_inet_pton(int af, const char *src, void *dst);
 
 /* Unsupported identifiers */
 #ifndef SO_NO_CHECK
-#define SO_NO_CHECK         0xFF
+#define SO_NO_CHECK 0xFF
 #endif
 #ifndef SO_BINDTODEVICE
-#define SO_BINDTODEVICE     0xFE
+#define SO_BINDTODEVICE 0xFE
 #endif
 #ifndef MSG_MORE
-#define MSG_MORE            0x0
+#define MSG_MORE 0x0
 #endif
 #ifndef TCP_KEEPALIVE
-#define TCP_KEEPALIVE       0xFF
+#define TCP_KEEPALIVE 0xFF
 #endif
 #ifndef TCP_KEEPIDLE
-#define TCP_KEEPIDLE        0xFE
+#define TCP_KEEPIDLE 0xFE
 #endif
 #ifndef TCP_KEEPINTVL
-#define TCP_KEEPINTVL       0xFD
+#define TCP_KEEPINTVL 0xFD
 #endif
 #ifndef TCP_KEEPCNT
-#define TCP_KEEPCNT         0xFC
+#define TCP_KEEPCNT 0xFC
 #endif
 
 #ifdef __cplusplus

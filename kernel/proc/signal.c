@@ -35,8 +35,8 @@ void proc_send_signal(struct proc *p, int sig) {
 static void setup_sigframe(proc_t *p, int sig, syscall_frame_t *f) {
     uint64_t user_rsp = cpu_get_user_rsp();
 
-    bool use_alt = (p->sig_actions[sig - 1].sa_flags & SA_ONSTACK) && p->sig_altstack_size &&
-                   !p->on_sigstack;
+    bool use_alt =
+        (p->sig_actions[sig - 1].sa_flags & SA_ONSTACK) && p->sig_altstack_size && !p->on_sigstack;
     uint64_t base = use_alt ? p->sig_altstack_sp + p->sig_altstack_size : user_rsp - 128;
 
     uint64_t sp = base - sizeof(rt_sigframe_t);

@@ -57,7 +57,7 @@ void gdt_init(void) {
     uint64_t base = (uint64_t) &g_tss;
     uint32_t limit = (uint32_t) (sizeof(tss_t) - 1);
 
-    g_gdt.tss = (tss_desc_t) {
+    g_gdt.tss = (tss_desc_t){
         .limit_lo = (uint16_t) (limit & 0xFFFF),
         .base_lo = (uint16_t) (base & 0xFFFF),
         .base_mid = (uint8_t) ((base >> 16) & 0xFF),

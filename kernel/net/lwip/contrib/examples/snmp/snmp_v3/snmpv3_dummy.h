@@ -36,8 +36,8 @@
 #define LWIP_HDR_APPS_SNMP_V3_DUMMY_H
 
 #include "lwip/apps/snmp_opts.h"
-#include "lwip/err.h"
 #include "lwip/apps/snmpv3.h"
+#include "lwip/err.h"
 
 #if LWIP_SNMP && LWIP_SNMP_V3
 

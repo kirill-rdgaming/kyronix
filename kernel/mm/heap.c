@@ -163,9 +163,7 @@ void *krealloc(void *ptr, uint64_t new_size) {
     return new_ptr;
 }
 
-int64_t heap_alloc_delta(void) {
-    return (int64_t)(g_kmalloc_total - g_kfree_total);
-}
+int64_t heap_alloc_delta(void) { return (int64_t) (g_kmalloc_total - g_kfree_total); }
 
 void heap_stats(void) {
     uint64_t free_bytes = 0, used_bytes = 0, nblocks = 0;

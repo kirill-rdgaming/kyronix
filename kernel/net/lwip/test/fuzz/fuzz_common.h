@@ -32,28 +32,28 @@
 #ifndef LWIP_HDR_FUZZ_COMMON_H
 #define LWIP_HDR_FUZZ_COMMON_H
 
-#include "lwip/opt.h"
 #include "lwip/arch.h"
+#include "lwip/opt.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 enum lwip_fuzz_type {
-  LWIP_FUZZ_SINGLE = 0,
-  LWIP_FUZZ_MULTIPACKET = 1,
-  LWIP_FUZZ_MULTIPACKET_TIME = 2
+    LWIP_FUZZ_SINGLE = 0,
+    LWIP_FUZZ_MULTIPACKET = 1,
+    LWIP_FUZZ_MULTIPACKET_TIME = 2
 };
 
 /* bitmask of what to test: */
-#define LWIP_FUZZ_DEFAULT    0x01
-#define LWIP_FUZZ_STATICARP  0x02
+#define LWIP_FUZZ_DEFAULT 0x01
+#define LWIP_FUZZ_STATICARP 0x02
 #define LWIP_FUZZ_TCP_SERVER 0x04
 #define LWIP_FUZZ_TCP_CLIENT 0x08
 #define LWIP_FUZZ_UDP_SERVER 0x10
 #define LWIP_FUZZ_UDP_CLIENT 0x20
 
-int lwip_fuzztest(int argc, char** argv, enum lwip_fuzz_type type, u32_t test_apps);
+int lwip_fuzztest(int argc, char **argv, enum lwip_fuzz_type type, u32_t test_apps);
 
 #ifdef __cplusplus
 }

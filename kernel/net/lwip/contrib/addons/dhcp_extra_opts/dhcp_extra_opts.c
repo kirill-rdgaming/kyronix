@@ -27,65 +27,66 @@
  */
 #include <string.h>
 
-#include "lwip/prot/dhcp.h"
 #include "lwip/dhcp.h"
 #include "lwip/netif.h"
+#include "lwip/prot/dhcp.h"
 #include "lwip/prot/iana.h"
 
-
-void dhcp_parse_extra_opts(struct dhcp *dhcp, uint8_t state, uint8_t option, uint8_t len, struct pbuf* p, uint16_t offset)
-{
-  LWIP_UNUSED_ARG(dhcp);
-  LWIP_UNUSED_ARG(state);
-  LWIP_UNUSED_ARG(option);
-  LWIP_UNUSED_ARG(len);
-  LWIP_UNUSED_ARG(p);
-  LWIP_UNUSED_ARG(offset);
+void dhcp_parse_extra_opts(struct dhcp *dhcp, uint8_t state, uint8_t option, uint8_t len,
+                           struct pbuf *p, uint16_t offset) {
+    LWIP_UNUSED_ARG(dhcp);
+    LWIP_UNUSED_ARG(state);
+    LWIP_UNUSED_ARG(option);
+    LWIP_UNUSED_ARG(len);
+    LWIP_UNUSED_ARG(p);
+    LWIP_UNUSED_ARG(offset);
 #if LWIP_DHCP_ENABLE_MTU_UPDATE
-  if ((option == DHCP_OPTION_MTU) &&
-     (state == DHCP_STATE_REBOOTING || state == DHCP_STATE_REBINDING ||
-      state == DHCP_STATE_RENEWING  || state == DHCP_STATE_REQUESTING)) {
-    u32_t mtu = 0;
-    struct netif *netif;
-    LWIP_ERROR("dhcp_parse_extra_opts(): MTU option's len != 2", len == 2, return;);
-    LWIP_ERROR("dhcp_parse_extra_opts(): extracting MTU option failed",
-               pbuf_copy_partial(p, &mtu, 2, offset) == 2, return;);
-    mtu = lwip_htons((u16_t)mtu);
-    NETIF_FOREACH(netif) {
-      /* find the netif related to this dhcp */
-      if (dhcp == netif_dhcp_data(netif)) {
-        if (mtu < netif->mtu) {
-          netif->mtu = mtu;
-          LWIP_DEBUGF(DHCP_DEBUG | LWIP_DBG_TRACE, ("dhcp_parse_extra_opts(): Negotiated netif MTU is %d\n", netif->mtu));
+    if ((option == DHCP_OPTION_MTU) &&
+        (state == DHCP_STATE_REBOOTING || state == DHCP_STATE_REBINDING ||
+         state == DHCP_STATE_RENEWING || state == DHCP_STATE_REQUESTING)) {
+        u32_t mtu = 0;
+        struct netif *netif;
+        LWIP_ERROR("dhcp_parse_extra_opts(): MTU option's len != 2", len == 2, return;);
+        LWIP_ERROR("dhcp_parse_extra_opts(): extracting MTU option failed",
+                   pbuf_copy_partial(p, &mtu, 2, offset) == 2, return;);
+        mtu = lwip_htons((u16_t) mtu);
+        NETIF_FOREACH(netif) {
+            /* find the netif related to this dhcp */
+            if (dhcp == netif_dhcp_data(netif)) {
+                if (mtu < netif->mtu) {
+                    netif->mtu = mtu;
+                    LWIP_DEBUGF(
+                        DHCP_DEBUG | LWIP_DBG_TRACE,
+                        ("dhcp_parse_extra_opts(): Negotiated netif MTU is %d\n", netif->mtu));
+                }
+                return;
+            }
         }
-        return;
-      }
-    }
-  } /* DHCP_OPTION_MTU */
+    } /* DHCP_OPTION_MTU */
 #endif /* LWIP_DHCP_ENABLE_MTU_UPDATE */
 }
 
-void dhcp_append_extra_opts(struct netif *netif, uint8_t state, struct dhcp_msg *msg_out, uint16_t *options_out_len)
-{
-  LWIP_UNUSED_ARG(netif);
-  LWIP_UNUSED_ARG(state);
-  LWIP_UNUSED_ARG(msg_out);
-  LWIP_UNUSED_ARG(options_out_len);
+void dhcp_append_extra_opts(struct netif *netif, uint8_t state, struct dhcp_msg *msg_out,
+                            uint16_t *options_out_len) {
+    LWIP_UNUSED_ARG(netif);
+    LWIP_UNUSED_ARG(state);
+    LWIP_UNUSED_ARG(msg_out);
+    LWIP_UNUSED_ARG(options_out_len);
 #if LWIP_DHCP_ENABLE_CLIENT_ID
-  if (state == DHCP_STATE_RENEWING || state == DHCP_STATE_REBINDING ||
-      state == DHCP_STATE_REBOOTING || state == DHCP_STATE_OFF ||
-      state == DHCP_STATE_REQUESTING || state == DHCP_STATE_BACKING_OFF || state == DHCP_STATE_SELECTING) {
-    size_t i;
-    u8_t *options = msg_out->options + *options_out_len;
-    LWIP_ERROR("dhcp_append(client_id): options_out_len + 3 + netif->hwaddr_len <= DHCP_OPTIONS_LEN",
-               *options_out_len + 3U + netif->hwaddr_len <= DHCP_OPTIONS_LEN, return;);
-    *options_out_len = *options_out_len + netif->hwaddr_len + 3;
-    *options++ = DHCP_OPTION_CLIENT_ID;
-    *options++ = netif->hwaddr_len + 1; /* option size */
-    *options++ = LWIP_IANA_HWTYPE_ETHERNET;
-    for (i = 0; i < netif->hwaddr_len; i++) {
-      *options++ = netif->hwaddr[i];
+    if (state == DHCP_STATE_RENEWING || state == DHCP_STATE_REBINDING ||
+        state == DHCP_STATE_REBOOTING || state == DHCP_STATE_OFF ||
+        state == DHCP_STATE_REQUESTING || state == DHCP_STATE_BACKING_OFF ||
+        state == DHCP_STATE_SELECTING) {
+        size_t i;
+        u8_t *options = msg_out->options + *options_out_len;
+        LWIP_ERROR(
+            "dhcp_append(client_id): options_out_len + 3 + netif->hwaddr_len <= DHCP_OPTIONS_LEN",
+            *options_out_len + 3U + netif->hwaddr_len <= DHCP_OPTIONS_LEN, return;);
+        *options_out_len = *options_out_len + netif->hwaddr_len + 3;
+        *options++ = DHCP_OPTION_CLIENT_ID;
+        *options++ = netif->hwaddr_len + 1; /* option size */
+        *options++ = LWIP_IANA_HWTYPE_ETHERNET;
+        for (i = 0; i < netif->hwaddr_len; i++) { *options++ = netif->hwaddr[i]; }
     }
-  }
 #endif /* LWIP_DHCP_ENABLE_CLIENT_ID */
 }

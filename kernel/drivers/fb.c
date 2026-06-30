@@ -150,9 +150,8 @@ static const uint32_t ansi_bg[8] = {
 };
 
 static const uint32_t ansi_bright[8] = {
-    RGB(128, 128, 128), RGB(255, 85, 85),   RGB(150, 255, 85),
-    RGB(255, 255, 85),  RGB(85, 170, 255),  RGB(215, 150, 255),
-    RGB(85, 255, 255),  RGB(255, 255, 255),
+    RGB(128, 128, 128), RGB(255, 85, 85),   RGB(150, 255, 85), RGB(255, 255, 85),
+    RGB(85, 170, 255),  RGB(215, 150, 255), RGB(85, 255, 255), RGB(255, 255, 255),
 };
 
 static uint32_t ansi_256(int idx) {
@@ -214,8 +213,10 @@ static void fb_sgr(void) {
                     g_fb.fg = ansi_256(g_esc_params[i]);
                 } else if (st == 2 && i + 3 <= g_esc_np) {
                     i++;
-                    int r = g_esc_params[i]; i++;
-                    int gv = g_esc_params[i]; i++;
+                    int r = g_esc_params[i];
+                    i++;
+                    int gv = g_esc_params[i];
+                    i++;
                     int b = g_esc_params[i];
                     g_fb.fg = RGB(r & 0xFF, gv & 0xFF, b & 0xFF);
                 }
@@ -236,8 +237,10 @@ static void fb_sgr(void) {
                     g_fb.bg = ansi_256(g_esc_params[i]);
                 } else if (st == 2 && i + 3 <= g_esc_np) {
                     i++;
-                    int r = g_esc_params[i]; i++;
-                    int gv = g_esc_params[i]; i++;
+                    int r = g_esc_params[i];
+                    i++;
+                    int gv = g_esc_params[i];
+                    i++;
                     int b = g_esc_params[i];
                     g_fb.bg = RGB(r & 0xFF, gv & 0xFF, b & 0xFF);
                 }

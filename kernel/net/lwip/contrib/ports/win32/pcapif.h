@@ -19,10 +19,10 @@ extern "C" {
 
 struct netif;
 
-err_t pcapif_init    (struct netif *netif);
-void  pcapif_shutdown(struct netif *netif);
+err_t pcapif_init(struct netif *netif);
+void pcapif_shutdown(struct netif *netif);
 #if !PCAPIF_RX_USE_THREAD
-void  pcapif_poll    (struct netif *netif);
+void pcapif_poll(struct netif *netif);
 #endif /* !PCAPIF_RX_USE_THREAD */
 
 #ifdef __cplusplus

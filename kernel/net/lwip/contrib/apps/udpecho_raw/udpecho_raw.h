@@ -4,7 +4,8 @@
  *
  * Based on examples provided by
  * Iwan Budi Kusnanto <ibk@labhijau.net> (https://gist.github.com/iwanbk/1399729)
- * Juri Haberland <juri@sapienti-sat.org> (https://lists.gnu.org/archive/html/lwip-users/2007-06/msg00078.html)
+ * Juri Haberland <juri@sapienti-sat.org>
+ * (https://lists.gnu.org/archive/html/lwip-users/2007-06/msg00078.html)
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:

@@ -75,19 +75,20 @@ struct altcp_tls_config *altcp_tls_create_config_server(u8_t cert_count);
 /** @ingroup altcp_tls
  * Add a certificate to an ALTCP_TLS server configuration handle
  */
-err_t altcp_tls_config_server_add_privkey_cert(struct altcp_tls_config *config,
-      const u8_t *privkey, size_t privkey_len,
-      const u8_t *privkey_pass, size_t privkey_pass_len,
-      const u8_t *cert, size_t cert_len);
+err_t altcp_tls_config_server_add_privkey_cert(struct altcp_tls_config *config, const u8_t *privkey,
+                                               size_t privkey_len, const u8_t *privkey_pass,
+                                               size_t privkey_pass_len, const u8_t *cert,
+                                               size_t cert_len);
 
 /** @ingroup altcp_tls
  * Create an ALTCP_TLS server configuration handle with one certificate
  * (short version of calling @ref altcp_tls_create_config_server and
  * @ref altcp_tls_config_server_add_privkey_cert)
  */
-struct altcp_tls_config *altcp_tls_create_config_server_privkey_cert(const u8_t *privkey, size_t privkey_len,
-                            const u8_t *privkey_pass, size_t privkey_pass_len,
-                            const u8_t *cert, size_t cert_len);
+struct altcp_tls_config *
+altcp_tls_create_config_server_privkey_cert(const u8_t *privkey, size_t privkey_len,
+                                            const u8_t *privkey_pass, size_t privkey_pass_len,
+                                            const u8_t *cert, size_t cert_len);
 
 /** @ingroup altcp_tls
  * Create an ALTCP_TLS client configuration handle
@@ -97,9 +98,10 @@ struct altcp_tls_config *altcp_tls_create_config_client(const u8_t *cert, size_t
 /** @ingroup altcp_tls
  * Create an ALTCP_TLS client configuration handle with two-way server/client authentication
  */
-struct altcp_tls_config *altcp_tls_create_config_client_2wayauth(const u8_t *ca, size_t ca_len, const u8_t *privkey, size_t privkey_len,
-                            const u8_t *privkey_pass, size_t privkey_pass_len,
-                            const u8_t *cert, size_t cert_len);
+struct altcp_tls_config *
+altcp_tls_create_config_client_2wayauth(const u8_t *ca, size_t ca_len, const u8_t *privkey,
+                                        size_t privkey_len, const u8_t *privkey_pass,
+                                        size_t privkey_pass_len, const u8_t *cert, size_t cert_len);
 
 /** @ingroup altcp_tls
  * Configure ALPN TLS extension
@@ -168,9 +170,9 @@ struct altcp_tls_session
 void altcp_tls_init_session(struct altcp_tls_session *dest);
 
 /** @ingroup altcp_tls
- * Save current connected session to reuse it later. Should be called after altcp_connect() succeeded.
- * Return error if saving session fail.
- * Real type depends on port (e.g. mbedtls use mbedtls_ssl_session)
+ * Save current connected session to reuse it later. Should be called after altcp_connect()
+ * succeeded. Return error if saving session fail. Real type depends on port (e.g. mbedtls use
+ * mbedtls_ssl_session)
  */
 err_t altcp_tls_get_session(struct altcp_pcb *conn, struct altcp_tls_session *dest);
 

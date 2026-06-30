@@ -30,16 +30,16 @@
 #ifndef LWIP_HDR_CONTRIB_ADDONS_TCP_ISN_H
 #define LWIP_HDR_CONTRIB_ADDONS_TCP_ISN_H
 
-#include "lwip/opt.h"
 #include "lwip/ip_addr.h"
+#include "lwip/opt.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void lwip_init_tcp_isn(u32_t boot_time, const u8_t *secret_16_bytes);
-u32_t lwip_hook_tcp_isn(const ip_addr_t *local_ip, u16_t local_port,
-                        const ip_addr_t *remote_ip, u16_t remote_port);
+u32_t lwip_hook_tcp_isn(const ip_addr_t *local_ip, u16_t local_port, const ip_addr_t *remote_ip,
+                        u16_t remote_port);
 
 #ifdef __cplusplus
 }

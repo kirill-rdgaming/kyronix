@@ -33,11 +33,12 @@
 #define LWIP_ARCH_CC_H
 
 #ifdef _MSC_VER
-#pragma warning (disable: 4127) /* conditional expression is constant */
-#pragma warning (disable: 4996) /* 'strncpy' was declared deprecated */
-#pragma warning (disable: 4103) /* structure packing changed by including file */
-#pragma warning (disable: 4820) /* 'x' bytes padding added after data member 'y' */
-#pragma warning (disable: 4711) /* The compiler performed inlining on the given function, although it was not marked for inlining */
+#pragma warning(disable : 4127) /* conditional expression is constant */
+#pragma warning(disable : 4996) /* 'strncpy' was declared deprecated */
+#pragma warning(disable : 4103) /* structure packing changed by including file */
+#pragma warning(disable : 4820) /* 'x' bytes padding added after data member 'y' */
+#pragma warning(disable : 4711) /* The compiler performed inlining on the given function, although \
+                                   it was not marked for inlining */
 #endif
 
 #ifdef _MSC_VER
@@ -46,9 +47,9 @@
 #else
 #define LWIP_PROVIDE_ERRNO /* provide errno for MSVC pre-2017 */
 #endif
-#else /* _MSC_VER */
+#else                      /* _MSC_VER */
 #define LWIP_PROVIDE_ERRNO /* provide errno for non-MSVC */
-#endif /* _MSC_VER */
+#endif                     /* _MSC_VER */
 
 #ifdef __GNUC__
 #define LWIP_TIMEVAL_PRIVATE 0
@@ -72,7 +73,7 @@ typedef int sys_prot_t;
 #define LWIP_NO_INTTYPES_H 1
 
 /* Define (sn)printf formatters for these lwIP types */
-#define X8_F  "02x"
+#define X8_F "02x"
 #define U16_F "hu"
 #define U32_F "lu"
 #define S32_F "ld"
@@ -90,29 +91,34 @@ typedef int sys_prot_t;
 /* Compiler hints for packing structures */
 #define PACK_STRUCT_USE_INCLUDES
 
-#define LWIP_ERROR(message, expression, handler) do { if (!(expression)) { \
-  LWIP_PLATFORM_DIAG(("Assertion \"%s\" failed at line %d in %s\n", message, __LINE__, __FILE__)); \
-  handler;} } while(0)
+#define LWIP_ERROR(message, expression, handler)                                                   \
+    do {                                                                                           \
+        if (!(expression)) {                                                                       \
+            LWIP_PLATFORM_DIAG(                                                                    \
+                ("Assertion \"%s\" failed at line %d in %s\n", message, __LINE__, __FILE__));      \
+            handler;                                                                               \
+        }                                                                                          \
+    } while (0)
 
 #ifdef _MSC_VER
 /* C runtime functions redefined */
 #if _MSC_VER < 1910
 #define snprintf _snprintf
 #endif
-#define strdup   _strdup
+#define strdup _strdup
 #endif
 
 /* Define an example for LWIP_PLATFORM_DIAG: since this uses varargs and the old
-* C standard lwIP targets does not support this in macros, we have extra brackets
-* around the arguments, which are left out in the following macro definition:
-*/
+ * C standard lwIP targets does not support this in macros, we have extra brackets
+ * around the arguments, which are left out in the following macro definition:
+ */
 #if !defined(LWIP_TESTMODE) || !LWIP_TESTMODE
 void lwip_win32_platform_diag(const char *format, ...);
 #define LWIP_PLATFORM_DIAG(x) lwip_win32_platform_diag x
 #endif
 
 extern unsigned int lwip_port_rand(void);
-#define LWIP_RAND() ((uint32_t)lwip_port_rand())
+#define LWIP_RAND() ((uint32_t) lwip_port_rand())
 
 #define PPP_INCLUDE_SETTINGS_HEADER
 

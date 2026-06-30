@@ -61,7 +61,7 @@ extern "C" {
 #define LWIP_ERRNO_INCLUDE <errno.h>
 
 #if defined(LWIP_UNIX_LINUX) || defined(LWIP_UNIX_HURD) || defined(LWIP_UNIX_KFREEBSD)
-#define LWIP_ERRNO_STDINCLUDE	1
+#define LWIP_ERRNO_STDINCLUDE 1
 #endif
 
 extern unsigned int lwip_port_rand(void);
@@ -69,8 +69,10 @@ extern unsigned int lwip_port_rand(void);
 
 /* different handling for unit test, normally not needed */
 #ifdef LWIP_NOASSERT_ON_ERROR
-#define LWIP_ERROR(message, expression, handler) do { if (!(expression)) { \
-  handler;}} while(0)
+#define LWIP_ERROR(message, expression, handler)                                                   \
+    do {                                                                                           \
+        if (!(expression)) { handler; }                                                            \
+    } while (0)
 #endif
 
 #if defined(LWIP_UNIX_ANDROID) && defined(FD_SET)
@@ -87,7 +89,7 @@ typedef __kernel_fd_set fd_set;
 
 struct sio_status_s;
 typedef struct sio_status_s sio_status_t;
-#define sio_fd_t sio_status_t*
+#define sio_fd_t sio_status_t *
 #define __sio_fd_t_defined
 
 typedef unsigned int sys_prot_t;

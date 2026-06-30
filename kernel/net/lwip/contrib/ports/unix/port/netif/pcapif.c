@@ -30,21 +30,21 @@
  *
  */
 
-#ifndef linux  /* Apparently, this doesn't work under Linux. */
+#ifndef linux /* Apparently, this doesn't work under Linux. */
 
 #include "lwip/debug.h"
 
+#include <arpa/inet.h>
 #include <fcntl.h>
-#include <stdlib.h>
+#include <netinet/in.h>
 #include <stdio.h>
-#include <unistd.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/uio.h>
-#include <sys/socket.h>
 #include <sys/un.h>
-#include <sys/stat.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include <unistd.h>
 
 #include <pcap.h>
 
@@ -59,149 +59,130 @@
 
 #include "lwip/ip.h"
 
-
 struct pcapif {
-  pcap_t *pd;
-  sys_sem_t sem;
-  u8_t pkt[2048];
-  u32_t len;
-  u32_t lasttime;
-  struct pbuf *p;
-  struct eth_addr *ethaddr;
+    pcap_t *pd;
+    sys_sem_t sem;
+    u8_t pkt[2048];
+    u32_t len;
+    u32_t lasttime;
+    struct pbuf *p;
+    struct eth_addr *ethaddr;
 };
 
 static char errbuf[PCAP_ERRBUF_SIZE];
 
 /*-----------------------------------------------------------------------------------*/
-static err_t
-pcapif_output(struct netif *netif, struct pbuf *p,
-	      ip_addr_t *ipaddr)
-{
-  return ERR_OK;
+static err_t pcapif_output(struct netif *netif, struct pbuf *p, ip_addr_t *ipaddr) {
+    return ERR_OK;
 }
 /*-----------------------------------------------------------------------------------*/
-static void
-timeout(void *arg)
-{
-  struct netif *netif;
-  struct pcapif *pcapif;
-  struct pbuf *p;
-  struct eth_hdr *ethhdr;
+static void timeout(void *arg) {
+    struct netif *netif;
+    struct pcapif *pcapif;
+    struct pbuf *p;
+    struct eth_hdr *ethhdr;
 
-  netif = (struct netif *)arg;
-  pcapif = netif->state;
-  ethhdr = (struct eth_hdr *)pcapif->pkt;
+    netif = (struct netif *) arg;
+    pcapif = netif->state;
+    ethhdr = (struct eth_hdr *) pcapif->pkt;
 
+    if (lwip_htons(ethhdr->type) != ETHTYPE_IP || ip_lookup(pcapif->pkt + 14, netif)) {
 
-  if (lwip_htons(ethhdr->type) != ETHTYPE_IP ||
-     ip_lookup(pcapif->pkt + 14, netif)) {
+        /* We allocate a pbuf chain of pbufs from the pool. */
+        p = pbuf_alloc(PBUF_LINK, pcapif->len, PBUF_POOL);
 
-    /* We allocate a pbuf chain of pbufs from the pool. */
-    p = pbuf_alloc(PBUF_LINK, pcapif->len, PBUF_POOL);
+        if (p != NULL) {
+            pbuf_take(p, pcapif->pkt, pcapif->len);
 
-    if (p != NULL) {
-      pbuf_take(p, pcapif->pkt, pcapif->len);
-
-      ethhdr = p->payload;
-      switch (lwip_htons(ethhdr->type)) {
-      /* IP or ARP packet? */
-      case ETHTYPE_IP:
-      case ETHTYPE_ARP:
+            ethhdr = p->payload;
+            switch (lwip_htons(ethhdr->type)) {
+            /* IP or ARP packet? */
+            case ETHTYPE_IP:
+            case ETHTYPE_ARP:
 #if PPPOE_SUPPORT
-      /* PPPoE packet? */
-      case ETHTYPE_PPPOEDISC:
-      case ETHTYPE_PPPOE:
+            /* PPPoE packet? */
+            case ETHTYPE_PPPOEDISC:
+            case ETHTYPE_PPPOE:
 #endif /* PPPOE_SUPPORT */
-        /* full packet send to tcpip_thread to process */
-        if (netif->input(p, netif) != ERR_OK) {
-          LWIP_DEBUGF(NETIF_DEBUG, ("ethernetif_input: IP input error\n"));
-          pbuf_free(p);
-          p = NULL;
+                /* full packet send to tcpip_thread to process */
+                if (netif->input(p, netif) != ERR_OK) {
+                    LWIP_DEBUGF(NETIF_DEBUG, ("ethernetif_input: IP input error\n"));
+                    pbuf_free(p);
+                    p = NULL;
+                }
+                break;
+            default:
+                pbuf_free(p);
+                break;
+            }
         }
-        break;
-      default:
-        pbuf_free(p);
-        break;
-      }
+    } else {
+        printf("ip_lookup dropped\n");
     }
-  } else {
-    printf("ip_lookup dropped\n");
-  }
 
-  sys_sem_signal(&pcapif->sem);
+    sys_sem_signal(&pcapif->sem);
 }
 /*-----------------------------------------------------------------------------------*/
-static void
-callback(u_char *arg, const struct pcap_pkthdr *hdr, const u_char *pkt)
-{
-  struct netif *netif;
-  struct pcapif *pcapif;
-  u32_t time, lasttime;
+static void callback(u_char *arg, const struct pcap_pkthdr *hdr, const u_char *pkt) {
+    struct netif *netif;
+    struct pcapif *pcapif;
+    u32_t time, lasttime;
 
-  netif = (struct netif *)arg;
-  pcapif = netif->state;
+    netif = (struct netif *) arg;
+    pcapif = netif->state;
 
-  pcapif->len = hdr->len;
+    pcapif->len = hdr->len;
 
-  bcopy(pkt, pcapif->pkt, hdr->len);
+    bcopy(pkt, pcapif->pkt, hdr->len);
 
-  time = hdr->ts.tv_sec * 1000 + hdr->ts.tv_usec / 1000;
+    time = hdr->ts.tv_sec * 1000 + hdr->ts.tv_usec / 1000;
 
-  lasttime = pcapif->lasttime;
-  pcapif->lasttime = time;
+    lasttime = pcapif->lasttime;
+    pcapif->lasttime = time;
 
-
-  if (lasttime == 0) {
-    sys_timeout(1000, timeout, netif);
-  } else {
-    sys_timeout(time - lasttime, timeout, netif);
-  }
-}
-/*-----------------------------------------------------------------------------------*/
-static void
-pcapif_thread(void *arg)
-{
-  struct netif *netif;
-  struct pcapif *pcapif;
-  netif = arg;
-  pcapif = netif->state;
-
-  while (1) {
-    pcap_loop(pcapif->pd, 1, callback, (u_char *)netif);
-    sys_sem_wait(&pcapif->sem);
-    if (pcapif->p != NULL) {
-      netif->input(pcapif->p, netif);
+    if (lasttime == 0) {
+        sys_timeout(1000, timeout, netif);
+    } else {
+        sys_timeout(time - lasttime, timeout, netif);
     }
-  }
 }
 /*-----------------------------------------------------------------------------------*/
-err_t
-pcapif_init(struct netif *netif)
-{
-  struct pcapif *p;
+static void pcapif_thread(void *arg) {
+    struct netif *netif;
+    struct pcapif *pcapif;
+    netif = arg;
+    pcapif = netif->state;
 
-  p = malloc(sizeof(struct pcapif));
-  if (p == NULL)
-      return ERR_MEM;
-  netif->state = p;
-  netif->name[0] = 'p';
-  netif->name[1] = 'c';
-  netif->output = pcapif_output;
+    while (1) {
+        pcap_loop(pcapif->pd, 1, callback, (u_char *) netif);
+        sys_sem_wait(&pcapif->sem);
+        if (pcapif->p != NULL) { netif->input(pcapif->p, netif); }
+    }
+}
+/*-----------------------------------------------------------------------------------*/
+err_t pcapif_init(struct netif *netif) {
+    struct pcapif *p;
 
-  p->pd = pcap_open_offline("pcapdump", errbuf);
-  if (p->pd == NULL) {
-    printf("pcapif_init: failed %s\n", errbuf);
-    return ERR_IF;
-  }
+    p = malloc(sizeof(struct pcapif));
+    if (p == NULL) return ERR_MEM;
+    netif->state = p;
+    netif->name[0] = 'p';
+    netif->name[1] = 'c';
+    netif->output = pcapif_output;
 
-  if(sys_sem_new(&p->sem, 0) != ERR_OK) {
-    LWIP_ASSERT("Failed to create semaphore", 0);
-  }
-  p->p = NULL;
-  p->lasttime = 0;
+    p->pd = pcap_open_offline("pcapdump", errbuf);
+    if (p->pd == NULL) {
+        printf("pcapif_init: failed %s\n", errbuf);
+        return ERR_IF;
+    }
 
-  sys_thread_new("pcapif_thread", pcapif_thread, netif, DEFAULT_THREAD_STACKSIZE, DEFAULT_THREAD_PRIO);
-  return ERR_OK;
+    if (sys_sem_new(&p->sem, 0) != ERR_OK) { LWIP_ASSERT("Failed to create semaphore", 0); }
+    p->p = NULL;
+    p->lasttime = 0;
+
+    sys_thread_new("pcapif_thread", pcapif_thread, netif, DEFAULT_THREAD_STACKSIZE,
+                   DEFAULT_THREAD_PRIO);
+    return ERR_OK;
 }
 /*-----------------------------------------------------------------------------------*/
 #endif /* linux */

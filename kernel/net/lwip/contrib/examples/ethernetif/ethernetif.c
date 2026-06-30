@@ -48,12 +48,12 @@
 #if 0 /* don't build, this is only a skeleton, see previous comment */
 
 #include "lwip/def.h"
+#include "lwip/etharp.h"
+#include "lwip/ethip6.h"
 #include "lwip/mem.h"
 #include "lwip/pbuf.h"
-#include "lwip/stats.h"
 #include "lwip/snmp.h"
-#include "lwip/ethip6.h"
-#include "lwip/etharp.h"
+#include "lwip/stats.h"
 #include "netif/ppp/pppoe.h"
 
 /* Define those to better describe your network interface. */

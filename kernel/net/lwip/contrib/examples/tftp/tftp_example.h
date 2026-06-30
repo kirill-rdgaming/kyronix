@@ -4,7 +4,7 @@
  * and open the template in the editor.
  */
 
-/* 
+/*
  * File:   tftp_example.h
  * Author: dziegel
  *
@@ -26,4 +26,3 @@ void tftp_example_init_client(void);
 #endif
 
 #endif /* TFTP_EXAMPLE_H */
-

@@ -9,13 +9,13 @@ extern "C" {
 struct elem;
 
 struct list {
-  struct elem *first, *last;
-  int size, elems;
+    struct elem *first, *last;
+    int size, elems;
 };
 
 struct elem {
-  struct elem *next;
-  void *data;
+    struct elem *next;
+    void *data;
 };
 
 struct list *list_new(int size);
@@ -25,7 +25,7 @@ void *list_first(struct list *list);
 int list_elems(struct list *list);
 void list_delete(struct list *list);
 int list_remove(struct list *list, void *elem);
-void list_map(struct list *list, void (* func)(void *arg));
+void list_map(struct list *list, void (*func)(void *arg));
 
 #ifdef __cplusplus
 }

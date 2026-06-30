@@ -69,7 +69,8 @@ int64_t sys_epoll_create1(int flags) {
             g_epolls[i].nw = 0;
         }
     }
-    int epfd = fd_open_host("/dev/null", O_RDONLY, 0); /* internal handle: not subject to jail root */
+    int epfd =
+        fd_open_host("/dev/null", O_RDONLY, 0); /* internal handle: not subject to jail root */
     if (epfd < 0) return -(int64_t) EMFILE;
     epoll_t *ep = NULL;
     for (int i = 0; i < EPOLL_SLOTS; i++)
@@ -98,7 +99,7 @@ int64_t sys_epoll_ctl(int epfd, int op, int fd, struct epoll_event *ev) {
         for (int i = 0; i < ep->nw; i++)
             if (ep->w[i].fd == fd) return -(int64_t) EEXIST;
         ep->w[ep->nw] =
-            (struct epoll_watch) { fd, ev ? ev->events : EPOLLIN | EPOLLOUT, ev ? ev->data : 0 };
+            (struct epoll_watch){ fd, ev ? ev->events : EPOLLIN | EPOLLOUT, ev ? ev->data : 0 };
         ep->nw++;
         return 0;
     case EPOLL_CTL_DEL:
