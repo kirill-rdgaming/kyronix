@@ -554,7 +554,14 @@ static int64_t sys_execve(const char *path, const char **uargv, const char **uen
     const char *exec_path = abs;
 
     vfs_node_t *node = vfs_lookup(exec_path);
-    if (!node || node->type != VFS_TYPE_REG || !node->data) {
+    if (!node || node->type != VFS_TYPE_REG) {
+        vfs_node_unref_internal(node);
+        return -(int64_t) ENOENT;
+    }
+    /* lazy-load file data if needed */
+    if (!node->data && node->fs_ops && node->fs_ops->read)
+        node->fs_ops->read(node, NULL, 0, node->size);
+    if (!node->data) {
         vfs_node_unref_internal(node);
         return -(int64_t) ENOENT;
     }
@@ -601,14 +608,17 @@ static int64_t sys_execve(const char *path, const char **uargv, const char **uen
         strncpy(script_path, exec_path, sizeof(script_path) - 1);
         vfs_node_unref_internal(node);
         node = vfs_lookup(shebang_interp);
-        if (!node || node->type != VFS_TYPE_REG || !node->data) {
+        if (!node || node->type != VFS_TYPE_REG) {
             vfs_node_unref_internal(node);
             return -(int64_t) ENOENT;
         }
-        exec_perm = vfs_access(shebang_interp, 1);
-        if (exec_perm < 0) {
+        /* lazy-load interpreter if needed */
+        if (!node->data && node->fs_ops && node->fs_ops->read)
+            node->fs_ops->read(node, NULL, 0, node->size);
+        if (!node->data) {
+            log_error("execve: interp '%s' has no data", shebang_interp);
             vfs_node_unref_internal(node);
-            return (int64_t) exec_perm;
+            return -(int64_t) ENOENT;
         }
         exec_path = shebang_interp;
         is_shebang = true;
@@ -709,7 +719,16 @@ static int64_t sys_execve(const char *path, const char **uargv, const char **uen
 
     if (res.interp[0]) {
         vfs_node_t *inode = vfs_lookup(res.interp);
-        if (!inode || inode->type != VFS_TYPE_REG || !inode->data) {
+        if (!inode || inode->type != VFS_TYPE_REG) {
+            vfs_node_unref_internal(inode);
+            vmm_space_free(res.space);
+            FREE_EXEC_STRS();
+            return -(int64_t) ENOENT;
+        }
+        /* lazy-load interpreter data if needed */
+        if (!inode->data && inode->fs_ops && inode->fs_ops->read)
+            inode->fs_ops->read(inode, NULL, 0, inode->size);
+        if (!inode->data) {
             vfs_node_unref_internal(inode);
             vmm_space_free(res.space);
             FREE_EXEC_STRS();
@@ -2375,7 +2394,7 @@ void syscall_dispatch(syscall_frame_t *f) {
         ret = is_root() ? 0 : -(int64_t) EPERM;
         break; /* chroot: no-op until real roots exist */
     case 162:
-        ext2_sync();
+        vfs_sync_all();
         ret = 0;
         break;
     case 169:
@@ -2383,7 +2402,7 @@ void syscall_dispatch(syscall_frame_t *f) {
             ret = -(int64_t) EPERM;
             break;
         }
-        ext2_sync();
+        vfs_sync_all();
         outw(0x604, 0x2000);
         for (;;) hlt();
         break;

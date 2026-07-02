@@ -4,7 +4,6 @@
 #include "../lib/printf.h"
 #include "../lib/string.h"
 #include "../mm/heap.h"
-#include "ext2.h"
 #include "vfs.h"
 #include "vfs_internal.h"
 
@@ -19,8 +18,14 @@ struct fstab_entry {
 
 static int parse_fstab(const char *path, struct fstab_entry *entries, int max) {
     vfs_node_t *n = vfs_lookup(path);
-    if (!n || n->type != VFS_TYPE_REG || !n->data) {
+    if (!n || n->type != VFS_TYPE_REG) {
         if (n) vfs_node_unref_internal(n);
+        return 0;
+    }
+    if (!n->data && n->fs_ops && n->fs_ops->read)
+        n->fs_ops->read(n, NULL, 0, n->size);
+    if (!n->data) {
+        vfs_node_unref_internal(n);
         return 0;
     }
 
@@ -72,7 +77,6 @@ bool fstab_mount_all(const char *fstab_path) {
     int count = parse_fstab(fstab_path, entries, FSTAB_ENTRIES_MAX);
     if (count <= 0) return false;
 
-    int mounted = 0;
     for (int i = 0; i < count; i++) {
         struct fstab_entry *e = &entries[i];
         bool skip = false;
@@ -87,20 +91,27 @@ bool fstab_mount_all(const char *fstab_path) {
         }
 
         bool ok = false;
-        if (strcmp(e->fstype, "ext2") == 0 || e->fstype[0] == '\0') {
-            ok = ext2_mount(bd, e->mount_point);
-        } else {
+        struct filesystem *fs = vfs_find_fs(e->fstype);
+        if (!fs && e->fstype[0] != '\0') {
             log_warn("fstab: unsupported fstype '%s' for %s", e->fstype, e->device);
             continue;
+        }
+        if (fs) {
+            ok = fs->mount(bd, e->mount_point);
+        } else {
+            for (int f = 0; f < vfs_fs_count() && !ok; f++) {
+                struct filesystem *candidate = vfs_get_fs(f);
+                if (candidate->check_root && candidate->check_root(bd))
+                    ok = candidate->mount(bd, e->mount_point);
+            }
         }
 
         if (ok) {
             log_info("fstab: mounted %s at %s", e->device, e->mount_point);
-            mounted++;
         } else {
             log_warn("fstab: failed to mount %s at %s", e->device, e->mount_point);
         }
     }
 
-    return mounted > 0;
+    return count > 0;
 }

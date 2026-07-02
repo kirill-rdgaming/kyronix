@@ -4,6 +4,7 @@
 
 struct block_device;
 
+void ext2_init(void);
 bool ext2_mount(struct block_device *dev, const char *mount_point);
 bool ext2_check_root(struct block_device *dev);
 int ext2_write_file(uint32_t ino_nr, const void *data, uint64_t size);

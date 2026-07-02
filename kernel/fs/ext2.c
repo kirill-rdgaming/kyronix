@@ -987,6 +987,57 @@ static uint32_t create_disk_node(vfs_node_t *node, uint32_t parent_ino) {
     return 0;
 }
 
+/* ---- fs_ops for demand-loaded regular files ---- */
+
+static int64_t ext2_reg_read(vfs_node_t *n, char *buf, uint64_t off, uint64_t len) {
+    if (!n->data && n->size > 0) {
+        uint32_t ino_nr = (uint32_t)(uintptr_t)n->fs_private;
+        ext2_inode_t ino;
+        if (read_inode(ino_nr, &ino) < 0) return -(int64_t) 5;
+        uint64_t size;
+        uint8_t *data = read_file_data(&ino, &size);
+        if (!data) return -(int64_t) 12;
+        n->data = data;
+        n->capacity = size;
+        n->size = size;
+    }
+    if (off >= n->size) return 0;
+    uint64_t avail = n->size - off;
+    uint64_t r = (len < avail) ? len : avail;
+    if (buf) memcpy(buf, n->data + off, r);
+    return (int64_t) r;
+}
+
+static int64_t ext2_reg_write(vfs_node_t *n, const char *buf, uint64_t off, uint64_t len) {
+    if (!n->data) ext2_reg_read(n, NULL, 0, 0);
+    uint64_t needed = off + len;
+    if (needed > n->capacity) {
+        uint64_t newcap = n->capacity ? n->capacity * 2 : 512;
+        while (newcap < needed) newcap *= 2;
+        uint8_t *newdata = krealloc(n->data, newcap);
+        if (!newdata) return -(int64_t) 12;
+        n->data = newdata;
+        n->capacity = newcap;
+    }
+    if (needed > n->size) {
+        memset(n->data + n->size, 0, needed - n->size);
+        n->size = needed;
+    }
+    memcpy(n->data + off, buf, len);
+    n->dirty = 1;
+    return (int64_t) len;
+}
+
+static void ext2_reg_close(vfs_node_t *n) { (void)n; }
+
+static struct vfs_fs_ops ext2_reg_ops = {
+    .read  = ext2_reg_read,
+    .write = ext2_reg_write,
+    .close = ext2_reg_close,
+};
+
+/* ---- sync ---- */
+
 static void sync_walk(vfs_node_t *node, uint32_t parent_ext2_ino) {
     if (!node || node->deleted) return;
     if (node->name[0] == '\0' || (node->name[0] == '.' && node->name[1] == '\0') ||
@@ -996,9 +1047,10 @@ static void sync_walk(vfs_node_t *node, uint32_t parent_ext2_ino) {
     uint32_t ext2_ino = tracked_ino(node);
 
     if (ext2_ino) {
-        if (node->type == VFS_TYPE_REG) {
+        if (node->type == VFS_TYPE_REG && node->dirty) {
             ext2_write_file(ext2_ino, node->data, node->size);
             log_info("ext2: sync  wrote ino=%u  size=%lu", ext2_ino, node->size);
+            node->dirty = 0;
         }
     } else if (parent_ext2_ino) {
         ext2_ino = create_disk_node(node, parent_ext2_ino);
@@ -1045,15 +1097,15 @@ static void process_entry(uint32_t ino_nr, const char *path) {
         }
         walk_dir(ino_nr, path);
     } else if (type == EXT2_S_IFREG) {
-        uint64_t size;
-        uint8_t *data = read_file_data(&ino, &size);
-        vfs_node_t *n = vfs_create_file(path, ino.i_mode & 07777u, data, size);
+        vfs_node_t *n = vfs_create_file(path, ino.i_mode & 07777u, NULL, 0);
         if (n) {
             n->uid = ino.i_uid;
             n->gid = ino.i_gid;
+            n->size = inode_size_64(&ino);
+            n->fs_ops = &ext2_reg_ops;
+            n->fs_private = (void *)(uintptr_t) ino_nr;
             track_node(ino_nr, n);
         }
-        if (data) kfree(data);
     } else if (type == EXT2_S_IFLNK) {
         if (ino.i_size > 0 && ino.i_size < 60u) {
             char target[61];
@@ -1320,4 +1372,15 @@ bool ext2_mount(struct block_device *dev, const char *mount_point) {
 
     log_info("ext2: mounted at %s  (%d nodes)", mount_point, g_tracked_cnt);
     return true;
+}
+
+static struct filesystem ext2_fs = {
+    .name       = "ext2",
+    .check_root = ext2_check_root,
+    .mount      = ext2_mount,
+    .sync       = ext2_sync,
+};
+
+void ext2_init(void) {
+    vfs_register_fs(&ext2_fs);
 }

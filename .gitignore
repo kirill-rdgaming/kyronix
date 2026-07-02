@@ -1,6 +1,7 @@
 # cache & local configs
 .claude
 .config
+.config.old
 
 # kconfig build artifacts
 scripts/kconfig/*.o

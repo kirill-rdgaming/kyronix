@@ -345,23 +345,32 @@ void kmain(void) {
 
     print_memmap();
 
+    ext2_init();
+
     bool root_on_disk = false;
     {
         struct block_device *root_dev = NULL;
-        for (int i = 0; i < block_count(); i++) {
+        struct filesystem *root_fs = NULL;
+        for (int i = 0; i < block_count() && !root_dev; i++) {
             struct block_device *bd = block_get(i);
-            if (bd && ext2_check_root(bd)) {
-                root_dev = bd;
-                break;
+            if (!bd) continue;
+            for (int f = 0; f < vfs_fs_count(); f++) {
+                struct filesystem *fs = vfs_get_fs(f);
+                if (fs->check_root && fs->check_root(bd)) {
+                    root_dev = bd;
+                    root_fs = fs;
+                    break;
+                }
             }
         }
-        if (root_dev) {
-            root_on_disk = ext2_mount(root_dev, "/");
+        if (root_dev && root_fs) {
+            root_on_disk = root_fs->mount(root_dev, "/");
             kstatus("Mounting root from disk", root_on_disk);
         } else {
             struct block_device *bd = block_first();
             if (bd) {
-                bool ok = ext2_mount(bd, "/mnt");
+                struct filesystem *fs = vfs_find_fs("ext2");
+                bool ok = fs && fs->mount && fs->mount(bd, "/mnt");
                 kstatus("Mounting ext2 at /mnt", ok);
             }
         }
@@ -393,16 +402,28 @@ void kmain(void) {
         if (!init_node) init_node = vfs_lookup("/sbin/init");
         if (!init_node) init_node = vfs_lookup("/bin/init");
 
-        if (init_node && init_node->type == VFS_TYPE_REG && init_node->data) {
-            if (process_exec(init_node->data, init_node->size, "/init") < 0)
-                kprintf("  FATAL: process_exec failed\n");
+        if (init_node && init_node->type == VFS_TYPE_REG) {
+            uint64_t fsize = init_node->size;
+            uint8_t *buf = (uint8_t *) kmalloc(fsize + 1);
+            if (buf) {
+                if (init_node->fs_ops && init_node->fs_ops->read)
+                    init_node->fs_ops->read(init_node, (char *) buf, 0, fsize);
+                else if (init_node->data)
+                    memcpy(buf, init_node->data, fsize);
+                buf[fsize] = '\0';
+                if (process_exec(buf, fsize, "/init") < 0)
+                    kprintf("  FATAL: process_exec failed\n");
+                kfree(buf);
+            } else {
+                kprintf("  FATAL: out of memory for /init\n");
+            }
         } else {
             kprintf("  FATAL: /init not found\n");
         }
         vfs_node_unref_internal(init_node);
     }
 
-    ext2_sync();
+    vfs_sync_all();
     fb_set_color(COLOR_GRAY, COLOR_BG);
     kprintf("  Kernel halted.\n");
     cpu_halt();
