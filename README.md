@@ -88,10 +88,10 @@ make clean && make all && make run-serial
 |--------|------|
 | `all` | Build all |
 | `iso` | Build .iso |
-| `run` / `run-serial` / `run-uefi` | QEMU launch |
-| `test-run` / `test-run-log` | Run test suite in QEMU |
-| `user-build` | Build userspace programs |
-| `fmt` / `fmt-check` | clang-format src |
+| `run` / `run-serial` / `run-uefi` | Qemu launch |
+| `test-run` / `test-run-log` | Run tests in qemu |
+| `user-build` | Build userspace |
+| `fmt` / `fmt-check` | Refactor code |
 | `clean` | Remove build artifacts |
 
 ## Project structure
