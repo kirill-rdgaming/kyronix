@@ -68,13 +68,7 @@ out of the box (e.g tcc, nasm, vi, even a dillo web browser).
 
 ### Dependencies
 
-| What | Why |
-|------|-----|
-| `gcc` (or `x86_64-elf-gcc`) | Kernel cross-compiler |
-| `musl-tools` | Userspace libc |
-| `qemu-system-x86` | Run the thing |
-| `xorriso` | ISO image |
-| `nasm` | Assembly |
+` gcc ; musl-tools ; qemu-system ; xorriso ; nasm
 
 ### Quick start
 
