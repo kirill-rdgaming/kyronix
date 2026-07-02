@@ -1,5 +1,5 @@
 #include "ext2.h"
-#include "../drivers/ahci.h"
+#include "../drivers/block.h"
 #include "../lib/log.h"
 #include "../lib/printf.h"
 #include "../lib/string.h"
@@ -93,7 +93,7 @@ typedef struct __attribute__((packed)) {
     char name[255];
 } ext2_dirent_t;
 
-static int g_port;
+static struct block_device *g_dev;
 static uint32_t g_block_size;
 static uint32_t g_blocks_per_group;
 static uint32_t g_inodes_per_group;
@@ -133,16 +133,16 @@ static uint32_t tracked_ino(const vfs_node_t *n) {
 static int read_block(uint32_t blk, void *buf) {
     uint64_t lba = (uint64_t) blk * (g_block_size / 512u);
     uint32_t secs = g_block_size / 512u;
-    return ahci_read(g_port, lba, secs, buf);
+    return g_dev->ops->read(g_dev, lba, secs, buf);
 }
 
 static int write_block(uint32_t blk, const void *buf) {
     uint64_t lba = (uint64_t) blk * (g_block_size / 512u);
     uint32_t secs = g_block_size / 512u;
-    return ahci_write(g_port, lba, secs, buf);
+    return g_dev->ops->write(g_dev, lba, secs, buf);
 }
 
-static int write_sb(void) { return ahci_write(g_port, EXT2_SB_LBA, 2u, &g_sb); }
+static int write_sb(void) { return g_dev->ops->write(g_dev, EXT2_SB_LBA, 2u, &g_sb); }
 
 static int write_bgd(uint32_t group) {
     uint32_t bgdt_blk = g_first_data_block + 1u;
@@ -170,7 +170,7 @@ static int read_inode(uint32_t ino, ext2_inode_t *out) {
     uint64_t lba = byteoff / 512u;
     uint32_t off = (uint32_t) (byteoff % 512u);
     uint8_t tmp[1024];
-    if (ahci_read(g_port, lba, 2u, tmp) < 0) return -1;
+    if (g_dev->ops->read(g_dev, lba, 2u, tmp) < 0) return -1;
     memcpy(out, tmp + off, sizeof(ext2_inode_t));
     return 0;
 }
@@ -184,9 +184,9 @@ static int write_inode(uint32_t ino, const ext2_inode_t *in) {
     uint64_t lba = byteoff / 512u;
     uint32_t off = (uint32_t) (byteoff % 512u);
     uint8_t tmp[1024];
-    if (ahci_read(g_port, lba, 2u, tmp) < 0) return -1;
+    if (g_dev->ops->read(g_dev, lba, 2u, tmp) < 0) return -1;
     memcpy(tmp + off, in, sizeof(ext2_inode_t));
-    return ahci_write(g_port, lba, 2u, tmp);
+    return g_dev->ops->write(g_dev, lba, 2u, tmp);
 }
 
 static uint32_t alloc_block(uint32_t preferred_group) {
@@ -996,9 +996,14 @@ static void sync_walk(vfs_node_t *node, uint32_t parent_ext2_ino) {
     uint32_t ext2_ino = tracked_ino(node);
 
     if (ext2_ino) {
-        if (node->type == VFS_TYPE_REG) ext2_write_file(ext2_ino, node->data, node->size);
+        if (node->type == VFS_TYPE_REG) {
+            ext2_write_file(ext2_ino, node->data, node->size);
+            log_info("ext2: sync  wrote ino=%u  size=%lu", ext2_ino, node->size);
+        }
     } else if (parent_ext2_ino) {
         ext2_ino = create_disk_node(node, parent_ext2_ino);
+        if (ext2_ino)
+            log_info("ext2: sync  created ino=%u  name=%s", ext2_ino, node->name);
     }
 
     if (node->type == VFS_TYPE_DIR && ext2_ino)
@@ -1012,10 +1017,14 @@ int ext2_sync(void) {
         return -1;
     }
 
-    for (vfs_node_t *ch = root->children; ch; ch = ch->next) sync_walk(ch, 2u);
+    int count = 0;
+    for (vfs_node_t *ch = root->children; ch; ch = ch->next) {
+        sync_walk(ch, 2u);
+        count++;
+    }
 
-    ahci_flush(g_port);
-    log_info("ext2: sync done");
+    if (g_dev->ops->flush) g_dev->ops->flush(g_dev);
+    log_info("ext2: sync done  (%d children)", count);
     return 0;
 }
 
@@ -1115,8 +1124,139 @@ static void walk_dir(uint32_t dir_ino, const char *dir_path) {
     }
 }
 
-bool ext2_mount(int ahci_port, const char *mount_point) {
-    g_port = ahci_port;
+bool ext2_check_root(struct block_device *dev) {
+    uint8_t sb_buf[1024];
+    if (dev->ops->read(dev, EXT2_SB_LBA, 2u, sb_buf) < 0) return false;
+
+    ext2_sb_t *sb = (ext2_sb_t *) sb_buf;
+    if (sb->s_magic != EXT2_MAGIC) return false;
+
+    uint32_t block_size = 1024u << sb->s_log_block_size;
+    uint32_t inode_size = (sb->s_rev_level >= 1u) ? (uint32_t) sb->s_inode_size : 128u;
+    uint32_t first_data_block = sb->s_first_data_block;
+    uint32_t blocks_per_group = sb->s_blocks_per_group;
+    uint32_t inodes_per_group = sb->s_inodes_per_group;
+    uint32_t num_groups = (sb->s_blocks_count + blocks_per_group - 1u) / blocks_per_group;
+
+    uint32_t bgdt_blk = first_data_block + 1u;
+    uint32_t bgdt_bytes = num_groups * (uint32_t) sizeof(ext2_bgd_t);
+    uint32_t bgdt_blocks = (bgdt_bytes + block_size - 1u) / block_size;
+
+    uint8_t *bgdt_buf = (uint8_t *) kmalloc(bgdt_blocks * block_size);
+    if (!bgdt_buf) return false;
+
+    for (uint32_t i = 0; i < bgdt_blocks; i++) {
+        uint64_t lba = (uint64_t) (bgdt_blk + i) * (block_size / 512u);
+        uint32_t secs = block_size / 512u;
+        if (dev->ops->read(dev, lba, secs, bgdt_buf + i * block_size) < 0) {
+            kfree(bgdt_buf);
+            return false;
+        }
+    }
+
+    ext2_bgd_t *bgdt = (ext2_bgd_t *) bgdt_buf;
+    uint32_t group = (2u - 1u) / inodes_per_group;
+    uint32_t idx = (2u - 1u) % inodes_per_group;
+    uint64_t byteoff = (uint64_t) bgdt[group].bg_inode_table * block_size + (uint64_t) idx * inode_size;
+    uint64_t lba = byteoff / 512u;
+    uint32_t off = (uint32_t) (byteoff % 512u);
+
+    uint8_t ino_buf[1024];
+    if (dev->ops->read(dev, lba, 2u, ino_buf) < 0) {
+        kfree(bgdt_buf);
+        return false;
+    }
+
+    ext2_inode_t *root_ino = (ext2_inode_t *) (ino_buf + off);
+    uint32_t nblocks = (uint32_t) ((root_ino->i_size + block_size - 1u) / block_size);
+    uint32_t blk_secs = block_size / 512u;
+
+    uint32_t bin_ino_nr = 0;
+    for (uint32_t bi = 0; bi < nblocks && !bin_ino_nr; bi++) {
+        uint32_t blk = root_ino->i_block[bi];
+        if (!blk) continue;
+
+        uint8_t *blk_buf = (uint8_t *) kmalloc(block_size);
+        if (!blk_buf) break;
+
+        uint64_t blk_lba = (uint64_t) blk * blk_secs;
+        if (dev->ops->read(dev, blk_lba, blk_secs, blk_buf) < 0) {
+            kfree(blk_buf);
+            break;
+        }
+
+        uint32_t pos = 0;
+        while (pos + 8u <= block_size) {
+            ext2_dirent_t *de = (ext2_dirent_t *) (blk_buf + pos);
+            if (!de->rec_len || de->rec_len < 8u) break;
+            if (de->inode && de->name_len) {
+                bool dot = de->name_len == 1u && de->name[0] == '.';
+                bool dotdot = de->name_len == 2u && de->name[0] == '.' && de->name[1] == '.';
+                if (!dot && !dotdot && de->name_len == 3 && memcmp(de->name, "bin", 3) == 0) {
+                    bin_ino_nr = de->inode;
+                    break;
+                }
+            }
+            pos += de->rec_len;
+        }
+        kfree(blk_buf);
+    }
+
+    if (!bin_ino_nr) {
+        kfree(bgdt_buf);
+        return false;
+    }
+
+    {
+        uint32_t bg = (bin_ino_nr - 1u) / inodes_per_group;
+        uint32_t ix = (bin_ino_nr - 1u) % inodes_per_group;
+        uint64_t bo = (uint64_t) bgdt[bg].bg_inode_table * block_size + (uint64_t) ix * inode_size;
+        uint64_t la = bo / 512u;
+        uint32_t of = (uint32_t) (bo % 512u);
+        if (dev->ops->read(dev, la, 2u, ino_buf) < 0) {
+            kfree(bgdt_buf);
+            return false;
+        }
+        ext2_inode_t *bin_ino = (ext2_inode_t *) (ino_buf + of);
+        uint32_t bn = (uint32_t) ((bin_ino->i_size + block_size - 1u) / block_size);
+
+        bool found = false;
+        for (uint32_t b = 0; b < bn && !found; b++) {
+            uint32_t bk = bin_ino->i_block[b];
+            if (!bk) continue;
+
+            uint8_t *bb = (uint8_t *) kmalloc(block_size);
+            if (!bb) break;
+            uint64_t bl = (uint64_t) bk * blk_secs;
+            if (dev->ops->read(dev, bl, blk_secs, bb) < 0) {
+                kfree(bb);
+                break;
+            }
+
+            uint32_t p = 0;
+            while (p + 8u <= block_size) {
+                ext2_dirent_t *d = (ext2_dirent_t *) (bb + p);
+                if (!d->rec_len || d->rec_len < 8u) break;
+                if (d->inode && d->name_len) {
+                    bool dt = d->name_len == 1u && d->name[0] == '.';
+                    bool dd = d->name_len == 2u && d->name[0] == '.' && d->name[1] == '.';
+                    if (!dt && !dd && d->name_len == 4 && memcmp(d->name, "init", 4) == 0) {
+                        found = true;
+                        break;
+                    }
+                }
+                p += d->rec_len;
+            }
+            kfree(bb);
+        }
+
+        kfree(bgdt_buf);
+        return found;
+    }
+}
+
+bool ext2_mount(struct block_device *dev, const char *mount_point) {
+    g_dev = dev;
     g_tracked_cnt = 0;
 
     size_t mplen = strlen(mount_point);
@@ -1125,7 +1265,7 @@ bool ext2_mount(int ahci_port, const char *mount_point) {
     g_mount_point[mplen] = '\0';
 
     uint8_t sb_buf[1024];
-    if (ahci_read(g_port, EXT2_SB_LBA, 2u, sb_buf) < 0) {
+    if (dev->ops->read(dev, EXT2_SB_LBA, 2u, sb_buf) < 0) {
         log_error("ext2: failed to read superblock");
         return false;
     }

@@ -8,7 +8,7 @@ static void log_putchar(char c, void *ctx) {
     serial_putchar(COM1, c);
 }
 
-static int g_klog_level = KLOG_WARN;
+static int g_klog_level = KLOG_INFO;
 
 void klog_set_level(int level) { g_klog_level = level; }
 int klog_get_level(void) { return g_klog_level; }

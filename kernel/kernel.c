@@ -12,6 +12,7 @@
 
 #include "crypto/chacha20.h"
 #include "drivers/ahci.h"
+#include "drivers/block.h"
 #include "drivers/fbdev.h"
 #include "drivers/input.h"
 #include "drivers/kbd.h"
@@ -25,6 +26,7 @@
 #include "exec/process.h"
 #include "fs/cpio.h"
 #include "fs/ext2.h"
+#include "fs/fstab.h"
 #include "fs/vfs.h"
 #include "fs/vfs_internal.h"
 #include "lib/log.h"
@@ -189,6 +191,7 @@ void kmain(void) {
     }
     pci_enumerate();
     kstatus("Enumerating PCI", true);
+    block_init();
     ahci_init();
     kstatus("Initialising AHCI", ahci_ready());
     virtnet_init();
@@ -342,26 +345,47 @@ void kmain(void) {
 
     print_memmap();
 
-    if (mod_req.response && mod_req.response->module_count > 0) {
-        struct limine_file *initrd = mod_req.response->modules[0];
-        log_info("initrd: %s  (%lu bytes)", initrd->path, initrd->size);
-        if (cpio_load(initrd->address, initrd->size) < 0) {
-            kstatus("Loading initrd", false);
-            log_warn("initrd parse failed");
-        } else {
-            kstatus("Loading initrd", true);
+    bool root_on_disk = false;
+    {
+        struct block_device *root_dev = NULL;
+        for (int i = 0; i < block_count(); i++) {
+            struct block_device *bd = block_get(i);
+            if (bd && ext2_check_root(bd)) {
+                root_dev = bd;
+                break;
+            }
         }
-    } else {
-        kstatus("Loading initrd", false);
-        log_warn("no initrd module");
+        if (root_dev) {
+            root_on_disk = ext2_mount(root_dev, "/");
+            kstatus("Mounting root from disk", root_on_disk);
+        } else {
+            struct block_device *bd = block_first();
+            if (bd) {
+                bool ok = ext2_mount(bd, "/mnt");
+                kstatus("Mounting ext2 at /mnt", ok);
+            }
+        }
     }
 
-    {
-        int disk = ahci_first_disk();
-        if (disk >= 0) {
-            bool ok = ext2_mount(disk, "/mnt");
-            kstatus("Mounting ext2 at /mnt", ok);
+    if (!root_on_disk) {
+        if (mod_req.response && mod_req.response->module_count > 0) {
+            struct limine_file *initrd = mod_req.response->modules[0];
+            log_info("initrd: %s  (%lu bytes)", initrd->path, initrd->size);
+            if (cpio_load(initrd->address, initrd->size) < 0) {
+                kstatus("Loading initrd", false);
+                log_warn("initrd parse failed");
+            } else {
+                kstatus("Loading initrd", true);
+            }
+        } else {
+            kstatus("Loading initrd", false);
+            log_warn("no initrd module");
         }
+    }
+
+    if (root_on_disk) {
+        bool fstab_ok = fstab_mount_all("/etc/fstab");
+        kstatus("Mounting fstab entries", fstab_ok);
     }
 
     {
@@ -373,11 +397,12 @@ void kmain(void) {
             if (process_exec(init_node->data, init_node->size, "/init") < 0)
                 kprintf("  FATAL: process_exec failed\n");
         } else {
-            kprintf("  FATAL: /init not found in initrd\n");
+            kprintf("  FATAL: /init not found\n");
         }
         vfs_node_unref_internal(init_node);
     }
 
+    ext2_sync();
     fb_set_color(COLOR_GRAY, COLOR_BG);
     kprintf("  Kernel halted.\n");
     cpu_halt();

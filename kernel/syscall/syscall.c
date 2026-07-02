@@ -9,6 +9,7 @@
 #include "file.h"
 #include "fs/inet_socket.h"
 #include "fs/pipe.h"
+#include "fs/ext2.h"
 #include "fs/vfs.h"
 #include "fs/vfs_internal.h"
 #include "lib/log.h"
@@ -2374,13 +2375,15 @@ void syscall_dispatch(syscall_frame_t *f) {
         ret = is_root() ? 0 : -(int64_t) EPERM;
         break; /* chroot: no-op until real roots exist */
     case 162:
-        ret = 0; /* sync: no-op (ramfs) */
+        ext2_sync();
+        ret = 0;
         break;
     case 169:
         if (!host_priv()) {
             ret = -(int64_t) EPERM;
             break;
         }
+        ext2_sync();
         outw(0x604, 0x2000);
         for (;;) hlt();
         break;

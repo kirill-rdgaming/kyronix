@@ -90,6 +90,8 @@ SRCS := \
     kernel/fs/pipe.c                   \
     kernel/fs/cpio.c                   \
     kernel/fs/fat32.c                  \
+    kernel/fs/fstab.c                  \
+    kernel/drivers/block.c            \
     kernel/drivers/ahci.c             \
     kernel/drivers/serial.c           \
     kernel/drivers/kbd.c              \
@@ -153,7 +155,39 @@ KALLSYMS_OBJ := $(BUILD_DIR)/kernel/kallsyms_data.o
 SRC_DIR  := .
 INITRD   := initrd.cpio
 
-.PHONY: all iso run run-serial run-uefi clean user-build xorg testrunner test-initrd test-iso test-run test-run-log fmt fmt-check disk config.h kallsyms nconfig
+.PHONY: all iso run run-serial run-uefi live live-iso live-run run-disk clean user-build xorg testrunner test-initrd test-iso test-run test-run-log fmt fmt-check disk config.h kallsyms nconfig help
+
+.PHONY: all iso run run-serial run-uefi live live-iso live-run run-disk clean user-build xorg testrunner test-initrd test-iso test-run test-run-log fmt fmt-check disk config.h kallsyms nconfig help
+
+help:
+	@echo "Usage: make <target>"
+	@echo ""
+	@echo "Build"
+	@echo "  all        Build kernel + initrd + disk.img (default)"
+	@echo "  iso        Build persistent ISO  (kyronix.iso)"
+	@echo "  live-iso   Build live ISO        (kyronix-live.iso)"
+	@echo "  disk       Create disk.img from rootfs/  (DESTROYS persistence)"
+	@echo "  test-iso   Build test ISO        (kyronix-test.iso)"
+	@echo "  test-initrd Build test initrd     (test-initrd.cpio)"
+	@echo "  kallsyms   Regenerate kallsyms table"
+	@echo "  nconfig    Interactive kernel config"
+	@echo ""
+	@echo "Run"
+	@echo "  run        QEMU: persistent (ISO + disk, graphical)"
+	@echo "  run-serial QEMU: persistent (ISO + disk, serial only)"
+	@echo "  run-disk   QEMU: direct disk boot (no ISO)"
+	@echo "  run-uefi   QEMU: UEFI boot"
+	@echo "  live-run   QEMU: live session (ISO only, no disk)"
+	@echo "  test-run   QEMU: run tests"
+	@echo "  test-run-log  QEMU: run tests + check results"
+	@echo ""
+	@echo "Other"
+	@echo "  user-build Rebuild userspace programs"
+	@echo "  clean      Remove all build artifacts"
+	@echo "  fmt        Format source files"
+	@echo "  fmt-check  Check formatting"
+	@echo ""
+	@echo "Note: *-run targets do NOT rebuild. Run 'make iso' etc. first."
 
 all: config.h $(TARGET) $(INITRD) $(DISK_IMG)
 
@@ -175,9 +209,20 @@ nconfig: kernel/Kconfig $(NCONF)
 	$(NCONF) kernel/Kconfig
 	KCONFIG_AUTOHEADER=$(CONFIG_H) $(KCONF) --syncconfig kernel/Kconfig < /dev/null
 
-$(DISK_IMG):
-	dd if=/dev/zero of=$@ bs=1M count=128 status=none
-	mkfs.ext2 -b 4096 -L kyronix $@
+DISK_ROOT := disk_root
+
+$(DISK_IMG): $(TARGET) $(INITRD) user-build
+	rm -rf $(DISK_ROOT)
+	mkdir -p $(DISK_ROOT)/boot/limine
+	cp -a rootfs/* $(DISK_ROOT)/
+	cp $(TARGET) $(DISK_ROOT)/boot/kernel.elf
+	cp limine-disk.conf $(DISK_ROOT)/boot/limine/limine.conf
+	cp $(LIMINE_DIR)/limine-bios.sys $(DISK_ROOT)/boot/limine/
+	echo '/dev/ahci0 / ext2 rw,noatime 0 1' > $(DISK_ROOT)/etc/fstab
+	dd if=/dev/zero of=$@ bs=1M count=256 status=none
+	mkfs.ext2 -b 4096 -L kyronix -d $(DISK_ROOT) $@ 2>/dev/null
+	rm -rf $(DISK_ROOT)
+	@echo "  Warning: disk.img has no bootloader; boot via ISO"
 	@echo "  Built: $@"
 
 disk: $(DISK_IMG)
@@ -259,7 +304,7 @@ iso: $(TARGET) $(INITRD) $(LIMINE_DIR)/limine
 	@echo ""
 	@echo "  Built: $(ISO)"
 
-run: iso $(DISK_IMG)
+run:
 	qemu-system-x86_64              \
 	    -M q35                      \
 	    -enable-kvm                 \
@@ -271,9 +316,12 @@ run: iso $(DISK_IMG)
 	    -vga qxl                    \
 	    -global qxl-vga.vgamem_mb=1024 \
 	    -netdev user,id=n0          \
-	    -device virtio-net-pci,netdev=n0 
+	    -device virtio-net-pci,netdev=n0 \
+	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0,cache=writethrough \
+	    -device ahci,id=ahci \
+	    -device ide-hd,drive=hd0,bus=ahci.0 
 
-run-serial: iso $(DISK_IMG)
+run-serial:
 	qemu-system-x86_64              \
 	    -M q35                      \
 	    -m 2G                       \
@@ -281,13 +329,71 @@ run-serial: iso $(DISK_IMG)
 	    -boot d                     \
 	    -display none               \
 	    -serial stdio               \
-	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0,cache=writethrough \
 	    -device ahci,id=ahci \
 	    -device ide-hd,drive=hd0,bus=ahci.0
 
+run-disk:
+	qemu-system-x86_64              \
+	    -M q35                      \
+	    -enable-kvm                 \
+	    -cpu host                   \
+	    -m 2G                       \
+	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0,cache=writethrough \
+	    -device ahci,id=ahci \
+	    -device ide-hd,drive=hd0,bus=ahci.0 \
+	    -serial stdio               \
+	    -vga qxl                    \
+	    -global qxl-vga.vgamem_mb=1024
+
 OVMF ?= /usr/share/edk2/x64/OVMF.fd
 
-run-uefi: iso $(DISK_IMG)
+LIVE_ISO := kyronix-live.iso
+
+live-iso: $(TARGET) $(INITRD) $(LIMINE_DIR)/limine
+	rm -rf iso_root
+	mkdir -p iso_root/boot/limine
+	mkdir -p iso_root/EFI/BOOT
+
+	cp $(TARGET)              iso_root/boot/kernel.elf
+	cp $(INITRD)              iso_root/boot/initrd.cpio
+	cp limine-live.conf       iso_root/boot/limine/limine.conf
+	cp $(LIMINE_DIR)/limine-bios.sys    iso_root/boot/limine/
+	cp $(LIMINE_DIR)/limine-bios-cd.bin iso_root/boot/limine/
+	cp $(LIMINE_DIR)/limine-uefi-cd.bin iso_root/boot/limine/
+	cp $(LIMINE_DIR)/BOOTX64.EFI        iso_root/EFI/BOOT/
+	cp $(LIMINE_DIR)/BOOTIA32.EFI       iso_root/EFI/BOOT/
+
+	xorriso -as mkisofs              \
+	    -b boot/limine/limine-bios-cd.bin \
+	    -no-emul-boot                \
+	    -boot-load-size 4            \
+	    -boot-info-table             \
+	    --efi-boot boot/limine/limine-uefi-cd.bin \
+	    -efi-boot-part               \
+	    --efi-boot-image             \
+	    --protective-msdos-label     \
+	    iso_root -o $(LIVE_ISO)
+
+	./$(LIMINE_DIR)/limine bios-install $(LIVE_ISO)
+	@echo ""
+	@echo "  Built: $(LIVE_ISO)"
+
+live-run:
+	qemu-system-x86_64              \
+	    -M q35                      \
+	    -enable-kvm                 \
+	    -cpu host                   \
+	    -m 2G                       \
+	    -cdrom $(LIVE_ISO)          \
+	    -boot d                     \
+	    -serial stdio               \
+	    -vga qxl                    \
+	    -global qxl-vga.vgamem_mb=1024
+
+live: live-iso
+
+run-uefi:
 	qemu-system-x86_64              \
 	    -M q35                      \
 	    -m 2G                       \
@@ -297,7 +403,7 @@ run-uefi: iso $(DISK_IMG)
 	    -serial stdio               \
 	    -vga qxl                    \
 	    -global qxl-vga.vgamem_mb=1024 \
-	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0,cache=writethrough \
 	    -device ahci,id=ahci \
 	    -device ide-hd,drive=hd0,bus=ahci.0
 
@@ -353,7 +459,7 @@ test-iso: $(TARGET) test-initrd $(LIMINE_DIR)/limine
 	@echo ""
 	@echo "  Built: $(TEST_ISO)"
 
-test-run: test-iso $(DISK_IMG)
+test-run:
 	qemu-system-x86_64              \
 	    -M q35                      \
 	    -m 512M                     \
@@ -362,12 +468,12 @@ test-run: test-iso $(DISK_IMG)
 	    -serial stdio               \
 	    -netdev user,id=n0          \
 	    -device virtio-net-pci,netdev=n0 \
-	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0,cache=writethrough \
 	    -device ahci,id=ahci \
 	    -device ide-hd,drive=hd0,bus=ahci.0 \
 	    -no-reboot
 
-test-run-log: test-iso $(DISK_IMG)
+test-run-log:
 	@qemu-system-x86_64              \
 	    -M q35                      \
 	    -m 512M                     \
@@ -376,7 +482,7 @@ test-run-log: test-iso $(DISK_IMG)
 	    -display none               \
 	    -netdev user,id=n0          \
 	    -device virtio-net-pci,netdev=n0 \
-	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0,cache=writethrough \
 	    -device ahci,id=ahci \
 	    -device ide-hd,drive=hd0,bus=ahci.0 \
 	    -serial file:test.log       \
@@ -411,7 +517,7 @@ fmt-check: $(FMT_FILES)
 	clang-format --dry-run -Werror -style=file $?
 
 clean:
-	rm -f $(TARGET) $(ISO) $(INITRD) $(TEST_ISO) $(TEST_INITRD) $(DISK_IMG)
+	rm -f $(TARGET) $(ISO) $(LIVE_ISO) $(INITRD) $(TEST_ISO) $(TEST_INITRD) $(DISK_IMG)
 	rm -f $(CONFIG_H) .config
 	rm -rf $(BUILD_DIR) iso_root rootfs/bin $(TEST_ROOTFS)
 	$(MAKE) -C user clean
