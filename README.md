@@ -104,12 +104,11 @@ make clean && make all && make run-serial
 
 | Path | Contents |
 |------|----------|
-| `kernel/` | Core kernel (arch, drivers, fs, mm, proc, syscall, net, lib) |
-| `user/` | Userspace (init, ksh, vi, login, kyrobox, testrunner) |
-| `rootfs/` | Initramfs contents (/etc, /lib, /bin, /root) |
-| `limine/` | Limine bootloader |
+| `kernel/` | Core kernel |
+| `user/` | Userspace |
+| `rootfs/` | Initramfs |
+| `limine/` | Limine Bl |
 | `meta/` | Screenshots |
-| `ROADMAP.md` | Detailed development roadmap |
 
 ## License
 
