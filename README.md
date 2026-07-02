@@ -111,11 +111,6 @@ make clean && make all && make run-serial
 | `meta/` | Screenshots |
 | `ROADMAP.md` | Detailed development roadmap |
 
-## Status
-
-Work in progress. Currently capable of booting into a Unix-like userspace
-environment and running statically linked applications.
-
 ## License
 
 ISC. Do whatever you want.
