@@ -371,12 +371,7 @@ int main(void) {
 
     if (kmemleak_on) {
         fprintf(stderr, "\n" ANSI_CYAN "/proc/kmemleak:" ANSI_RESET "\n");
-        int kml = dump_kmemleak(1);
-        if (kml > 0) {
-            fprintf(stderr, ANSI_RED "  KMEMLEAK: %d leak(s) detected" ANSI_RESET, kml);
-        } else {
-            fprintf(stderr, ANSI_GREEN "  KMEMLEAK: no leaks" ANSI_RESET);
-        }
+        dump_kmemleak(1);
     }
 
     fprintf(stderr, "\n");

@@ -1,6 +1,7 @@
 # cache & local configs
 .claude
 .config
+.config.old
 
 # kconfig build artifacts
 scripts/kconfig/*.o
@@ -19,8 +20,9 @@ scripts/kconfig/*.tab.h
 
 # images
 *.cpio
-kyronix.iso
-kyronix-test.iso
+*.iso
+*.iso
+*.img
 
 # build artifacts
 *.o

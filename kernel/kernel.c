@@ -12,6 +12,7 @@
 
 #include "crypto/chacha20.h"
 #include "drivers/ahci.h"
+#include "drivers/block.h"
 #include "drivers/fbdev.h"
 #include "drivers/input.h"
 #include "drivers/kbd.h"
@@ -25,6 +26,7 @@
 #include "exec/process.h"
 #include "fs/cpio.h"
 #include "fs/ext2.h"
+#include "fs/fstab.h"
 #include "fs/vfs.h"
 #include "fs/vfs_internal.h"
 #include "lib/log.h"
@@ -189,6 +191,7 @@ void kmain(void) {
     }
     pci_enumerate();
     kstatus("Enumerating PCI", true);
+    block_init();
     ahci_init();
     kstatus("Initialising AHCI", ahci_ready());
     virtnet_init();
@@ -342,26 +345,56 @@ void kmain(void) {
 
     print_memmap();
 
-    if (mod_req.response && mod_req.response->module_count > 0) {
-        struct limine_file *initrd = mod_req.response->modules[0];
-        log_info("initrd: %s  (%lu bytes)", initrd->path, initrd->size);
-        if (cpio_load(initrd->address, initrd->size) < 0) {
-            kstatus("Loading initrd", false);
-            log_warn("initrd parse failed");
-        } else {
-            kstatus("Loading initrd", true);
+    ext2_init();
+
+    bool root_on_disk = false;
+    {
+        struct block_device *root_dev = NULL;
+        struct filesystem *root_fs = NULL;
+        for (int i = 0; i < block_count() && !root_dev; i++) {
+            struct block_device *bd = block_get(i);
+            if (!bd) continue;
+            for (int f = 0; f < vfs_fs_count(); f++) {
+                struct filesystem *fs = vfs_get_fs(f);
+                if (fs->check_root && fs->check_root(bd)) {
+                    root_dev = bd;
+                    root_fs = fs;
+                    break;
+                }
+            }
         }
-    } else {
-        kstatus("Loading initrd", false);
-        log_warn("no initrd module");
+        if (root_dev && root_fs) {
+            root_on_disk = root_fs->mount(root_dev, "/");
+            kstatus("Mounting root from disk", root_on_disk);
+        } else {
+            struct block_device *bd = block_first();
+            if (bd) {
+                struct filesystem *fs = vfs_find_fs("ext2");
+                bool ok = fs && fs->mount && fs->mount(bd, "/mnt");
+                kstatus("Mounting ext2 at /mnt", ok);
+            }
+        }
     }
 
-    {
-        int disk = ahci_first_disk();
-        if (disk >= 0) {
-            bool ok = ext2_mount(disk, "/mnt");
-            kstatus("Mounting ext2 at /mnt", ok);
+    if (!root_on_disk) {
+        if (mod_req.response && mod_req.response->module_count > 0) {
+            struct limine_file *initrd = mod_req.response->modules[0];
+            log_info("initrd: %s  (%lu bytes)", initrd->path, initrd->size);
+            if (cpio_load(initrd->address, initrd->size) < 0) {
+                kstatus("Loading initrd", false);
+                log_warn("initrd parse failed");
+            } else {
+                kstatus("Loading initrd", true);
+            }
+        } else {
+            kstatus("Loading initrd", false);
+            log_warn("no initrd module");
         }
+    }
+
+    if (root_on_disk) {
+        bool fstab_ok = fstab_mount_all("/etc/fstab");
+        kstatus("Mounting fstab entries", fstab_ok);
     }
 
     {
@@ -369,15 +402,28 @@ void kmain(void) {
         if (!init_node) init_node = vfs_lookup("/sbin/init");
         if (!init_node) init_node = vfs_lookup("/bin/init");
 
-        if (init_node && init_node->type == VFS_TYPE_REG && init_node->data) {
-            if (process_exec(init_node->data, init_node->size, "/init") < 0)
-                kprintf("  FATAL: process_exec failed\n");
+        if (init_node && init_node->type == VFS_TYPE_REG) {
+            uint64_t fsize = init_node->size;
+            uint8_t *buf = (uint8_t *) kmalloc(fsize + 1);
+            if (buf) {
+                if (init_node->fs_ops && init_node->fs_ops->read)
+                    init_node->fs_ops->read(init_node, (char *) buf, 0, fsize);
+                else if (init_node->data)
+                    memcpy(buf, init_node->data, fsize);
+                buf[fsize] = '\0';
+                if (process_exec(buf, fsize, "/init") < 0)
+                    kprintf("  FATAL: process_exec failed\n");
+                kfree(buf);
+            } else {
+                kprintf("  FATAL: out of memory for /init\n");
+            }
         } else {
-            kprintf("  FATAL: /init not found in initrd\n");
+            kprintf("  FATAL: /init not found\n");
         }
         vfs_node_unref_internal(init_node);
     }
 
+    vfs_sync_all();
     fb_set_color(COLOR_GRAY, COLOR_BG);
     kprintf("  Kernel halted.\n");
     cpu_halt();

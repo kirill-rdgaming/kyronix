@@ -1,7 +1,10 @@
 #include "ahci.h"
+#include "block.h"
 #include "../arch/x86_64/cpu.h"
 #include "../lib/log.h"
+#include "../lib/printf.h"
 #include "../lib/string.h"
+#include "../mm/heap.h"
 #include "../mm/kmemleak.h"
 #include "../mm/pmm.h"
 #include "../mm/vmm.h"
@@ -193,8 +196,18 @@ static bool port_init(int idx) {
     hba_port_t *p = &g_hba->ports[idx];
     ahci_port_t *ap = &g_ports[idx];
 
+    log_info("AHCI: port %d  initial SSTS=0x%08x  SIG=0x%08x", idx, p->ssts, p->sig);
+
+    port_stop(p);
+    p->sctl = (p->sctl & ~(uint32_t) SCTL_DET_MASK) | SCTL_DET_INIT;
+    for (volatile uint32_t i = 0; i < 100000u; i++) cpu_relax();
+    p->sctl &= ~(uint32_t) SCTL_DET_MASK;
+    uint32_t to = 100000u;
+    while ((p->ssts & SSTS_DET_MASK) != SSTS_DET_PHYOK && to--) cpu_relax();
+    log_info("AHCI: port %d  after COMRESET SSTS=0x%08x  SIG=0x%08x", idx, p->ssts, p->sig);
     if ((p->ssts & SSTS_DET_MASK) != SSTS_DET_PHYOK) return false;
-    if (p->sig != SIG_ATA) return false;
+    p->serr = 0xFFFFFFFFu;
+    p->is = 0xFFFFFFFFu;
 
     port_stop(p);
 
@@ -253,6 +266,21 @@ static bool port_init(int idx) {
     }
 
     return true;
+}
+
+static int ahci_block_read(struct block_device *dev, uint64_t lba, uint32_t count, void *buf) {
+    int port = (int) (uintptr_t) dev->priv;
+    return ahci_read(port, lba, count, buf);
+}
+
+static int ahci_block_write(struct block_device *dev, uint64_t lba, uint32_t count, const void *buf) {
+    int port = (int) (uintptr_t) dev->priv;
+    return ahci_write(port, lba, count, buf);
+}
+
+static int ahci_block_flush(struct block_device *dev) {
+    int port = (int) (uintptr_t) dev->priv;
+    return ahci_flush(port);
 }
 
 bool ahci_init(void) {
@@ -316,7 +344,24 @@ bool ahci_init(void) {
     int found = 0;
     for (int i = 0; i < 32; i++) {
         if (!(pi & (1u << i))) continue;
-        if (port_init(i)) found++;
+        if (port_init(i)) {
+            static struct block_device_ops ahci_ops = {
+                ahci_block_read,
+                ahci_block_write,
+                ahci_block_flush,
+            };
+            struct block_device *bd = (struct block_device *) kmalloc(sizeof(struct block_device));
+            if (bd) {
+                memset(bd, 0, sizeof(*bd));
+                snprintf(bd->name, sizeof(bd->name), "ahci%d", i);
+                bd->sectors = g_ports[i].disk_sectors;
+                bd->sector_size = 512;
+                bd->ops = &ahci_ops;
+                bd->priv = (void *) (uintptr_t) i;
+                block_register(bd);
+            }
+            found++;
+        }
     }
 
     g_ready = (found > 0);

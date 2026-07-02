@@ -79,6 +79,24 @@ struct linux_dirent64 {
 #define S_IFSOCK 0140000U
 #define S_ISVTX 0001000U /* sticky bit: restrict deletion in a shared dir */
 
+struct block_device;
+
+/* Per-node filesystem operations (disk-backed regular files) */
+struct vfs_node;
+struct vfs_fs_ops {
+    int64_t (*read)(struct vfs_node *, char *, uint64_t off, uint64_t len);
+    int64_t (*write)(struct vfs_node *, const char *, uint64_t off, uint64_t len);
+    void   (*close)(struct vfs_node *);
+};
+
+/* Filesystem driver registration */
+struct filesystem {
+    const char *name;
+    bool (*check_root)(struct block_device *);
+    bool (*mount)(struct block_device *, const char *);
+    int (*sync)(void);
+};
+
 typedef struct vfs_node {
     char name[256];
     uint8_t type;
@@ -104,6 +122,10 @@ typedef struct vfs_node {
                         uint64_t vflags);
 
     volatile int sock_backlog;
+
+    void *fs_private;             /* filesystem per-node data (e.g. ext2 inode) */
+    struct vfs_fs_ops *fs_ops;    /* NULL = ramfs / chr / symlink */
+    uint8_t dirty;
 } vfs_node_t;
 
 typedef struct {
@@ -137,6 +159,12 @@ typedef struct {
 } vfs_file_t;
 
 #define VFS_FD_MAX 1024
+
+int vfs_register_fs(struct filesystem *fs);
+struct filesystem *vfs_find_fs(const char *name);
+int vfs_fs_count(void);
+struct filesystem *vfs_get_fs(int i);
+void vfs_sync_all(void);
 
 void vfs_init(void);
 

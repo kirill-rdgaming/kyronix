@@ -23,6 +23,10 @@ char g_cwd[512] = "/";
 static vfs_file_t *g_default_fds[VFS_FD_MAX];
 static vfs_file_t **g_fds = g_default_fds;
 
+#define FS_MAX 8
+static struct filesystem *g_filesystems[FS_MAX];
+static int g_filesystem_cnt;
+
 #define VFS_FILE_MAGIC 0x4b59464d41474943ULL
 
 #define EACCES 13
@@ -118,6 +122,7 @@ static void dir_remove(vfs_node_t *parent, vfs_node_t *child) {
 
 static void node_destroy(vfs_node_t *n) {
     if (!n) return;
+    if (n->fs_ops && n->fs_ops->close) n->fs_ops->close(n);
     if (n->type == VFS_TYPE_REG && n->data) kfree(n->data);
     if (n->type == VFS_TYPE_SYM && n->symlink) kfree(n->symlink);
     kfree(n);
@@ -720,6 +725,8 @@ int64_t fd_pread(int fd, void *buf, uint64_t len, uint64_t off) {
     if (!uptr_ok_w(buf, len)) return -(int64_t) EFAULT; /* kernel writes into buf */
     vfs_node_t *n = f->node;
     if (!n || n->type != VFS_TYPE_REG) return -(int64_t) EINVAL;
+    if (n->fs_ops && n->fs_ops->read)
+        return n->fs_ops->read(n, (char *) buf, off, len);
     if (off >= n->size) return 0;
     uint64_t avail = n->size - off;
     uint64_t r = (len < avail) ? len : avail;
@@ -735,6 +742,8 @@ int64_t fd_pwrite(int fd, const void *buf, uint64_t len, uint64_t off) {
     if (!uptr_ok(buf, len)) return -(int64_t) EFAULT;
     vfs_node_t *n = f->node;
     if (!n || n->type != VFS_TYPE_REG) return -(int64_t) EINVAL;
+    if (n->fs_ops && n->fs_ops->write)
+        return n->fs_ops->write(n, (const char *) buf, off, len);
     uint64_t end = off + len;
     if (end > n->capacity) {
         uint64_t newcap = (end + 4095) & ~4095ULL;
@@ -749,6 +758,7 @@ int64_t fd_pwrite(int fd, const void *buf, uint64_t len, uint64_t off) {
     }
     memcpy(n->data + off, buf, len);
     if (end > n->size) n->size = end;
+    n->dirty = 1;
     return (int64_t) len;
 }
 
@@ -760,6 +770,8 @@ int64_t fd_pwrite_kbuf(int fd, const void *buf, uint64_t len, uint64_t off) {
     if (len == 0) return 0;
     vfs_node_t *n = f->node;
     if (!n || n->type != VFS_TYPE_REG) return -(int64_t) EINVAL;
+    if (n->fs_ops && n->fs_ops->write)
+        return n->fs_ops->write(n, (const char *) buf, off, len);
     uint64_t end = off + len;
     if (end > n->capacity) {
         uint64_t newcap = (end + 4095) & ~4095ULL;
@@ -774,6 +786,7 @@ int64_t fd_pwrite_kbuf(int fd, const void *buf, uint64_t len, uint64_t off) {
     }
     memcpy(n->data + off, buf, len);
     if (end > n->size) n->size = end;
+    n->dirty = 1;
     return (int64_t) len;
 }
 
@@ -960,6 +973,33 @@ void vfs_free_fdtable(vfs_file_t **fds) {
 void vfs_cloexec_flush(void) {
     for (int i = 0; i < VFS_FD_MAX; i++)
         if (g_fds[i] && file_valid(g_fds[i]) && g_fds[i]->cloexec) fd_close(i);
+}
+
+int vfs_register_fs(struct filesystem *fs) {
+    if (!fs || g_filesystem_cnt >= FS_MAX) return -1;
+    g_filesystems[g_filesystem_cnt++] = fs;
+    return 0;
+}
+
+struct filesystem *vfs_find_fs(const char *name) {
+    for (int i = 0; i < g_filesystem_cnt; i++)
+        if (strcmp(g_filesystems[i]->name, name) == 0)
+            return g_filesystems[i];
+    return NULL;
+}
+
+int vfs_fs_count(void) {
+    return g_filesystem_cnt;
+}
+
+struct filesystem *vfs_get_fs(int i) {
+    return (i >= 0 && i < g_filesystem_cnt) ? g_filesystems[i] : NULL;
+}
+
+void vfs_sync_all(void) {
+    for (int i = 0; i < g_filesystem_cnt; i++)
+        if (g_filesystems[i]->sync)
+            g_filesystems[i]->sync();
 }
 
 void vfs_init(void) {
@@ -1173,6 +1213,11 @@ int64_t fd_read(int fd, void *buf, uint64_t len) {
     }
     if (n->type == VFS_TYPE_DIR) return -(int64_t) EISDIR;
     if (n->type == VFS_TYPE_REG) {
+        if (n->fs_ops && n->fs_ops->read) {
+            int64_t r = n->fs_ops->read(n, (char *) buf, f->pos, len);
+            if (r > 0) f->pos += (uint64_t) r;
+            return r;
+        }
         if (f->pos >= n->size) return 0;
         uint64_t avail = n->size - f->pos;
         uint64_t r = (len < avail) ? len : avail;
@@ -1227,6 +1272,11 @@ static int64_t fd_write_dispatch(vfs_file_t *f, const void *buf, uint64_t len) {
     }
     if (n->type == VFS_TYPE_DIR) return -(int64_t) EISDIR;
     if (n->type == VFS_TYPE_REG) {
+        if (n->fs_ops && n->fs_ops->write) {
+            int64_t r = n->fs_ops->write(n, (const char *) buf, f->pos, len);
+            if (r > 0) f->pos += (uint64_t) r;
+            return r;
+        }
         uint64_t end = f->pos + len;
         if (end > n->capacity) {
             uint64_t newcap = (end + 4095) & ~4095ULL;
@@ -1242,6 +1292,7 @@ static int64_t fd_write_dispatch(vfs_file_t *f, const void *buf, uint64_t len) {
         memcpy(n->data + f->pos, buf, len);
         f->pos += len;
         if (f->pos > n->size) n->size = f->pos;
+        n->dirty = 1;
         return (int64_t) len;
     }
     return -(int64_t) EINVAL;
@@ -1633,7 +1684,10 @@ int vfs_truncate(const char *path, uint64_t len) {
         node_unref(n);
         return -(int) EACCES;
     }
-    if (len < n->size) n->size = len;
+    if (len < n->size) {
+        n->size = len;
+        n->dirty = 1;
+    }
     node_unref(n);
     return 0;
 }
