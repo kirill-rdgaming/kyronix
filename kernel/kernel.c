@@ -413,7 +413,6 @@ void kmain(void) {
                 buf[fsize] = '\0';
                 if (process_exec(buf, fsize, "/init") < 0)
                     kprintf("  FATAL: process_exec failed\n");
-                kfree(buf);
             } else {
                 kprintf("  FATAL: out of memory for /init\n");
             }
