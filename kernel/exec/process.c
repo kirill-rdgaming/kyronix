@@ -162,8 +162,11 @@ int process_exec(const void *data, uint64_t size, const char *name) {
     elf_load_result_t res;
     if (elf_load(data, size, &res) < 0) {
         log_error("process_exec: elf_load failed");
+        kfree((void *) data);
         return -1;
     }
+
+    kfree((void *) data);
 
     const char *init_argv[] = { name, NULL };
     const char *init_envp[] = { "TERM=vt100", "HOME=/", "PATH=/:/bin:/usr/bin", "SHELL=/init",
