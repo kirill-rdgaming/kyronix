@@ -36,8 +36,8 @@ Kyronix is ​​a modern hybrid Linux-compatible OS with a focus on maximum spe
 ### Filesystems
 - VFS with POSIX operations
 - CPIO initramfs
-- ext2 read/write
-- FAT32
+- Ext2 read/write
+- Fat32 read/write
 - procfs, devfs
 - eventfd, pipe, AF_UNIX sockets
 
@@ -50,7 +50,7 @@ Kyronix is ​​a modern hybrid Linux-compatible OS with a focus on maximum spe
 ### Userspace
 - **ksh**: shell with pipes, redirects, history, tilde expansion
 - **vi**: text editor
-- **Kyrobox**: 65 standalone POSIX command binaries
+- **Kyrobox**: standalone POSIX command binaries
 - **login**: password authentication
 - Runs musl-linked programs: tcc, nasm, dillo, etc.
 
@@ -61,7 +61,7 @@ Kyronix is ​​a modern hybrid Linux-compatible OS with a focus on maximum spe
 - Shared memory (SHM: shmget/shmat/shmdt/shmctl)
 - futex (WAIT, WAKE, REQUEUE, CMP_REQUEUE)
 - epoll, poll, select
-- Comprehensive test suite (9 suites, CI-enforced)
+- Comprehensive test suite (Ci)
 
 ## Build
 
