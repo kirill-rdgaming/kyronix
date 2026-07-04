@@ -29,7 +29,7 @@ AC_CONFIG_HEADERS([config.h])
 # We have to enable "foreign" because ChangeLog is auto-generated
 # We cannot enable -Werror because gettext 0.18.1 has invalid content
 # When we update gettext to 0.18.3 or better we can add it again.
-AM_INIT_AUTOMAKE([1.15 foreign -Werror -Wall])
+AM_INIT_AUTOMAKE([foreign -Werror -Wall])
 
 # Checks for programs.
 AC_USE_SYSTEM_EXTENSIONS

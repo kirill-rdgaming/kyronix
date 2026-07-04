@@ -1,4 +1,5 @@
 #include "procfs.h"
+#include "version.h"
 #include "arch/x86_64/pit.h"
 #include "lib/log.h"
 #include "lib/printf.h"
@@ -78,7 +79,7 @@ static int proc_last_pid(void) {
 
 static int64_t proc_version_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
     (void) n;
-    static const char ver[] = "Kyronix version 0.1 (x86_64)\n";
+    static const char ver[] = "Kyronix version " KERNEL_VERSION " (x86_64)\n";
     return read_buf(buf, len, off, ver, sizeof(ver) - 1);
 }
 
@@ -249,7 +250,7 @@ static int64_t proc_pid_max_read(vfs_node_t *n, char *buf, uint64_t len, uint64_
 
 static int64_t proc_osrelease_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
     (void) n;
-    static const char s[] = "0.0.1\n";
+    static const char s[] = KERNEL_VERSION "\n";
     return read_buf(buf, len, off, s, sizeof(s) - 1);
 }
 

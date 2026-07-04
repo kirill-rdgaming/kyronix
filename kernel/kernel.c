@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "version.h"
 #include "arch/x86_64/cpu.h"
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
@@ -147,8 +148,8 @@ void kmain(void) {
     fb_init(lfb);
     fb_clear(COLOR_BG);
 
-    kprintf(COL_BOLD "KyronixOS" COL_RST " kernel is starting up " COL_GRN
-                     "kyronixos-0.0.1 (x86_64)" COL_RST "\n\n");
+    kprintf(COL_BOLD "k9" COL_RST " kernel is starting up " COL_GRN
+                     "Kyronix " KERNEL_VERSION " (x86_64)" COL_RST "\n\n");
 
     kstatus("Initialising PMM", true);
     vmm_init();
