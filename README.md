@@ -41,7 +41,7 @@ Kyronix is ​​a modern hybrid Linux-compatible OS with a focus on maximum spe
 - procfs, devfs
 - eventfd, pipe, AF_UNIX sockets
 
-### Networking (LwIP)
+### Networking ([LwIP](https://github.com/stm32duino/lwip))
 - ARP, IPv4, ICMP, UDP, TCP
 - DHCP client
 - AF_INET socket API (sendto/recvfrom, connect, listen, accept)
