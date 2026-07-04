@@ -7,8 +7,7 @@
 [![ISC](https://img.shields.io/badge/license-ISC-blue)](#)
 [![x86-64](https://img.shields.io/badge/arch-x86__64-lightgrey)](#)
 
-OS that boots into a Unix-like userspace. Runs musl-linked programs
-out of the box (e.g tcc, nasm, vi, even a dillo web browser).
+Kyronix is ​​a modern hybrid Linux-compatible OS with a focus on maximum speed and security.
 
 <img src="meta/screenshots/preview.jpg" alt="Kyronix preview" width="640">
 
