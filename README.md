@@ -103,6 +103,13 @@ make clean && make all && make run-serial
 | `limine/` | Limine BL |
 | `meta/` | Screenshots |
 
+## Support
+
+<a href="https://buymeacoffee.com/kyron1x" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50" style="border-radius: 8px;" />
+
+</a>
+
 ## License
 
 ISC. Do whatever you want.
