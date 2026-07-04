@@ -1,4 +1,5 @@
 #include "syscall.h"
+#include "version.h"
 #include "arch/x86_64/cpu.h"
 #include "arch/x86_64/pit.h"
 #include "arch/x86_64/syscall_setup.h"
@@ -1195,7 +1196,7 @@ static int64_t sys_uname(struct utsname *buf) {
     memset(buf, 0, sizeof(*buf));
     memcpy(buf->sysname, "Kyronix", 7);
     memcpy(buf->nodename, "kx", 2);
-    memcpy(buf->release, "0.0.1", 5);
+    memcpy(buf->release, KERNEL_VERSION, sizeof(KERNEL_VERSION));
     memcpy(buf->version, "#1 SMP", 6);
     memcpy(buf->machine, "x86_64", 6);
     return 0;
