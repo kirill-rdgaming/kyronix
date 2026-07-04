@@ -1,5 +1,3 @@
-<img src="meta/logo.png" width="64" align="left">
-
 # Kyronix
 
 > Operating system that sucks less.
