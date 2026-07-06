@@ -22,6 +22,7 @@ $(OUT)/make: make/make
 	cp $< $@
 
 make/make: make/Makefile
+	touch make/aclocal.m4 make/configure make/Makefile.in make/config.h.in
 	$(MAKE) -C make
 
 make/Makefile: make/configure

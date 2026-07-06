@@ -17,9 +17,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools qemu-system-x86 xorriso autoconf automake
-          AMVER=$(automake --version 2>/dev/null | head -1 | grep -oP '\d+\.\d+')
-          [ -n "$AMVER" ] && [ ! -x "/usr/bin/aclocal-$AMVER" ] && sudo ln -sf /usr/bin/aclocal "/usr/bin/aclocal-$AMVER" || true
-          [ -n "$AMVER" ] && [ ! -x "/usr/bin/automake-$AMVER" ] && sudo ln -sf /usr/bin/automake "/usr/bin/automake-$AMVER" || true
+          # Ensure versioned symlinks exist for the pre-generated autotools files
+          # (they require aclocal-1.18 / automake-1.18 specifically)
+          for ver in 1.18; do
+            [ ! -x "/usr/bin/aclocal-$ver" ] && sudo ln -sf /usr/bin/aclocal "/usr/bin/aclocal-$ver" || true
+            [ ! -x "/usr/bin/automake-$ver" ] && sudo ln -sf /usr/bin/automake "/usr/bin/automake-$ver" || true
+          done
+          # Touch generated autotools files to prevent rebuild rules from firing
+          touch user/kyrobox/make/aclocal.m4 user/kyrobox/make/configure \
+                user/kyrobox/make/Makefile.in user/kyrobox/make/config.h.in
       
       - name: Build test ISO
         run: | 
