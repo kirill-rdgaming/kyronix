@@ -14,6 +14,8 @@ scripts/kconfig/lex.yy.c
 scripts/kconfig/*.tab.c
 scripts/kconfig/*.tab.h
 
+kernel/kconfig.h
+
 # logs
 *.log
 *.d
@@ -27,7 +29,7 @@ scripts/kconfig/*.tab.h
 # build artifacts
 *.o
 *.elf
-test_rootfs/
+test_rootfs/*
 build/*
 iso_root/*
 

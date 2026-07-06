@@ -221,6 +221,9 @@ $(DISK_IMG): $(TARGET) $(INITRD) user-build
 	cp limine-disk.conf $(DISK_ROOT)/boot/limine/limine.conf
 	cp $(LIMINE_DIR)/limine-bios.sys $(DISK_ROOT)/boot/limine/
 	echo '/dev/ahci0 / ext2 rw,noatime 0 1' > $(DISK_ROOT)/etc/fstab
+	# Regenerate fontconfig cache so it matches ext2 mtimes
+	rm -rf $(DISK_ROOT)/var/cache/fontconfig
+	fc-cache --sysroot $(DISK_ROOT) -f 2>/dev/null || true
 	dd if=/dev/zero of=$@ bs=1M count=256 status=none
 	mkfs.ext2 -b 4096 -L kyronix -d $(DISK_ROOT) $@ 2>/dev/null
 	rm -rf $(DISK_ROOT)
@@ -529,7 +532,11 @@ fmt-check: $(FMT_FILES)
 clean:
 	rm -f $(TARGET) $(ISO) $(LIVE_ISO) $(INITRD) $(TEST_ISO) $(TEST_INITRD) $(DISK_IMG) $(TEST_DISK_IMG)
 	rm -f $(CONFIG_H) .config
-	rm -rf $(BUILD_DIR) iso_root rootfs/bin $(TEST_ROOTFS)
+	rm -rf $(BUILD_DIR) iso_root $(TEST_ROOTFS)
+	# keep st and cwm as blobs in rootfs/bin
+	for f in rootfs/bin/*; do \
+	    case "$$(basename $$f)" in st|cwm) ;; *) rm -f "$$f";; esac; \
+	done
 	$(MAKE) -C user clean
 	$(MAKE) -C scripts/kconfig clean 2>/dev/null; true
 	$(MAKE) -C $(LIMINE_DIR) clean 2>/dev/null; true

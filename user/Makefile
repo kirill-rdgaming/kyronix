@@ -31,4 +31,7 @@ clean:
 	$(MAKE) -C vi clean
 	$(MAKE) -C kyrobox clean
 	$(MAKE) -C fetch clean
-	rm -rf $(ROOTFS)/bin
+	# keep st and cwm as blobs
+	for f in $(ROOTFS)/bin/*; do \
+	    case "$$(basename $$f)" in st|cwm) ;; *) rm -f "$$f";; esac; \
+	done

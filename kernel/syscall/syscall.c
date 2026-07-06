@@ -262,6 +262,10 @@ static int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t 
         if (rc < 0) return rc;
         if (reserve_only) return (int64_t) va;
 
+        /* Lazily load file data if filesystem hasn't populated fn->data yet (ext2) */
+        if (!fn->data && fn->fs_ops && fn->fs_ops->read)
+            fn->fs_ops->read(fn, NULL, 0, 0);
+
         /* file-backed: MAP_PRIVATE - allocate pages and copy file content */
         uint64_t file_size = fn->size;
         uint64_t nallocd_file = 0;
@@ -1195,10 +1199,10 @@ static int64_t sys_uname(struct utsname *buf) {
     if (!buf) return -(int64_t) EFAULT;
     if (!uptr_ok_w(buf, sizeof(*buf))) return -(int64_t) EFAULT;
     memset(buf, 0, sizeof(*buf));
-    memcpy(buf->sysname, "Kyronix", 7);
+    memcpy(buf->sysname, "k9", 7);
     memcpy(buf->nodename, "kx", 2);
     memcpy(buf->release, KERNEL_VERSION, sizeof(KERNEL_VERSION));
-    memcpy(buf->version, "#1 SMP", 6);
+    memcpy(buf->version, "UP", 6);
     memcpy(buf->machine, "x86_64", 6);
     return 0;
 }
