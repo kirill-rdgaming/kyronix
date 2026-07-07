@@ -14,7 +14,7 @@ scripts/kconfig/lex.yy.c
 scripts/kconfig/*.tab.c
 scripts/kconfig/*.tab.h
 
-kernel/kconfig.h
+kernel/config.h
 
 # logs
 *.log
