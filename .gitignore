@@ -32,6 +32,7 @@ kernel/kconfig.h
 test_rootfs/*
 build/*
 iso_root/*
+dist/
 
 # unecessary blobs
 rootfs/usr/lib/libLLVM.so.19.1

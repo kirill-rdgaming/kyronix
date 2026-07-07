@@ -103,6 +103,10 @@ INLINE void irq_restore(uint64_t flags) {
 
 INLINE void write_cr4(uint64_t val) { __asm__ volatile("mov %0, %%cr4" ::"r"(val) : "memory"); }
 
+INLINE void cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx) {
+    __asm__ volatile("cpuid" : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx) : "a"(leaf), "c"(0));
+}
+
 INLINE void fpu_init(void) {
     uint32_t mxcsr = 0x1F80;
     __asm__ volatile("fninit; ldmxcsr %0" ::"m"(mxcsr));

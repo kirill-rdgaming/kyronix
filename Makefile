@@ -1,6 +1,16 @@
-TARGET     := kernel.elf
-ISO        := kyronix.iso
-DISK_IMG   := disk.img
+VERSION    := $(shell sed -n 's/ *#define *KERNEL_VERSION *"\(.*\)"/\1/p' kernel/version.h)
+BUILD_TYPE := INDEV
+ARCH       := amd64
+DIST_DIR   := dist
+
+TARGET     := $(DIST_DIR)/kernel.elf
+ISO        := $(DIST_DIR)/kyronix-$(VERSION)-$(BUILD_TYPE)-$(ARCH).iso
+DISK_IMG   := $(DIST_DIR)/disk.img
+LIVE_ISO   := $(DIST_DIR)/kyronix-$(VERSION)-$(BUILD_TYPE)-$(ARCH)-live.iso
+TEST_ISO   := $(DIST_DIR)/kyronix-$(VERSION)-$(BUILD_TYPE)-$(ARCH)-test.iso
+TEST_DISK_IMG := $(DIST_DIR)/test-disk.img
+INITRD     := $(DIST_DIR)/initrd.cpio
+TEST_INITRD := $(DIST_DIR)/test-initrd.cpio
 LIMINE_DIR := limine
 BUILD_DIR  := build
 
@@ -154,7 +164,6 @@ KALLSYMS_SRC := kernel/kallsyms_data.c
 KALLSYMS_OBJ := $(BUILD_DIR)/kernel/kallsyms_data.o
 
 SRC_DIR  := .
-INITRD   := initrd.cpio
 
 .PHONY: all iso run run-serial run-uefi live live-iso live-run run-disk clean user-build xorg testrunner test-initrd test-iso test-run test-run-log fmt fmt-check disk test-disk config.h kallsyms nconfig help
 
@@ -165,10 +174,9 @@ help:
 	@echo ""
 	@echo "Build"
 	@echo "  all        Build kernel + initrd + disk.img (default)"
-	@echo "  iso        Build persistent ISO  (kyronix.iso)"
-	@echo "  live-iso   Build live ISO        (kyronix-live.iso)"
-	@echo "  disk       Create disk.img from rootfs/  (DESTROYS persistence)"
-	@echo "  test-iso   Build test ISO        (kyronix-test.iso)"
+	@echo "  iso        Build persistent ISO  (kyronix-$(VERSION)-$(BUILD_TYPE)-$(ARCH).iso)"
+	@echo "  live-iso   Build live ISO        (kyronix-$(VERSION)-$(BUILD_TYPE)-$(ARCH)-live.iso)"
+	@echo "  test-iso   Build test ISO        (kyronix-$(VERSION)-$(BUILD_TYPE)-$(ARCH)-test.iso)"
 	@echo "  test-disk  Create test disk image  (test-disk.img)"
 	@echo "  test-initrd Build test initrd     (test-initrd.cpio)"
 	@echo "  kallsyms   Regenerate kallsyms table"
@@ -214,6 +222,7 @@ nconfig: kernel/Kconfig $(NCONF)
 DISK_ROOT := disk_root
 
 $(DISK_IMG): $(TARGET) $(INITRD) user-build
+	@mkdir -p $(@D)
 	rm -rf $(DISK_ROOT)
 	mkdir -p $(DISK_ROOT)/boot/limine
 	cp -a rootfs/* $(DISK_ROOT)/
@@ -246,6 +255,7 @@ INITRD_DEPS := $(shell find rootfs -not -name '.gitignore' -type f | sort) \
                $(wildcard build/bin/*)
 
 $(INITRD): $(INITRD_DEPS) | user-build
+	@mkdir -p $(@D)
 	@cd rootfs && find . -not -name '.gitignore' | sort | cpio -o --format=newc --owner=0:0 --reproducible > ../$@ 2>/dev/null
 	@echo "  Built: $@"
 
@@ -265,6 +275,7 @@ kallsyms: $(TARGET)
 $(KALLSYMS_OBJ): $(KALLSYMS_SRC)
 
 $(TARGET): config.h $(OBJS) $(KALLSYMS_OBJ)
+	@mkdir -p $(@D)
 	$(LD) $(LDFLAGS) -o $@ $(OBJS) $(KALLSYMS_OBJ)
 
 $(BUILD_DIR)/%.o: %.c
@@ -281,6 +292,7 @@ $(LIMINE_DIR)/limine: $(LIMINE_DIR)/limine.c
 	cc $(LIMINE_DIR)/limine.c -o $@
 
 iso: $(TARGET) $(INITRD) $(LIMINE_DIR)/limine
+	@mkdir -p $(DIST_DIR)
 	rm -rf iso_root
 	mkdir -p iso_root/boot/limine
 	mkdir -p iso_root/EFI/BOOT
@@ -353,9 +365,8 @@ run-disk:
 
 OVMF ?= /usr/share/edk2/x64/OVMF.fd
 
-LIVE_ISO := kyronix-live.iso
-
 live-iso: $(TARGET) $(INITRD) $(LIMINE_DIR)/limine
+	@mkdir -p $(DIST_DIR)
 	rm -rf iso_root
 	mkdir -p iso_root/boot/limine
 	mkdir -p iso_root/EFI/BOOT
@@ -413,9 +424,6 @@ run-uefi:
 	    -device ide-hd,drive=hd0,bus=ahci.0
 
 TEST_ROOTFS    := test_rootfs
-TEST_INITRD    := test-initrd.cpio
-TEST_ISO       := kyronix-test.iso
-TEST_DISK_IMG  := test-disk.img
 
 testrunner: build/libatomic_asneeded.a
 	$(MAKE) -C user/testrunner
@@ -424,6 +432,7 @@ test-initrd: $(TARGET) testrunner build/libatomic_asneeded.a
 	$(MAKE) -C user/kyrobox
 	$(MAKE) -C user/fetch
 	$(MAKE) -C user/shell
+	@mkdir -p $(@D)
 	rm -rf $(TEST_ROOTFS) $(TEST_INITRD)
 	mkdir -p $(TEST_ROOTFS)/bin $(TEST_ROOTFS)/mnt
 	cp build/bin/testrunner $(TEST_ROOTFS)/init
@@ -440,6 +449,7 @@ test-initrd: $(TARGET) testrunner build/libatomic_asneeded.a
 	@echo "  Built: $(TEST_INITRD)"
 
 test-iso: $(TARGET) test-initrd $(LIMINE_DIR)/limine
+	@mkdir -p $(DIST_DIR)
 	rm -rf iso_root
 	mkdir -p iso_root/boot/limine
 	mkdir -p iso_root/EFI/BOOT
@@ -468,6 +478,7 @@ test-iso: $(TARGET) test-initrd $(LIMINE_DIR)/limine
 test-disk: $(TEST_DISK_IMG)
 
 $(TEST_DISK_IMG):
+	@mkdir -p $(@D)
 	dd if=/dev/zero of=$@ bs=1M count=16 status=none
 	mkfs.ext2 -b 4096 -L kyronix-test $@ 2>/dev/null
 	@echo "  Built: $@"
@@ -530,7 +541,7 @@ fmt-check: $(FMT_FILES)
 	clang-format --dry-run -Werror -style=file $?
 
 clean:
-	rm -f $(TARGET) $(ISO) $(LIVE_ISO) $(INITRD) $(TEST_ISO) $(TEST_INITRD) $(DISK_IMG) $(TEST_DISK_IMG)
+	rm -rf $(DIST_DIR)
 	rm -f $(CONFIG_H) .config
 	rm -rf $(BUILD_DIR) iso_root $(TEST_ROOTFS)
 	# keep st and cwm as blobs in rootfs/bin

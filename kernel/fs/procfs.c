@@ -1,5 +1,6 @@
 #include "procfs.h"
 #include "version.h"
+#include "arch/x86_64/cpu.h"
 #include "arch/x86_64/pit.h"
 #include "lib/log.h"
 #include "lib/printf.h"
@@ -85,23 +86,118 @@ static int64_t proc_version_read(vfs_node_t *n, char *buf, uint64_t len, uint64_
 
 static int64_t proc_cpuinfo_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
     (void) n;
-    char tmp[512];
+
+    uint32_t eax, ebx, ecx, edx;
+
+    cpuid(0, &eax, &ebx, &ecx, &edx);
+    uint32_t max_leaf = eax;
+    char vendor[13];
+    memcpy(vendor, &ebx, 4);
+    memcpy(vendor + 4, &edx, 4);
+    memcpy(vendor + 8, &ecx, 4);
+    vendor[12] = '\0';
+
+    cpuid(1, &eax, &ebx, &ecx, &edx);
+    uint32_t stepping = eax & 0xf;
+    uint32_t model = (eax >> 4) & 0xf;
+    uint32_t family = (eax >> 8) & 0xf;
+    uint32_t ext_model = (eax >> 16) & 0xf;
+    uint32_t ext_family = (eax >> 20) & 0xff;
+    uint32_t apicid = (ebx >> 24) & 0xff;
+    uint32_t feat_ecx = ecx;
+    uint32_t feat_edx = edx;
+
+    if (family == 15) family = ext_family + family;
+    if (family == 6 || family == 15) model = (ext_model << 4) | model;
+
+    char brand[49] = {0};
+    cpuid(0x80000000, &eax, &ebx, &ecx, &edx);
+    if (eax >= 0x80000004) {
+        uint32_t *b = (uint32_t *)brand;
+        cpuid(0x80000002, &b[0], &b[1], &b[2], &b[3]);
+        cpuid(0x80000003, &b[4], &b[5], &b[6], &b[7]);
+        cpuid(0x80000004, &b[8], &b[9], &b[10], &b[11]);
+        brand[48] = '\0';
+        char *p = brand;
+        while (*p == ' ') p++;
+        if (p != brand) memmove(brand, p, strlen(p) + 1);
+        p = brand + strlen(brand);
+        while (p > brand && p[-1] == ' ') p--;
+        *p = '\0';
+    }
+    if (!brand[0]) strcpy(brand, "Unknown");
+
+    uint32_t ext_edx = 0;
+    if (max_leaf >= 0x80000001) {
+        cpuid(0x80000001, &eax, &ebx, &ecx, &edx);
+        ext_edx = edx;
+    }
+
+    char flags[512];
+    int fpos = 0;
+
+#define ADD_FLAG(cond, name) do { \
+    if (cond) { \
+        if (fpos > 0) flags[fpos++] = ' '; \
+        int _n = snprintf(flags + fpos, (int)(sizeof(flags) - (uint64_t)fpos), "%s", name); \
+        if (_n > 0) fpos += _n; \
+    } \
+} while (0)
+
+    ADD_FLAG(feat_edx & (1 << 0), "fpu");
+    ADD_FLAG(feat_edx & (1 << 4), "tsc");
+    ADD_FLAG(feat_edx & (1 << 5), "msr");
+    ADD_FLAG(feat_edx & (1 << 6), "pae");
+    ADD_FLAG(feat_edx & (1 << 8), "cx8");
+    ADD_FLAG(feat_edx & (1 << 9), "apic");
+    ADD_FLAG(feat_edx & (1 << 11), "sep");
+    ADD_FLAG(feat_edx & (1 << 12), "mtrr");
+    ADD_FLAG(feat_edx & (1 << 13), "pge");
+    ADD_FLAG(feat_edx & (1 << 15), "cmov");
+    ADD_FLAG(feat_edx & (1 << 16), "pat");
+    ADD_FLAG(feat_edx & (1 << 23), "mmx");
+    ADD_FLAG(feat_edx & (1 << 24), "fxsr");
+    ADD_FLAG(feat_edx & (1 << 25), "sse");
+    ADD_FLAG(feat_edx & (1 << 26), "sse2");
+    ADD_FLAG(feat_ecx & (1 << 0), "sse3");
+    ADD_FLAG(feat_ecx & (1 << 9), "ssse3");
+    ADD_FLAG(feat_ecx & (1 << 12), "fma");
+    ADD_FLAG(feat_ecx & (1 << 19), "sse4_1");
+    ADD_FLAG(feat_ecx & (1 << 20), "sse4_2");
+    ADD_FLAG(feat_ecx & (1 << 23), "popcnt");
+    ADD_FLAG(feat_ecx & (1 << 25), "aes");
+    ADD_FLAG(feat_ecx & (1 << 28), "avx");
+    ADD_FLAG(feat_ecx & (1 << 29), "f16c");
+    ADD_FLAG(feat_ecx & (1 << 30), "rdrand");
+    ADD_FLAG(feat_ecx & (1 << 31), "hypervisor");
+    ADD_FLAG(ext_edx & (1 << 11), "syscall");
+    ADD_FLAG(ext_edx & (1 << 20), "nx");
+    ADD_FLAG(ext_edx & (1 << 26), "rdtscp");
+    ADD_FLAG(ext_edx & (1 << 29), "lm");
+
+#undef ADD_FLAG
+
+    flags[fpos] = '\0';
+
+    char tmp[2048];
     int sz = snprintf(tmp, sizeof(tmp),
                       "processor\t: 0\n"
-                      "vendor_id\t: Kyronix\n"
-                      "cpu family\t: 6\n"
-                      "model\t\t: 0\n"
-                      "model name\t: Kyronix virtual x86_64 CPU\n"
-                      "stepping\t: 0\n"
+                      "vendor_id\t: %s\n"
+                      "cpu family\t: %u\n"
+                      "model\t\t: %u\n"
+                      "model name\t: %s\n"
+                      "stepping\t: %u\n"
                       "cpu MHz\t\t: 1000.000\n"
                       "cache size\t: 0 KB\n"
                       "physical id\t: 0\n"
                       "siblings\t: 1\n"
                       "core id\t\t: 0\n"
                       "cpu cores\t: 1\n"
-                      "apicid\t\t: 0\n"
-                      "flags\t\t: fpu tsc msr pae cx8 apic sep mtrr pge cmov pat mmx fxsr sse sse2 "
-                      "syscall nx lm\n\n");
+                      "apicid\t\t: %u\n"
+                      "initial apicid\t: %u\n"
+                      "flags\t\t: %s\n"
+                      "\n",
+                      vendor, family, model, brand, stepping, apicid, apicid, flags);
     return read_buf(buf, len, off, tmp, (uint64_t) sz);
 }
 
