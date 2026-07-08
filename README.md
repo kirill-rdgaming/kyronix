@@ -2,16 +2,17 @@
 
 <img align="left" src="meta/logo.png" width="120" alt="Kyronix logo">
 
- Operating system that sucks less.
+Operating system that sucks less.
 
 ![Commits per month](https://img.shields.io/github/commit-activity/m/kyronix-project/kyronix)
 [![test](https://github.com/kyronix-project/kyronix/actions/workflows/test.yml/badge.svg)](https://github.com/kyronix-project/kyronix/actions/workflows/test.yml)
 [![ISC](https://img.shields.io/badge/license-ISC-blue)](#)
 [![x86-64](https://img.shields.io/badge/arch-x86__64-lightgrey)](#)
 
-Kyronix is a modern hybrid Linux-compatible operating system focused on performance, security and Linux compatibility.
-
 <br clear="left"/>
+
+Kyronix is a modern hybrid Linux-compatible operating system focused on
+performance, security and Linux compatibility.
 
 <img src="meta/screenshots/preview.png" alt="Kyronix preview" width="640">
 
