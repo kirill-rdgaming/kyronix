@@ -122,4 +122,4 @@ If you like Kyronix, consider supporting its development.
 
 ## License
 
-ISC License.
+Distributed under the ISC License. See `LICENSE` for more information.
