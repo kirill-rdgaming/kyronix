@@ -13,6 +13,8 @@ scripts/kconfig/zconf.lex.c
 scripts/kconfig/lex.yy.c
 scripts/kconfig/*.tab.c
 scripts/kconfig/*.tab.h
+include/config/auto.conf
+include/generated/rustc_cfg
 
 kernel/config.h
 
