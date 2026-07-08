@@ -412,15 +412,17 @@ void kmain(void) {
                 else if (init_node->data)
                     memcpy(buf, init_node->data, fsize);
                 buf[fsize] = '\0';
-                if (process_exec(buf, fsize, "/init") < 0)
+                if (process_exec(buf, fsize, "/init") < 0) {
                     kprintf("  FATAL: process_exec failed\n");
+                    kfree(buf);
+                }
             } else {
                 kprintf("  FATAL: out of memory for /init\n");
             }
         } else {
             kprintf("  FATAL: /init not found\n");
         }
-        vfs_node_unref_internal(init_node);
+        if (init_node) vfs_node_unref_internal(init_node);
     }
 
     vfs_sync_all();
