@@ -662,6 +662,7 @@ static int64_t proc_loglevel_read(vfs_node_t *n, char *buf, uint64_t len, uint64
 static int64_t proc_loglevel_write(vfs_node_t *n, const char *buf, uint64_t len, uint64_t pos) {
     (void) n;
     if (g_current_proc && g_current_proc->euid != 0) return -(int64_t) EPERM;
+    if (!len || !uptr_ok(buf, 1)) return -(int64_t) EFAULT;
     char c = buf[0];
     int v = c - '0';
     if (v >= 0 && v <= 3) {
@@ -680,7 +681,10 @@ void procfs_init(void) {
     vfs_mkdir_p("/proc/sys/kernel", 0555);
 
     vfs_create_chr("/proc/version", proc_version_read, NULL);
-    vfs_create_chr("/proc/kmsg", proc_kmsg_read, NULL);
+    {
+        vfs_node_t *km = vfs_create_chr("/proc/kmsg", proc_kmsg_read, NULL);
+        if (km) km->mode = S_IFCHR | 0400;
+    }
     vfs_create_chr("/proc/cpuinfo", proc_cpuinfo_read, NULL);
     vfs_create_chr("/proc/pids", proc_pids_read, NULL);
     vfs_create_chr("/proc/meminfo", proc_meminfo_read, NULL);

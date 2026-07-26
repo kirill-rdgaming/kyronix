@@ -5,6 +5,7 @@
 #include "internal.h"
 #include "lib/string.h"
 #include "mm/vmm.h"
+#include "proc/jail.h"
 #include "proc/proc.h"
 #include "proc/signal.h"
 
@@ -82,6 +83,7 @@ static void ptrace_fill_regs(proc_t *t, struct ptrace_user_regs *out) {
 }
 
 static int ptrace_store_regs(proc_t *t, const struct ptrace_user_regs *in) {
+    if (in->rip >= USER_LIMIT || in->rsp >= USER_LIMIT) return -1;
     if (t->ptrace_frame_kind == 1) {
         syscall_frame_t *f = (syscall_frame_t *) t->ptrace_frame;
         f->r15 = in->r15;
@@ -90,7 +92,7 @@ static int ptrace_store_regs(proc_t *t, const struct ptrace_user_regs *in) {
         f->r12 = in->r12;
         f->rbp = in->rbp;
         f->rbx = in->rbx;
-        f->r11 = in->eflags;
+        f->r11 = user_rflags(in->eflags);
         f->r10 = in->r10;
         f->r9 = in->r9;
         f->r8 = in->r8;
@@ -120,7 +122,7 @@ static int ptrace_store_regs(proc_t *t, const struct ptrace_user_regs *in) {
         s->rsi = in->rsi;
         s->rdi = in->rdi;
         s->rip = in->rip;
-        s->rflags = (in->eflags & 0x3F7FD7ULL) | 0x2ULL;
+        s->rflags = user_rflags(in->eflags);
         s->rsp = in->rsp;
         return 0;
     }
@@ -151,6 +153,15 @@ static int64_t ptrace_rw_mem(proc_t *target, uint64_t addr, void *kbuf, uint64_t
     return ok ? 0 : -1;
 }
 
+static bool ptrace_may_attach(const proc_t *self, const proc_t *target) {
+    if (!self) return true;
+    if (self == target) return false;
+    if (!jail_can_see(self, target)) return false;
+    if (self->euid == 0) return true;
+    if (target->uid != target->euid || target->uid != target->suid) return false;
+    return self->uid == target->uid && self->euid == target->uid && self->suid == target->uid;
+}
+
 int64_t sys_ptrace(int64_t request, int64_t pid, uint64_t addr, uint64_t data) {
     proc_t *self = cur();
 
@@ -167,8 +178,17 @@ int64_t sys_ptrace(int64_t request, int64_t pid, uint64_t addr, uint64_t data) {
 
     int64_t rc = 0;
 
+    if (!jail_can_see(self, t)) {
+        rc = -(int64_t) ESRCH;
+        goto out;
+    }
+
     if (request == PTRACE_ATTACH) {
         if (t->tracer_pid) {
+            rc = -(int64_t) EPERM;
+            goto out;
+        }
+        if (!ptrace_may_attach(self, t)) {
             rc = -(int64_t) EPERM;
             goto out;
         }

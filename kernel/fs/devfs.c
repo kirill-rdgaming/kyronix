@@ -21,6 +21,8 @@ static int64_t devmem_mmap(vfs_node_t *n, uint64_t off, uint64_t len, uint64_t v
     if (!p || !p->space) return -EINVAL;
     if (p->euid != 0) return -(int64_t) EPERM;
     off &= ~0xFFFULL;
+    if (va >= USER_LIMIT || len > USER_LIMIT - va) return -EINVAL;
+    if (off + len < off) return -EINVAL;
     uint64_t flags = vflags | VMM_PRESENT | VMM_USER | VMM_WRITE;
     for (uint64_t o = 0; o < len; o += 0x1000) vmm_map(p->space, va + o, off + o, flags);
     return (int64_t) va;

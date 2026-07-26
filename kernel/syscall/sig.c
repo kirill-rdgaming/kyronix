@@ -75,6 +75,9 @@ int64_t sys_rt_sigaction(int sig, const k_sigaction_t *act, k_sigaction_t *oldac
     if (!p) return -(int64_t) EFAULT;
     if (oldact && !uptr_ok_w(oldact, sizeof(k_sigaction_t))) return -(int64_t) EFAULT;
     if (act && !uptr_ok(act, sizeof(k_sigaction_t))) return -(int64_t) EFAULT;
+    if (act && act->sa_handler != SIG_DFL && act->sa_handler != SIG_IGN &&
+        act->sa_handler >= USER_LIMIT)
+        return -(int64_t) EINVAL;
     if (oldact) memcpy(oldact, &p->sig_actions[sig - 1], sizeof(k_sigaction_t));
     if (act) memcpy(&p->sig_actions[sig - 1], act, sizeof(k_sigaction_t));
     return 0;
@@ -114,10 +117,12 @@ int64_t sys_rt_sigreturn(syscall_frame_t *f) {
     if (!uptr_ok(frame, sizeof(*frame))) return -(int64_t) EFAULT;
     mcontext_t *mc = &frame->uc.uc_mcontext;
 
+    if (mc->rip >= USER_LIMIT) return -(int64_t) EFAULT;
+
     f->r8 = mc->r8;
     f->r9 = mc->r9;
     f->r10 = mc->r10;
-    f->r11 = mc->eflags; /* user rflags*/
+    f->r11 = user_rflags(mc->eflags); /* user rflags*/
     f->r12 = mc->r12;
     f->r13 = mc->r13;
     f->r14 = mc->r14;
@@ -254,9 +259,11 @@ int64_t sys_rt_sigtimedwait(const uint64_t *set, void *info, const void *timeout
     (void) info;
     proc_t *p = cur();
     if (!p || !set) return -(int64_t) EFAULT;
+    if (!uptr_ok(set, 8)) return -(int64_t) EFAULT;
     uint64_t mask = *set;
     uint64_t deadline = (uint64_t) -1ULL;
     if (timeout) {
+        if (!uptr_ok(timeout, 16)) return -(int64_t) EFAULT;
         uint64_t ms =
             ((const uint64_t *) timeout)[0] * 1000 + ((const uint64_t *) timeout)[1] / 1000000;
         if (ms) deadline = g_ticks + ms;

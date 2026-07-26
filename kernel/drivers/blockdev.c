@@ -5,12 +5,14 @@
 #include "../lib/printf.h"
 #include "../lib/string.h"
 #include "../mm/heap.h"
+#include "../syscall/syscall.h"
 #include "block.h"
 
 #define EBADF 9
 #define EFAULT 14
 #define EINVAL 22
 #define ENOMEM 12
+#define ENOSPC 28
 
 #define BLKGETSIZE   0x1260
 #define BLKGETSIZE64 0x80081272
@@ -18,14 +20,7 @@
 #define BLKFLSBUF    0x1261
 #define BLKDISCARD   0x127F
 
-static bool uptr_ok(const void *p, uint64_t len) {
-    uint64_t addr = (uint64_t) (uintptr_t) p;
-    return addr + len <= 0x0000800000000000ULL && p != NULL;
-}
-
-static bool uptr_ok_w(const void *p, uint64_t len) {
-    return uptr_ok(p, len);
-}
+#define BLK_IO_MAX (16ULL * 1024 * 1024)
 
 static struct block_device *node_to_blk(vfs_node_t *n) {
     return (struct block_device *) n->fs_private;
@@ -36,9 +31,11 @@ static int64_t blk_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t pos) {
     if (!bd || !bd->ops) return -(int64_t) EINVAL;
     if (len == 0) return 0;
 
+    if (!bd->sector_size) return -(int64_t) EINVAL;
     uint64_t total_bytes = (uint64_t) bd->sectors * bd->sector_size;
     if (pos >= total_bytes) return 0;
     if (pos + len > total_bytes) len = total_bytes - pos;
+    if (len > BLK_IO_MAX) len = BLK_IO_MAX;
     if (!uptr_ok_w(buf, len)) return -(int64_t) EFAULT;
 
     uint64_t lba = pos / bd->sector_size;
@@ -66,7 +63,12 @@ static int64_t blk_write(vfs_node_t *n, const char *buf, uint64_t len, uint64_t 
     struct block_device *bd = node_to_blk(n);
     if (!bd || !bd->ops) return -(int64_t) EINVAL;
     if (len == 0) return 0;
+    if (!bd->sector_size) return -(int64_t) EINVAL;
 
+    uint64_t total_bytes = (uint64_t) bd->sectors * bd->sector_size;
+    if (pos >= total_bytes) return -(int64_t) ENOSPC;
+    if (pos + len > total_bytes) len = total_bytes - pos;
+    if (len > BLK_IO_MAX) len = BLK_IO_MAX;
     if (!uptr_ok(buf, len)) return -(int64_t) EFAULT;
 
     uint64_t lba = pos / bd->sector_size;
@@ -157,6 +159,7 @@ static void blockdev_register_one(struct block_device *bd) {
         log_warn("blockdev: failed to create %s", path);
         return;
     }
+    n->mode = S_IFCHR | 0600;
     n->chr_ioctl = blk_ioctl;
     n->fs_private = bd;
     n->size = (uint64_t) bd->sectors * bd->sector_size;

@@ -1,6 +1,9 @@
 #include "fb.h"
 #include "../lib/string.h"
 #include "../mm/pmm.h"
+#ifdef CONFIG_KMEMLEAK
+#include "../mm/kmemleak.h"
+#endif
 #include <stdbool.h>
 
 fb_t g_fb;
@@ -14,6 +17,16 @@ static bool g_cursor_enabled;
 static bool g_cursor_blink_state = true;
 static uint32_t g_cursor_last_col;
 static uint32_t g_cursor_last_row;
+
+static uint8_t *g_shadow;
+static uint64_t g_shadow_bytes;
+static uint32_t g_bytes_per_px = 4;
+
+static inline uint8_t *vram_at(uint64_t off) { return (uint8_t *)g_fb.addr + off; }
+
+static inline uint64_t px_off(uint32_t x, uint32_t y) {
+    return (uint64_t)y * g_fb.pitch + (uint64_t)x * g_bytes_per_px;
+}
 
 static void cursor_draw(uint32_t col, uint32_t row, uint32_t color);
 static uint32_t adjust_bold(uint32_t color);
@@ -137,14 +150,21 @@ void fb_cursor_update(void) {
 static void draw_char(uint32_t col, uint32_t row, uint32_t glyph_idx) {
     uint32_t px = col * FONT_W;
     uint32_t py = row * FONT_H;
+    if (px + FONT_W > g_fb.width || py + FONT_H > g_fb.height) return;
+
     const uint8_t *glyph = g_glyph_data + glyph_idx * g_glyph_bytes;
     uint32_t fg = g_fb.bold ? adjust_bold(g_fb.fg) : g_fb.fg;
+    uint32_t bg = g_fb.bg;
 
     for (uint32_t ri = 0; ri < FONT_H; ri++) {
         uint8_t bits = glyph[ri * g_bpf];
-        for (int bit = 7; bit >= 0; bit--) {
-            uint32_t color = (bits >> bit) & 1 ? fg : g_fb.bg;
-            fb_put_pixel(px + (uint32_t)(7 - bit), py + ri, color);
+        uint64_t off = px_off(px, py + ri);
+        uint32_t *v = (uint32_t *)vram_at(off);
+        uint32_t *s = g_shadow ? (uint32_t *)(g_shadow + off) : NULL;
+        for (uint32_t b = 0; b < FONT_W; b++) {
+            uint32_t color = (bits & (0x80u >> b)) ? fg : bg;
+            v[b] = color;
+            if (s) s[b] = color;
         }
     }
 }
@@ -174,20 +194,37 @@ void fb_init(struct limine_framebuffer *fb) {
     g_glyph_data = g_font_data + g_kfnt->glyph_off;
     g_bpf = (g_kfnt->width + 7) / 8;
     g_glyph_bytes = g_bpf * g_kfnt->height;
+
+    g_bytes_per_px = g_fb.bpp / 8 ? g_fb.bpp / 8 : 4;
+    g_shadow_bytes = (uint64_t)g_fb.pitch * g_fb.height;
+    uint64_t pages = (g_shadow_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+    void *phys = pmm_alloc_contiguous(pages);
+    g_shadow = phys ? (uint8_t *)phys_to_virt((uint64_t)phys) : NULL;
+    if (g_shadow) {
+        memset(g_shadow, 0, g_shadow_bytes);
+#ifdef CONFIG_KMEMLEAK
+        for (uint64_t i = 0; i < pages; i++)
+            kmemleak_untrack_page((void *)((uint64_t)phys + i * PAGE_SIZE));
+#endif
+    }
 }
 
 void fb_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
     if (x >= g_fb.width || y >= g_fb.height) return;
-    uint32_t *p = (uint32_t *)((uint8_t *)g_fb.addr + y * g_fb.pitch + x * (g_fb.bpp / 8));
-    *p = color;
+    uint64_t off = px_off(x, y);
+    *(uint32_t *)vram_at(off) = color;
+    if (g_shadow) *(uint32_t *)(g_shadow + off) = color;
 }
 
 void fb_clear(uint32_t color) {
-    uint8_t *row = g_fb.addr;
     for (uint64_t y = 0; y < g_fb.height; y++) {
-        uint32_t *px = (uint32_t *)row;
-        for (uint64_t x = 0; x < g_fb.width; x++) px[x] = color;
-        row += g_fb.pitch;
+        uint64_t off = px_off(0, (uint32_t)y);
+        uint32_t *v = (uint32_t *)vram_at(off);
+        for (uint64_t x = 0; x < g_fb.width; x++) v[x] = color;
+        if (g_shadow) {
+            uint32_t *s = (uint32_t *)(g_shadow + off);
+            for (uint64_t x = 0; x < g_fb.width; x++) s[x] = color;
+        }
     }
     g_fb.col = 0;
     g_fb.row = 0;
@@ -197,8 +234,18 @@ void fb_clear(uint32_t color) {
 }
 
 void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color) {
-    for (uint32_t dy = 0; dy < h; dy++)
-        for (uint32_t dx = 0; dx < w; dx++) fb_put_pixel(x + dx, y + dy, color);
+    if (x >= g_fb.width || y >= g_fb.height) return;
+    if (w > g_fb.width - x) w = (uint32_t)(g_fb.width - x);
+    if (h > g_fb.height - y) h = (uint32_t)(g_fb.height - y);
+    for (uint32_t dy = 0; dy < h; dy++) {
+        uint64_t off = px_off(x, y + dy);
+        uint32_t *v = (uint32_t *)vram_at(off);
+        for (uint32_t dx = 0; dx < w; dx++) v[dx] = color;
+        if (g_shadow) {
+            uint32_t *s = (uint32_t *)(g_shadow + off);
+            for (uint32_t dx = 0; dx < w; dx++) s[dx] = color;
+        }
+    }
 }
 
 void fb_set_color(uint32_t fg, uint32_t bg) {
@@ -207,14 +254,24 @@ void fb_set_color(uint32_t fg, uint32_t bg) {
 }
 
 static void scroll_up(void) {
-    uint32_t line_bytes = FONT_H * (uint32_t)g_fb.pitch;
-    uint8_t *dst = g_fb.addr;
-    uint8_t *src = dst + line_bytes;
+    uint64_t line_bytes = (uint64_t)FONT_H * g_fb.pitch;
     uint64_t rows_total = g_fb.height / FONT_H;
-    uint64_t copy_bytes = (rows_total - 1) * line_bytes;
-    memmove(dst, src, copy_bytes);
+    if (rows_total < 2) return;
+    uint64_t keep_bytes = (rows_total - 1) * line_bytes;
     uint32_t last_y = (uint32_t)((rows_total - 1) * FONT_H);
-    fb_fill_rect(0, last_y, (uint32_t)g_fb.width, FONT_H, g_fb.bg);
+
+    if (!g_shadow) {
+        memmove(g_fb.addr, (uint8_t *)g_fb.addr + line_bytes, keep_bytes);
+        fb_fill_rect(0, last_y, (uint32_t)g_fb.width, FONT_H, g_fb.bg);
+        return;
+    }
+
+    memmove(g_shadow, g_shadow + line_bytes, keep_bytes);
+    for (uint32_t dy = 0; dy < FONT_H; dy++) {
+        uint32_t *s = (uint32_t *)(g_shadow + px_off(0, last_y + dy));
+        for (uint64_t x = 0; x < g_fb.width; x++) s[x] = g_fb.bg;
+    }
+    memcpy(g_fb.addr, g_shadow, keep_bytes + line_bytes);
 }
 
 /* ── SGR (Select Graphic Rendition) ──────────────────────────── */

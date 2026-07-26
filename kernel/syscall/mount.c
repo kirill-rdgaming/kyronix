@@ -69,7 +69,7 @@ int64_t sys_mount(const char *source, const char *target, const char *fstype,
                   uint64_t flags, const void *data) {
     (void) data;
 
-    if (!is_root()) return -(int64_t) EPERM;
+    if (!host_priv()) return -(int64_t) EPERM;
 
     char ksrc[64], ktarget[256], kfstype[16];
     if (!copy_user_string(ksrc, source, sizeof(ksrc))) return -(int64_t) EFAULT;
@@ -108,7 +108,7 @@ int64_t sys_mount(const char *source, const char *target, const char *fstype,
 int64_t sys_umount2(const char *target, int flags) {
     (void) flags;
 
-    if (!is_root()) return -(int64_t) EPERM;
+    if (!host_priv()) return -(int64_t) EPERM;
 
     char ktarget[256];
     if (!copy_user_string(ktarget, target, sizeof(ktarget))) return -(int64_t) EFAULT;

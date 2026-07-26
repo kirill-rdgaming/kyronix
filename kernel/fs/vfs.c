@@ -466,14 +466,16 @@ vfs_node_t *vfs_create_symlink(const char *path, const char *target) {
         node_unref(parent);
         return NULL;
     }
-    n->symlink = (char *) kmalloc(strlen(target) + 1);
+    size_t tlen = strnlen(target, 511);
+    n->symlink = (char *) kmalloc(tlen + 1);
     if (!n->symlink) {
         kfree(n);
         node_unref(parent);
         return NULL;
     }
-    strcpy(n->symlink, target);
-    n->size = strlen(target);
+    memcpy(n->symlink, target, tlen);
+    n->symlink[tlen] = '\0';
+    n->size = tlen;
     uint64_t _f = irq_save();
     if (dir_find(parent, leaf)) {
         irq_restore(_f);
@@ -1035,15 +1037,17 @@ static void fill_stat(vfs_node_t *n, struct linux_stat *st) {
     st->st_blocks = (int64_t) ((n->size + 511) / 512);
 }
 
+const char *vfs_copy_kernel_path(const char *path, char *kbuf) {
+    if (!path) return NULL;
+    size_t i = 0;
+    for (; i < 511 && path[i]; i++) kbuf[i] = path[i];
+    kbuf[i] = '\0';
+    return kbuf;
+}
+
 const char *vfs_copy_user_path(const char *path, char *kbuf) {
     if (!path) return NULL;
-    if ((uint64_t) (uintptr_t) path >= USER_LIMIT) {
-        /* kernel-originated path (e.g. at_resolve output): trust and copy */
-        size_t i = 0;
-        for (; i < 511 && path[i]; i++) kbuf[i] = path[i];
-        kbuf[i] = '\0';
-        return kbuf;
-    }
+    if ((uint64_t) (uintptr_t) path >= USER_LIMIT) return NULL;
     for (size_t i = 0; i < 511; i++) {
         const char *a = path + i;
         if (i == 0 || ((uint64_t) (uintptr_t) a & 0xFFF) == 0) {
@@ -1057,9 +1061,10 @@ const char *vfs_copy_user_path(const char *path, char *kbuf) {
     return kbuf;
 }
 
-static int fd_open_impl(const char *path, int flags, int mode, bool reroot) {
+static int fd_open_impl(const char *path, int flags, int mode, bool reroot, bool from_user) {
     char _pbuf[512];
-    if (!(path = vfs_copy_user_path(path, _pbuf))) return -(int) EFAULT;
+    path = from_user ? vfs_copy_user_path(path, _pbuf) : vfs_copy_kernel_path(path, _pbuf);
+    if (!path) return -(int) EFAULT;
 
     /* /proc/self/fd/N and /dev/fd/N - dup the existing fd */
     const char *fd_prefix = NULL;
@@ -1154,19 +1159,26 @@ static int fd_open_impl(const char *path, int flags, int mode, bool reroot) {
     return fd;
 }
 
-int fd_open(const char *path, int flags, int mode) { return fd_open_impl(path, flags, mode, true); }
+int fd_open(const char *path, int flags, int mode) {
+    return fd_open_impl(path, flags, mode, true, true);
+}
 
 /* kernel-internal: open a host-absolute path, bypassing jail re-rooting */
 int fd_open_host(const char *path, int flags, int mode) {
-    return fd_open_impl(path, flags, mode, false);
+    return fd_open_impl(path, flags, mode, false, false);
+}
+
+int fd_open_kpath(const char *path, int flags, int mode) {
+    return fd_open_impl(path, flags, mode, true, false);
 }
 
 int fd_openat(int dirfd, const char *path, int flags, int mode) {
-    if (!path) return -(int) ENOENT;
-    if (path[0] == '/' || dirfd == AT_FDCWD) return fd_open(path, flags, mode);
+    char _pbuf[512];
+    if (!(path = vfs_copy_user_path(path, _pbuf))) return -(int) EFAULT;
+    if (path[0] == '/' || dirfd == AT_FDCWD) return fd_open_kpath(path, flags, mode);
     vfs_file_t *df = fd_get(dirfd);
     if (!df || !df->node || df->node->type != VFS_TYPE_DIR) return -(int) EBADF;
-    return fd_open(path, flags, mode);
+    return fd_open_kpath(path, flags, mode);
 }
 
 int fd_close(int fd) {
@@ -1492,11 +1504,7 @@ int fd_getdents64(int fd, void *buf, uint64_t count) {
     return (int) done;
 }
 
-int fd_readlink(const char *path, char *buf, uint64_t bufsz) {
-    char _pbuf[512];
-    if (!path || !buf || !bufsz) return -(int) EINVAL;
-    if (!uptr_ok_w(buf, bufsz)) return -(int) EFAULT;
-    if (!(path = vfs_copy_user_path(path, _pbuf))) return -(int) EFAULT;
+static int readlink_common(const char *path, char *buf, uint64_t bufsz) {
     int proc_ret = 0;
     if (procfs_readlink(path, buf, bufsz, &proc_ret)) return proc_ret;
     vfs_node_t *n = vfs_lookup_nofollow(path);
@@ -1510,6 +1518,20 @@ int fd_readlink(const char *path, char *buf, uint64_t bufsz) {
     memcpy(buf, n->symlink, len);
     node_unref(n);
     return (int) len;
+}
+
+int fd_readlink(const char *path, char *buf, uint64_t bufsz) {
+    char _pbuf[512];
+    if (!path || !buf || !bufsz) return -(int) EINVAL;
+    if (!uptr_ok_w(buf, bufsz)) return -(int) EFAULT;
+    if (!(path = vfs_copy_user_path(path, _pbuf))) return -(int) EFAULT;
+    return readlink_common(path, buf, bufsz);
+}
+
+int fd_readlink_kpath(const char *path, char *buf, uint64_t bufsz) {
+    if (!path || !buf || !bufsz) return -(int) EINVAL;
+    if (!uptr_ok_w(buf, bufsz)) return -(int) EFAULT;
+    return readlink_common(path, buf, bufsz);
 }
 
 char *vfs_node_abspath(vfs_node_t *n, char *buf, size_t sz) {

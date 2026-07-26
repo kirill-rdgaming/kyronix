@@ -97,6 +97,7 @@ int elf_load_into(vmm_space_t *space, const void *data, uint64_t size, uint64_t 
     }
 
     out->prog_entry = bias + eh->e_entry;
+    if (out->prog_entry < bias || out->prog_entry >= USER_LIMIT) return -1;
     out->phdr_va = phdr_va;
     out->phentsize = eh->e_phentsize;
     out->phnum = eh->e_phnum;
