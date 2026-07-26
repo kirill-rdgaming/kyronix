@@ -61,6 +61,12 @@ int64_t sys_futex(uint32_t *uaddr, int op, uint32_t val, void *timeout, uint32_t
         spin_unlock(&g_futex_lock);
         uint64_t deadline = 0;
         if (timeout) {
+            if (!uptr_ok(timeout, 16)) {
+                spin_lock(&g_futex_lock);
+                g_futex_tab[slot].proc = NULL;
+                spin_unlock(&g_futex_lock);
+                return -(int64_t) EFAULT;
+            }
             uint64_t ms = ((uint64_t *) timeout)[0] * 1000 + ((uint64_t *) timeout)[1] / 1000000;
             if (ms) deadline = g_ticks + ms;
         }

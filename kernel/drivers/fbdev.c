@@ -98,12 +98,18 @@ static int64_t fb0_ioctl(vfs_node_t *n, uint64_t req, uint64_t arg) {
 
 static int64_t fb0_mmap(vfs_node_t *n, uint64_t off, uint64_t len, uint64_t va, uint64_t vflags) {
     (void) n;
-    (void) off;
     proc_t *p = g_current_proc;
     if (!p || !p->space) return -22;
     if (p->euid != 0) return -(int64_t) EPERM;
+
+    uint64_t fb_size = ((uint64_t) g_fb.pitch * g_fb.height + 0xFFF) & ~0xFFFULL;
+    if ((off & 0xFFFULL) || off >= fb_size) return -22;
+    uint64_t avail = fb_size - off;
+    if (len > avail) len = avail;
+    if (va >= USER_LIMIT || len > USER_LIMIT - va) return -22;
+
     fb_cursor_enable(0);
-    uint64_t phys = g_fb.phys_addr;
+    uint64_t phys = g_fb.phys_addr + off;
     uint64_t flags = vflags | VMM_PRESENT | VMM_USER | VMM_WRITE;
     for (uint64_t o = 0; o < len; o += 0x1000) vmm_map(p->space, va + o, phys + o, flags);
     return (int64_t) va;

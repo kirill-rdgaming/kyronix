@@ -166,11 +166,13 @@ void input_init(void) {
     vfs_node_t *mouse_node = vfs_create_chr("/dev/input/event1", evdev_read, NULL);
 
     if (kbd_node) {
+        kbd_node->mode = S_IFCHR | 0600;
         kbd_node->data = (uint8_t *) (uintptr_t) INPUT_DEV_KBD;
         kbd_node->chr_ioctl = evdev_ioctl;
         kbd_node->chr_pollin = evdev_pollin;
     }
     if (mouse_node) {
+        mouse_node->mode = S_IFCHR | 0600;
         mouse_node->data = (uint8_t *) (uintptr_t) INPUT_DEV_MOUSE;
         mouse_node->chr_ioctl = evdev_ioctl;
         mouse_node->chr_pollin = evdev_pollin;

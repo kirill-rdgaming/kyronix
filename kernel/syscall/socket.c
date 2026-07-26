@@ -31,6 +31,11 @@ struct ucred_s {
     uint32_t gid;
 };
 
+static void sun_path_copy(char *out, const char *sun_path) {
+    memcpy(out, sun_path, 108);
+    out[108] = '\0';
+}
+
 static void path_abs(char *out, const char *in) {
     if (!in || in[0] == '/') {
         strncpy(out, in ? in : "", 511);
@@ -74,13 +79,12 @@ int64_t sys_socket_connect(int fd, struct sockaddr_un *addr, uint64_t addrlen) {
     vfs_file_t *f = fd_get_file(fd);
     if (!f) return -(int64_t) EBADF;
     if (f->inet) return inet_connect(f->inet, (const struct sockaddr_in *) addr);
-    const char *path;
-    char abs[512];
-    if (addr->sun_path[0] == '\0') {
-        path = addr->sun_path;
-    } else {
-        path_abs(abs, addr->sun_path);
-        path = abs[0] ? abs : addr->sun_path;
+    char sun[109], abs[512];
+    sun_path_copy(sun, addr->sun_path);
+    const char *path = sun;
+    if (sun[0]) {
+        path_abs(abs, sun);
+        if (abs[0]) path = abs;
     }
     return (int64_t) fd_connect_unix(fd, path);
 }
@@ -111,13 +115,12 @@ int64_t sys_socket_bind(int fd, struct sockaddr_un *addr, uint64_t addrlen) {
     vfs_file_t *f = fd_get_file(fd);
     if (!f) return -(int64_t) EBADF;
     if (f->inet) return inet_bind(f->inet, (const struct sockaddr_in *) addr);
-    const char *path;
-    char abs[512];
-    if (addr->sun_path[0] == '\0') {
-        path = addr->sun_path;
-    } else {
-        path_abs(abs, addr->sun_path);
-        path = abs[0] ? abs : addr->sun_path;
+    char sun[109], abs[512];
+    sun_path_copy(sun, addr->sun_path);
+    const char *path = sun;
+    if (sun[0]) {
+        path_abs(abs, sun);
+        if (abs[0]) path = abs;
     }
     return (int64_t) fd_bind_unix(fd, path);
 }
@@ -223,7 +226,8 @@ int64_t sys_socket_sendmsg(int fd, const void *mhdr, int flags) {
         uint64_t cmsg_len = *(const uint64_t *) ctrl;
         int32_t cmsg_lvl = *(const int32_t *) ((const uint8_t *) ctrl + 8);
         int32_t cmsg_typ = *(const int32_t *) ((const uint8_t *) ctrl + 12);
-        if (cmsg_lvl == SOL_SOCKET && cmsg_typ == SCM_RIGHTS && cmsg_len >= 16) {
+        if (cmsg_lvl == SOL_SOCKET && cmsg_typ == SCM_RIGHTS && cmsg_len >= 16 &&
+            cmsg_len <= ctrl_len) {
             const int *fdarr = (const int *) ((const uint8_t *) ctrl + 16);
             int nfds = (int) ((cmsg_len - 16) / sizeof(int));
             vfs_file_t *sf = fd_get_file(fd);

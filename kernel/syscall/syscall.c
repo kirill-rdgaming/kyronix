@@ -95,10 +95,14 @@ static int64_t sys_set_robust_list(void *h, uint64_t l) {
 static int64_t sys_getrandom(void *buf, uint64_t len, uint32_t flags) {
     (void) flags;
     if (!buf || !len) return 0;
+    if (!uptr_ok_w(buf, len)) return -(int64_t) EFAULT;
 
     chacha20_rng_bytes(&g_chacha20_rng, (uint8_t *) buf, (size_t) len);
     return (int64_t) len;
 }
+
+#define AT_RESOLVED(ret, dfd, upath, out)                                                          \
+    (((ret) = at_resolve((int) (dfd), (const char *) (upath), (out), sizeof(out))) >= 0)
 
 static int64_t sys_prctl(int op, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
     (void) op;
@@ -253,14 +257,20 @@ void syscall_dispatch(syscall_frame_t *f) {
         break;
     case 44: { /* sendto(fd, buf, len, flags, addr, addrlen) */
         vfs_file_t *sf = fd_get_file((int) a1);
-        if (sf && sf->inet && a5) {
-            if (!uptr_ok((void *) a5, 16)) {
+        if (sf && sf->inet) {
+            if (a3 && !uptr_ok((void *) a2, a3)) {
                 ret = -(int64_t) EFAULT;
                 break;
             }
-            ret = inet_sendto(sf->inet, (const void *) a2, a3, (const struct sockaddr_in *) a5);
-        } else if (sf && sf->inet) {
-            ret = inet_fd_write(sf->inet, (const void *) a2, a3);
+            if (a5) {
+                if (!uptr_ok((void *) a5, 16)) {
+                    ret = -(int64_t) EFAULT;
+                    break;
+                }
+                ret = inet_sendto(sf->inet, (const void *) a2, a3, (const struct sockaddr_in *) a5);
+            } else {
+                ret = inet_fd_write(sf->inet, (const void *) a2, a3);
+            }
         } else {
             ret = fd_write((int) a1, (const void *) a2, a3);
         }
@@ -271,6 +281,10 @@ void syscall_dispatch(syscall_frame_t *f) {
         if (sf && sf->inet) {
             struct sockaddr_in *sa = a5 ? (struct sockaddr_in *) a5 : NULL;
             if (sa && !uptr_ok_w(sa, sizeof(*sa))) {
+                ret = -(int64_t) EFAULT;
+                break;
+            }
+            if (a3 && !uptr_ok_w((void *) a2, a3)) {
                 ret = -(int64_t) EFAULT;
                 break;
             }
@@ -913,19 +927,19 @@ void syscall_dispatch(syscall_frame_t *f) {
         break;
     case 258: {
         char abs[512];
-        at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
+        if (!AT_RESOLVED(ret, a1, a2, abs)) break;
         ret = (int64_t) vfs_mkdir(abs, (uint32_t) a3);
         break;
     }
     case 260: {
         char abs[512];
-        at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
+        if (!AT_RESOLVED(ret, a1, a2, abs)) break;
         ret = (int64_t) vfs_mknod(abs, (uint32_t) a3, a4);
         break;
     } /* mknodat */
     case 261: {
         char abs[512];
-        at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
+        if (!AT_RESOLVED(ret, a1, a2, abs)) break;
         int _r = (int) a5 & AT_SYMLINK_NOFOLLOW ?
                      (int) vfs_lchown(abs, (uint32_t) a3, (uint32_t) a4) :
                      (int) vfs_chown(abs, (uint32_t) a3, (uint32_t) a4);
@@ -937,45 +951,49 @@ void syscall_dispatch(syscall_frame_t *f) {
         break;
     case 263: {
         char abs[512];
-        at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
+        if (!AT_RESOLVED(ret, a1, a2, abs)) break;
         ret = ((int) a3 & 0x200) ? (int64_t) vfs_rmdir(abs) : (int64_t) vfs_unlink(abs);
         break;
     }
     case 264: {
         char ao[512], an[512];
-        at_resolve((int) a1, (const char *) a2, ao, sizeof(ao));
-        at_resolve((int) a3, (const char *) a4, an, sizeof(an));
+        if (!AT_RESOLVED(ret, a1, a2, ao)) break;
+        if (!AT_RESOLVED(ret, a3, a4, an)) break;
         ret = (int64_t) vfs_rename(ao, an);
         break;
     }
     case 265: {
         char ao[512], an[512];
-        at_resolve((int) a1, (const char *) a2, ao, sizeof(ao));
-        at_resolve((int) a3, (const char *) a4, an, sizeof(an));
+        if (!AT_RESOLVED(ret, a1, a2, ao)) break;
+        if (!AT_RESOLVED(ret, a3, a4, an)) break;
         ret = (int64_t) vfs_link(ao, an);
         break;
     }
     case 266: {
-        char abs[512];
-        at_resolve((int) a2, (const char *) a3, abs, sizeof(abs));
-        ret = vfs_create_symlink(abs, (const char *) a1) ? 0 : -(int64_t) EEXIST;
+        char abs[512], tgt[512];
+        if (!copy_user_path(tgt, (const char *) a1)) {
+            ret = -(int64_t) EFAULT;
+            break;
+        }
+        if (!AT_RESOLVED(ret, a2, a3, abs)) break;
+        ret = vfs_create_symlink(abs, tgt) ? 0 : -(int64_t) EEXIST;
         break;
     }
     case 267: {
         char abs[512];
-        at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
-        ret = (int64_t) fd_readlink(abs, (char *) a3, a4);
+        if (!AT_RESOLVED(ret, a1, a2, abs)) break;
+        ret = (int64_t) fd_readlink_kpath(abs, (char *) a3, a4);
         break;
     }
     case 268: {
         char abs[512];
-        at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
+        if (!AT_RESOLVED(ret, a1, a2, abs)) break;
         ret = (int64_t) vfs_chmod(abs, (uint32_t) a3);
         break;
     }
     case 269: {
         char abs[512];
-        at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
+        if (!AT_RESOLVED(ret, a1, a2, abs)) break;
         ret = (int64_t) vfs_access(abs, (int) a3);
         break;
     } /* faccessat */
@@ -1108,8 +1126,8 @@ void syscall_dispatch(syscall_frame_t *f) {
         break; /* sched_getattr */
     case 306: {
         char ao[512], an[512];
-        at_resolve((int) a1, (const char *) a2, ao, sizeof(ao));
-        at_resolve((int) a3, (const char *) a4, an, sizeof(an));
+        if (!AT_RESOLVED(ret, a1, a2, ao)) break;
+        if (!AT_RESOLVED(ret, a3, a4, an)) break;
         ret = (int64_t) vfs_rename(ao, an);
         break;
     } /* renameat2 */
@@ -1142,14 +1160,17 @@ void syscall_dispatch(syscall_frame_t *f) {
         ret = sys_statx((int) a1, (const char *) a2, (int) a3, (uint32_t) a4, (struct statx *) a5);
         break;
     case 334: {
-        for (int _fd = (int) a1; _fd <= (int) a2 && _fd < VFS_FD_MAX; _fd++)
+        int _lo = (int) a1, _hi = (int) a2;
+        if (_lo < 0) _lo = 0;
+        if (_hi >= VFS_FD_MAX) _hi = VFS_FD_MAX - 1;
+        for (int _fd = _lo; _fd <= _hi; _fd++)
             if (fd_valid(_fd)) fd_close(_fd);
         ret = 0;
         break;
     } /* close_range */
     case 439: {
         char abs[512];
-        at_resolve((int) a1, (const char *) a2, abs, sizeof(abs));
+        if (!AT_RESOLVED(ret, a1, a2, abs)) break;
         ret = (int64_t) vfs_access(abs, (int) a3);
         break;
     } /* faccessat2 */

@@ -65,6 +65,7 @@ int64_t sys_ppoll(struct pollfd_s *fds, uint64_t nfds, void *tmo, const void *si
     (void) sigsetsize;
     int timeout = -1;
     if (tmo) {
+        if (!uptr_ok(tmo, 16)) return -(int64_t) EFAULT;
         uint64_t ms = ((uint64_t *) tmo)[0] * 1000 + ((uint64_t *) tmo)[1] / 1000000;
         timeout = ms > 0x7fffffff ? 0x7fffffff : (int) ms;
     }

@@ -177,8 +177,10 @@ void vfs_copy_fdtable(vfs_file_t **dst, vfs_file_t **src);
 void vfs_free_fdtable(vfs_file_t **fds);
 
 const char *vfs_copy_user_path(const char *path, char *kbuf);
+const char *vfs_copy_kernel_path(const char *path, char *kbuf);
 int fd_open(const char *path, int flags, int mode);
 int fd_open_host(const char *path, int flags, int mode); /* kernel-internal: no jail re-root */
+int fd_open_kpath(const char *path, int flags, int mode);
 int fd_openat(int dirfd, const char *path, int flags, int mode);
 int fd_close(int fd);
 int64_t fd_read(int fd, void *buf, uint64_t len);
@@ -191,6 +193,7 @@ int fd_fstatat(int dirfd, const char *path, struct linux_stat *st, int flags);
 int fd_fstat(int fd, struct linux_stat *st);
 int fd_getdents64(int fd, void *buf, uint64_t count);
 int fd_readlink(const char *path, char *buf, uint64_t bufsz);
+int fd_readlink_kpath(const char *path, char *buf, uint64_t bufsz);
 int fd_ioctl(int fd, uint64_t req, uint64_t arg);
 int fd_fcntl(int fd, int cmd, uint64_t arg);
 int fd_dup(int oldfd);

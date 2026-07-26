@@ -54,18 +54,21 @@ static int64_t uio_mmap(vfs_node_t *n, uint64_t off, uint64_t len, uint64_t va, 
     uio_dev_t *uio = (uio_dev_t *) n->data;
     if (!uio) return -(int64_t) EINVAL;
 
-    int bar_idx = (int) (off >> 12); /* offset N*PAGE_SIZE -> BAR[N] */
-    if (bar_idx >= 6) return -(int64_t) EINVAL;
-    uint64_t phys = uio->pdev->bars[bar_idx];
-    if (!phys) return -(int64_t) ENODEV;
-
     proc_t *p = g_current_proc;
     if (!p || !p->space) return -(int64_t) EINVAL;
     if (p->euid != 0) return -(int64_t) EPERM;
 
+    if (off & 0xFFFULL) return -(int64_t) EINVAL;
+    uint64_t bar_idx = off >> 12; /* offset N*PAGE_SIZE -> BAR[N] */
+    if (bar_idx >= 6) return -(int64_t) EINVAL;
+    uint64_t phys = uio->pdev->bars[bar_idx];
+    if (!phys) return -(int64_t) ENODEV;
+
     uint64_t sz = uio->pdev->bar_sizes[bar_idx];
     if (!sz || sz > len) sz = len;
     sz = (sz + 0xFFF) & ~0xFFFULL;
+    if (!sz || sz > len) return -(int64_t) EINVAL;
+    if (va >= USER_LIMIT || sz > USER_LIMIT - va) return -(int64_t) EINVAL;
 
     /* MMIO: present + user + write, no-exec, no cache (PAT/PCD/PWT = 0 for UC) */
     uint64_t flags = vflags | VMM_PRESENT | VMM_USER | VMM_WRITE;

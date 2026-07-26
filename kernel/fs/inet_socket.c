@@ -22,6 +22,7 @@
 #define EFAULT 14
 #define EINVAL 22
 #define EMFILE 24
+#define EMSGSIZE 90
 #define ENOTSUP 95
 #define ENOTCONN 107
 #define ECONNREFUSED 111
@@ -61,6 +62,7 @@ static uint32_t ring_pop(rx_ring_t *r, uint8_t *out, uint32_t want) {
 
 #define UDP_RX_SLOTS 8
 #define UDP_DGRAM_SZ 2048
+#define DGRAM_MAX_LEN 65535U
 typedef struct {
     uint8_t data[UDP_DGRAM_SZ];
     uint16_t len;
@@ -333,6 +335,11 @@ int64_t inet_fd_read(net_conn_t *c, void *buf, uint64_t len, int fd_flags) {
 
 int64_t inet_fd_write(net_conn_t *c, const void *buf, uint64_t len) {
     if (!c) return -(int64_t) ENOTCONN;
+    if (c->type == SOCK_DGRAM || c->type == SOCK_RAW) {
+        if (len > DGRAM_MAX_LEN) return -(int64_t) EMSGSIZE;
+    } else if (len > DGRAM_MAX_LEN) {
+        len = DGRAM_MAX_LEN;
+    }
     if (c->type == SOCK_DGRAM) {
         if (!c->upcb) return -(int64_t) ENOTCONN;
         struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, (u16_t) len, PBUF_RAM);
@@ -519,6 +526,8 @@ int64_t inet_getpeername(net_conn_t *c, struct sockaddr_in *out) {
 
 int64_t inet_sendto(net_conn_t *c, const void *buf, uint64_t len, const struct sockaddr_in *addr) {
     if (!c) return -(int64_t) ENOTCONN;
+    if ((c->type == SOCK_DGRAM || c->type == SOCK_RAW) && len > DGRAM_MAX_LEN)
+        return -(int64_t) EMSGSIZE;
 
     if (c->type == SOCK_DGRAM) {
         if (!c->upcb) return -(int64_t) ENOTCONN;

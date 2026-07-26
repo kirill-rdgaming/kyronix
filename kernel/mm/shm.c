@@ -2,9 +2,11 @@
 #include "../lib/string.h"
 #include "../proc/jail.h"
 #include "../proc/proc.h"
+#include "../syscall/syscall.h"
 #include "pmm.h"
 #include "vmm.h"
 
+#define EFAULT 14
 #define EINVAL 22
 #define ENOENT 2
 #define EEXIST 17
@@ -149,14 +151,15 @@ uint64_t sys_shmat(int shmid, uint64_t shmaddr, int shmflg) {
     if (!slot) return (uint64_t) (-(int64_t) ENOMEM);
 
     uint64_t va;
+    uint64_t map_sz = (uint64_t) s->n_pages * PAGE_SIZE;
     if (shmaddr) {
         va = (shmflg & SHM_RND) ? (shmaddr & ~(uint64_t) (PAGE_SIZE - 1)) : shmaddr;
         if (va & (PAGE_SIZE - 1)) return (uint64_t) (-(int64_t) EINVAL);
     } else {
-        uint64_t sz = (uint64_t) s->n_pages * PAGE_SIZE;
-        p->mmap_bump += sz;
-        va = p->mmap_bump - sz;
+        p->mmap_bump += map_sz;
+        va = p->mmap_bump - map_sz;
     }
+    if (va >= USER_LIMIT || map_sz > USER_LIMIT - va) return (uint64_t) (-(int64_t) EINVAL);
 
     uint64_t vf = VMM_UDATA;
     if (shmflg & SHM_RDONLY) vf &= ~(uint64_t) VMM_WRITE;
@@ -213,6 +216,7 @@ int sys_shmctl(int shmid, int cmd, void *buf) {
         return 0;
     case IPC_STAT:
         if (!buf) return -EINVAL;
+        if (!uptr_ok_w(buf, 144)) return -EFAULT;
         if (!seg_access_ok(s, false)) return -EACCES;
         memset(buf, 0, 144);                              /* zero out shmid_ds */
         ((uint64_t *) buf)[6] = s->size;                  /* shm_segsz at offset 48 */

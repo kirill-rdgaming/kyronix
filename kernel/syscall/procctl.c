@@ -192,6 +192,26 @@ int64_t sys_clone(uint64_t flags, uint64_t child_stack, uint32_t *ptid, uint32_t
 }
 
 #define MAX_EXEC_ARGS 32
+#define MAX_EXEC_STRLEN 4096
+
+static bool exec_vec_slot(const char **uvec, int i, const char **out) {
+    const char **slot = uvec + i;
+    if (!uptr_ok(slot, sizeof(*slot))) return false;
+    *out = *slot;
+    return true;
+}
+
+static size_t exec_str_len(const char *s) {
+    if (!s) return 0;
+    for (size_t i = 0; i < MAX_EXEC_STRLEN; i++) {
+        const char *a = s + i;
+        if (i == 0 || ((uint64_t) (uintptr_t) a & 0xFFF) == 0) {
+            if (!uptr_ok(a, 1)) return 0;
+        }
+        if (!*a) return i + 1;
+    }
+    return 0;
+}
 
 int64_t sys_execve(const char *path, const char **uargv, const char **uenvp) {
     if (!path) return -(int64_t) EFAULT;
@@ -291,36 +311,56 @@ int64_t sys_execve(const char *path, const char **uargv, const char **uenvp) {
         }                                                                                          \
     } while (0)
 
+#define COPY_EXEC_STR(dst_arr, dst_vec, idx, uptr)                                                  \
+    do {                                                                                           \
+        size_t _n = exec_str_len(uptr);                                                            \
+        if (!_n) {                                                                                 \
+            vfs_node_unref_internal(node);                                                         \
+            FREE_EXEC_STRS();                                                                      \
+            return -(int64_t) EFAULT;                                                              \
+        }                                                                                          \
+        (dst_arr)[idx] = kmalloc(_n);                                                              \
+        if (!(dst_arr)[idx]) {                                                                     \
+            vfs_node_unref_internal(node);                                                         \
+            FREE_EXEC_STRS();                                                                      \
+            return -(int64_t) ENOMEM;                                                              \
+        }                                                                                          \
+        memcpy((dst_arr)[idx], (uptr), _n);                                                        \
+        (dst_arr)[idx][_n - 1] = '\0';                                                             \
+        (dst_vec)[idx] = (dst_arr)[idx];                                                           \
+    } while (0)
+
+#define NEXT_EXEC_SLOT(uvec, i, out)                                                               \
+    do {                                                                                           \
+        if (!exec_vec_slot((uvec), (i), &(out))) {                                                 \
+            vfs_node_unref_internal(node);                                                         \
+            FREE_EXEC_STRS();                                                                      \
+            return -(int64_t) EFAULT;                                                              \
+        }                                                                                          \
+    } while (0)
+
     if (is_shebang) {
         kargv[argc++] = shebang_interp;
         if (shebang_arg[0]) kargv[argc++] = shebang_arg;
         kargv[argc++] = script_path;
         int ui = 1;
-        while (argc < MAX_EXEC_ARGS && uargv && uargv[ui]) {
-            size_t n = strlen(uargv[ui]) + 1;
-            argv_mem[argc] = kmalloc(n);
-            if (!argv_mem[argc]) {
-                vfs_node_unref_internal(node);
-                FREE_EXEC_STRS();
-                return -(int64_t) ENOMEM;
-            }
-            memcpy(argv_mem[argc], uargv[ui], n);
-            kargv[argc] = argv_mem[argc];
+        for (;;) {
+            if (!uargv || argc >= MAX_EXEC_ARGS) break;
+            const char *us = NULL;
+            NEXT_EXEC_SLOT(uargv, ui, us);
+            if (!us) break;
+            COPY_EXEC_STR(argv_mem, kargv, argc, us);
             argc++;
             ui++;
         }
     } else {
         if (uargv) {
-            while (argc < MAX_EXEC_ARGS && uargv[argc]) {
-                size_t n = strlen(uargv[argc]) + 1;
-                argv_mem[argc] = kmalloc(n);
-                if (!argv_mem[argc]) {
-                    vfs_node_unref_internal(node);
-                    FREE_EXEC_STRS();
-                    return -(int64_t) ENOMEM;
-                }
-                memcpy(argv_mem[argc], uargv[argc], n);
-                kargv[argc] = argv_mem[argc];
+            for (;;) {
+                if (argc >= MAX_EXEC_ARGS) break;
+                const char *us = NULL;
+                NEXT_EXEC_SLOT(uargv, argc, us);
+                if (!us) break;
+                COPY_EXEC_STR(argv_mem, kargv, argc, us);
                 argc++;
             }
         }
@@ -340,20 +380,18 @@ int64_t sys_execve(const char *path, const char **uargv, const char **uenvp) {
     kargv[argc] = NULL;
 
     if (uenvp) {
-        while (envc < MAX_EXEC_ARGS && uenvp[envc]) {
-            size_t n = strlen(uenvp[envc]) + 1;
-            envp_mem[envc] = kmalloc(n);
-            if (!envp_mem[envc]) {
-                vfs_node_unref_internal(node);
-                FREE_EXEC_STRS();
-                return -(int64_t) ENOMEM;
-            }
-            memcpy(envp_mem[envc], uenvp[envc], n);
-            kenvp[envc] = envp_mem[envc];
+        for (;;) {
+            if (envc >= MAX_EXEC_ARGS) break;
+            const char *us = NULL;
+            NEXT_EXEC_SLOT(uenvp, envc, us);
+            if (!us) break;
+            COPY_EXEC_STR(envp_mem, kenvp, envc, us);
             envc++;
         }
     }
     kenvp[envc] = NULL;
+#undef COPY_EXEC_STR
+#undef NEXT_EXEC_SLOT
 
     elf_load_result_t res;
     if (elf_load(node->data, node->size, &res) < 0) {
@@ -537,6 +575,7 @@ int64_t sys_wait4(int pid, int *wstatus, int options, void *rusage) {
     if (wstatus && !uptr_ok_w(wstatus, sizeof(*wstatus))) return -(int64_t) EFAULT;
     if (rusage && !uptr_ok_w(rusage, 144)) return -(int64_t) EFAULT;
     proc_t *parent = cur();
+    if (!parent) return -(int64_t) ECHILD;
 
     while (1) {
         bool any_child = false;

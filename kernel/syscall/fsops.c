@@ -12,11 +12,11 @@ int64_t sys_uname(struct utsname *buf) {
     if (!buf) return -(int64_t) EFAULT;
     if (!uptr_ok_w(buf, sizeof(*buf))) return -(int64_t) EFAULT;
     memset(buf, 0, sizeof(*buf));
-    memcpy(buf->sysname, "k9", 7);
-    memcpy(buf->nodename, "kx", 2);
+    memcpy(buf->sysname, "k9", 3);
+    memcpy(buf->nodename, "kx", 3);
     memcpy(buf->release, KERNEL_VERSION, sizeof(KERNEL_VERSION));
-    memcpy(buf->version, "#1 SMP", 6);
-    memcpy(buf->machine, "x86_64", 6);
+    memcpy(buf->version, "#1 SMP", 7);
+    memcpy(buf->machine, "x86_64", 7);
     return 0;
 }
 
@@ -107,9 +107,10 @@ int64_t sys_truncate(const char *path, uint64_t len) {
 
 int64_t sys_symlink(const char *target, const char *linkpath) {
     if (!target || !linkpath) return -(int64_t) EFAULT;
-    char abs[512];
+    char abs[512], ktarget[512];
+    if (!vfs_copy_user_path(target, ktarget)) return -(int64_t) EFAULT;
     if (!path_abs(abs, linkpath)) return -(int64_t) EFAULT;
-    vfs_node_t *n = vfs_create_symlink(abs, target);
+    vfs_node_t *n = vfs_create_symlink(abs, ktarget);
     return n ? 0 : -(int64_t) EEXIST;
 }
 

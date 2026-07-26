@@ -97,7 +97,7 @@ int64_t sys_memfd_create(const char *name, uint32_t flags) {
     (void) flags;
     char path[32];
     snprintf(path, sizeof(path), "/tmp/.mfd%u", ++g_memfd_seq);
-    return fd_open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    return fd_open_kpath(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
 }
 
 int64_t sys_copy_file_range(int infd, uint64_t *off_in, int outfd, uint64_t *off_out, uint64_t len,
@@ -132,12 +132,15 @@ int64_t sys_statx(int dirfd, const char *path, int flags, uint32_t mask, struct 
     (void) mask;
     if (!sx) return -(int64_t) EFAULT;
     if (!uptr_ok_w(sx, sizeof(*sx))) return -(int64_t) EFAULT;
+    char kpath[512];
+    if (path && !vfs_copy_user_path(path, kpath)) return -(int64_t) EFAULT;
     vfs_node_t *n = NULL;
-    if (!path || path[0] == '\0') {
+    if (!path || kpath[0] == '\0') {
         n = fd_get_node(dirfd);
     } else {
         char abs[512];
-        at_resolve(dirfd, path, abs, sizeof(abs));
+        int ar = at_resolve(dirfd, path, abs, sizeof(abs));
+        if (ar < 0) return ar;
         n = (flags & AT_SYMLINK_NOFOLLOW) ? vfs_lookup_nofollow(abs) : vfs_lookup(abs);
     }
     if (!n) return -(int64_t) ENOENT;

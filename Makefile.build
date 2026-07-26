@@ -227,7 +227,7 @@ help:
 	@echo ""
 	@echo "Note: *-run targets do NOT rebuild. Run 'make iso' etc. first."
 
-all: config.h $(TARGET) $(INITRD) $(DISK_IMG)
+all: config.h $(TARGET) $(INITRD) $(DISK_IMG) iso
 
 kernel: config.h $(TARGET)
 
