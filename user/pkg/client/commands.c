@@ -4,11 +4,15 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "http.h"
 #include "md5.h"
@@ -18,8 +22,10 @@ int verbose_mode = 0;
 int yes_mode = 0;
 
 static int extract_json_string(const char *json, const char *key, char *out, size_t n) {
+    if (!json || !key || !out || n == 0) return -1;
     char needle[128];
-    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    int needle_len = snprintf(needle, sizeof(needle), "\"%s\"", key);
+    if (needle_len < 0 || (size_t) needle_len >= sizeof(needle)) return -1;
     const char *p = strstr(json, needle);
     if (!p) return -1;
     p = strchr(p, ':');
@@ -28,9 +34,30 @@ static int extract_json_string(const char *json, const char *key, char *out, siz
     while (*p && isspace((unsigned char)*p)) p++;
     if (*p != '"') return -1;
     p++;
-    const char *e = strchr(p, '"');
-    if (!e) return -1;
-    snprintf(out, n, "%.*s", (int)(e - p), p);
+    size_t used = 0;
+    while (*p && *p != '"') {
+        unsigned char c = (unsigned char) *p++;
+        if (c < 0x20) return -1;
+        if (c == '\\') {
+            char escaped = *p++;
+            if (!escaped) return -1;
+            switch (escaped) {
+                case '"': c = '"'; break;
+                case '\\': c = '\\'; break;
+                case '/': c = '/'; break;
+                case 'b': c = '\b'; break;
+                case 'f': c = '\f'; break;
+                case 'n': c = '\n'; break;
+                case 'r': c = '\r'; break;
+                case 't': c = '\t'; break;
+                default: return -1;
+            }
+        }
+        if (used + 1 >= n) return -1;
+        out[used++] = (char) c;
+    }
+    if (*p != '"') return -1;
+    out[used] = '\0';
     return 0;
 }
 
@@ -41,34 +68,55 @@ static int parse_depends(const char *json, PackageInfo *pkg) {
     p = strchr(p, '[');
     if (!p) return 0;
     p++;
-    while (*p && *p != ']' && pkg->depends_count < MAX_DEPS) {
+    while (*p && *p != ']') {
         while (*p && (*p == ' ' || *p == ',' || *p == '\n' || *p == '\r')) p++;
         if (*p == '"' ) {
+            if (pkg->depends_count >= MAX_DEPS) return -1;
             p++;
             const char *end = strchr(p, '"');
             if (!end) break;
             size_t len = (size_t)(end - p);
-            if (len >= 128) len = 127;
+            if (!len || len >= 128 || memchr(p, '\\', len)) return -1;
             memcpy(pkg->depends[pkg->depends_count], p, len);
             pkg->depends[pkg->depends_count][len] = '\0';
+            if (!valid_pkg_name(pkg->depends[pkg->depends_count])) return -1;
             pkg->depends_count++;
             p = end + 1;
         } else {
             break;
         }
     }
-    return 0;
+    return *p == ']' ? 0 : -1;
+}
+
+static int safe_manifest_text(const char *text) {
+    if (!text) return 0;
+    for (const unsigned char *p = (const unsigned char *) text; *p; p++)
+        if (*p < 0x20 || *p == 0x7f) return 0;
+    return 1;
 }
 
 static int parse_manifest(const char *json, PackageInfo *pkg) {
     memset(pkg, 0, sizeof(*pkg));
     if (extract_json_string(json, "name", pkg->name, sizeof(pkg->name)) != 0) return -1;
     if (extract_json_string(json, "version", pkg->version, sizeof(pkg->version)) != 0) return -1;
-    extract_json_string(json, "description", pkg->description, sizeof(pkg->description));
+    if (extract_json_string(json, "description", pkg->description,
+                            sizeof(pkg->description)) != 0)
+        pkg->description[0] = '\0';
     if (extract_json_string(json, "arch", pkg->arch, sizeof(pkg->arch)) != 0) return -1;
-    extract_json_string(json, "maintainer", pkg->maintainer, sizeof(pkg->maintainer));
-    extract_json_string(json, "license", pkg->license, sizeof(pkg->license));
-    extract_json_string(json, "homepage", pkg->homepage, sizeof(pkg->homepage));
+    if (extract_json_string(json, "maintainer", pkg->maintainer,
+                            sizeof(pkg->maintainer)) != 0)
+        pkg->maintainer[0] = '\0';
+    if (extract_json_string(json, "license", pkg->license, sizeof(pkg->license)) != 0)
+        pkg->license[0] = '\0';
+    if (extract_json_string(json, "homepage", pkg->homepage, sizeof(pkg->homepage)) != 0)
+        pkg->homepage[0] = '\0';
+
+    if (!valid_pkg_name(pkg->name) || !safe_manifest_text(pkg->version) ||
+        !pkg->version[0] || !safe_manifest_text(pkg->description) ||
+        !safe_manifest_text(pkg->arch) || !safe_manifest_text(pkg->maintainer) ||
+        !safe_manifest_text(pkg->license) || !safe_manifest_text(pkg->homepage))
+        return -1;
 
     const char *rev = strstr(json, "\"revision\"");
     if (rev) {
@@ -77,12 +125,16 @@ static int parse_manifest(const char *json, PackageInfo *pkg) {
         int val = 0;
         int neg = 1;
         if (*rev == '-') { neg = -1; rev++; }
-        while (*rev >= '0' && *rev <= '9') { val = val * 10 + (*rev - '0'); rev++; }
+        if (!isdigit((unsigned char) *rev)) return -1;
+        while (*rev >= '0' && *rev <= '9') {
+            if (val > (INT_MAX - (*rev - '0')) / 10) return -1;
+            val = val * 10 + (*rev - '0');
+            rev++;
+        }
         pkg->revision = val * neg;
     }
 
-    parse_depends(json, pkg);
-    return 0;
+    return parse_depends(json, pkg);
 }
 
 static int verify_checksum(const char *archive_path, const char *checksum_path) {
@@ -91,15 +143,28 @@ static int verify_checksum(const char *archive_path, const char *checksum_path) 
     if (!txt) return -1;
     trim_crlf(txt);
 
-    char expected[33];
+    char expected[33] = "";
     if (txt[0] == '{') {
         if (extract_json_string(txt, "checksum", expected, sizeof(expected)) != 0) {
             free(txt);
             return -1;
         }
     } else {
-        snprintf(expected, sizeof(expected), "%s", txt);
+        if (strlen(txt) != 32) {
+            free(txt);
+            return -1;
+        }
+        memcpy(expected, txt, 33);
     }
+    if (strlen(expected) != 32) {
+        free(txt);
+        return -1;
+    }
+    for (int i = 0; i < 32; i++)
+        if (!isxdigit((unsigned char) expected[i])) {
+            free(txt);
+            return -1;
+        }
 
     char actual[33];
     if (md5_file_hex(archive_path, actual) != 0) {
@@ -107,23 +172,26 @@ static int verify_checksum(const char *archive_path, const char *checksum_path) 
         return -1;
     }
 
-    int match = strcasecmp(expected, actual) == 0;
+    unsigned mismatch = 0;
+    for (int i = 0; i < 32; i++)
+        mismatch |= (unsigned) (tolower((unsigned char) expected[i]) ^
+                               (unsigned char) actual[i]);
     free(txt);
-    return match ? 0 : -1;
+    return mismatch == 0 ? 0 : -1;
 }
 
 static int is_installed(const char *name) {
-    const char *home = home_dir();
     char path[512];
-    snprintf(path, sizeof(path), "%s/.pkg/installed/%s/manifest", home, name);
+    if (!valid_pkg_name(name)) return 0;
+    snprintf(path, sizeof(path), "%s/installed/%s/manifest", PKG_STATE_DIR, name);
     struct stat st;
-    return stat(path, &st) == 0;
+    return lstat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
 
 static int get_installed_version(const char *name, char *ver, size_t ver_sz) {
-    const char *home = home_dir();
     char path[512];
-    snprintf(path, sizeof(path), "%s/.pkg/installed/%s/manifest", home, name);
+    if (!valid_pkg_name(name)) return -1;
+    snprintf(path, sizeof(path), "%s/installed/%s/manifest", PKG_STATE_DIR, name);
     size_t len = 0;
     char *txt = read_file(path, &len);
     if (!txt) return -1;
@@ -151,7 +219,7 @@ static int get_installed_version(const char *name, char *ver, size_t ver_sz) {
 /*
  * Manifest helpers for reverse dependency tracking.
  *
- * Local manifest format (~/.pkg/installed/{name}/manifest):
+ * Local manifest format (/var/lib/pkg/installed/{name}/manifest):
  *   name=... version=... description=... arch=... install_dir=...
  *   depends=pkg1,pkg2           ← forward: what this package needs
  *   required_by=pkg3,pkg4       ← reverse: who needs this package
@@ -161,8 +229,8 @@ static int get_installed_version(const char *name, char *ver, size_t ver_sz) {
  */
 
 static void local_manifest_path(char *out, size_t n, const char *name) {
-    const char *home = home_dir();
-    snprintf(out, n, "%s/.pkg/installed/%s/manifest", home, name);
+    if (!valid_pkg_name(name)) dief("invalid package name in local registry");
+    snprintf(out, n, "%s/installed/%s/manifest", PKG_STATE_DIR, name);
 }
 
 /* Generic field reader: reads key=value from manifest, writes value into out.
@@ -210,15 +278,17 @@ static int manifest_read_list(const char *name, const char *key, char items[][12
         while (*p == ',') p++;
         if (!*p) break;
         char *end = strchr(p, ',');
-        size_t nlen = end ? (size_t)(end - p) : strlen(p);
-        /* trim spaces */
-        while (nlen > 0 && p[0] == ' ') { p++; nlen--; }
-        while (nlen > 0 && p[nlen-1] == ' ') nlen--;
-        if (nlen >= 128) nlen = 127;
-        memcpy(items[count], p, nlen);
+        char *item_start = p;
+        char *item_end = end ? end : p + strlen(p);
+        while (item_start < item_end && *item_start == ' ') item_start++;
+        while (item_end > item_start && item_end[-1] == ' ') item_end--;
+        size_t nlen = (size_t) (item_end - item_start);
+        if (!nlen || nlen >= 128) return 0;
+        memcpy(items[count], item_start, nlen);
         items[count][nlen] = '\0';
+        if (!valid_pkg_name(items[count])) return 0;
         count++;
-        p += nlen;
+        p = end ? end + 1 : item_end;
     }
     return count;
 }
@@ -227,18 +297,43 @@ static int manifest_read_list(const char *name, const char *key, char items[][12
  * Rewrite a manifest field in-place. Reads the whole manifest, replaces the
  * key=value line, writes it back. Creates the field if it doesn't exist.
  */
+static int append_text(char *out, size_t capacity, size_t *used,
+                       const char *text, size_t len) {
+    if (len >= capacity - *used) return -1;
+    memcpy(out + *used, text, len);
+    *used += len;
+    out[*used] = '\0';
+    return 0;
+}
+
 static void manifest_write_field(const char *name, const char *key, const char *value) {
+    if (!valid_pkg_name(name) || !key || !safe_manifest_text(key) ||
+        !value || !safe_manifest_text(value))
+        dief("invalid local manifest update");
     char path[1024];
     local_manifest_path(path, sizeof(path), name);
 
-    /* read existing manifest */
     size_t len = 0;
     char *txt = read_file(path, &len);
-    char new_content[8192];
-    new_content[0] = '\0';
+    size_t capacity = len + strlen(key) + strlen(value) + 4;
+    if (capacity > 64U * 1024U) {
+        free(txt);
+        dief("local manifest is too large");
+    }
+    char *new_content = (char *) calloc(capacity, 1);
+    if (!new_content) {
+        free(txt);
+        dief("out of memory");
+    }
+    size_t used = 0;
 
     char needle[64];
-    snprintf(needle, sizeof(needle), "%s=", key);
+    int needle_len = snprintf(needle, sizeof(needle), "%s=", key);
+    if (needle_len < 0 || (size_t) needle_len >= sizeof(needle)) {
+        free(txt);
+        free(new_content);
+        dief("invalid local manifest key");
+    }
     int found = 0;
 
     if (txt) {
@@ -247,30 +342,47 @@ static void manifest_write_field(const char *name, const char *key, const char *
             char *eol = strchr(line, '\n');
             size_t llen = eol ? (size_t)(eol - line) : strlen(line);
 
-            if (strncmp(line, needle, strlen(needle)) == 0) {
-                /* replace this line */
-                char entry[512];
-                snprintf(entry, sizeof(entry), "%s=%s\n", key, value);
-                strcat(new_content, entry);
+            if (llen >= (size_t) needle_len &&
+                strncmp(line, needle, (size_t) needle_len) == 0) {
+                if (append_text(new_content, capacity, &used, needle,
+                                (size_t) needle_len) != 0 ||
+                    append_text(new_content, capacity, &used, value,
+                                strlen(value)) != 0 ||
+                    append_text(new_content, capacity, &used, "\n", 1) != 0)
+                    goto too_large;
                 found = 1;
             } else {
-                strncat(new_content, line, llen);
-                strcat(new_content, "\n");
+                if (append_text(new_content, capacity, &used, line, llen) != 0 ||
+                    append_text(new_content, capacity, &used, "\n", 1) != 0)
+                    goto too_large;
             }
 
             line += llen;
             if (*line == '\n') line++;
         }
         free(txt);
+        txt = NULL;
     }
 
     if (!found) {
-        char entry[512];
-        snprintf(entry, sizeof(entry), "%s=%s\n", key, value);
-        strcat(new_content, entry);
+        if (append_text(new_content, capacity, &used, needle,
+                        (size_t) needle_len) != 0 ||
+            append_text(new_content, capacity, &used, value, strlen(value)) != 0 ||
+            append_text(new_content, capacity, &used, "\n", 1) != 0)
+            goto too_large;
     }
 
-    write_text_file(path, new_content);
+    if (write_text_file(path, new_content) != 0) {
+        free(new_content);
+        dief("failed to update local manifest");
+    }
+    free(new_content);
+    return;
+
+too_large:
+    free(txt);
+    free(new_content);
+    dief("local manifest is too large");
 }
 
 /* Add a name to a comma-separated list field (no duplicates). */
@@ -290,9 +402,16 @@ static void manifest_list_add(const char *name, const char *key, const char *ite
 
     /* rebuild comma-separated string */
     char val[4096] = "";
+    size_t used = 0;
     for (int i = 0; i < count; i++) {
-        if (i > 0) strcat(val, ",");
-        strcat(val, items[i]);
+        size_t item_len = strlen(items[i]);
+        size_t separator = i > 0 ? 1U : 0U;
+        if (separator + item_len >= sizeof(val) - used)
+            dief("local dependency list is too large");
+        if (separator) val[used++] = ',';
+        memcpy(val + used, items[i], item_len);
+        used += item_len;
+        val[used] = '\0';
     }
     manifest_write_field(name, key, val);
 }
@@ -313,9 +432,16 @@ static void manifest_list_remove(const char *name, const char *key, const char *
     }
 
     char val[4096] = "";
+    size_t used = 0;
     for (int i = 0; i < new_count; i++) {
-        if (i > 0) strcat(val, ",");
-        strcat(val, items[i]);
+        size_t item_len = strlen(items[i]);
+        size_t separator = i > 0 ? 1U : 0U;
+        if (separator + item_len >= sizeof(val) - used)
+            dief("local dependency list is too large");
+        if (separator) val[used++] = ',';
+        memcpy(val + used, items[i], item_len);
+        used += item_len;
+        val[used] = '\0';
     }
     manifest_write_field(name, key, val);
 }
@@ -370,7 +496,9 @@ static char *fetch_manifest_from_repos(const char *name, char **out_endpoint) {
         snprintf(url, sizeof(url), "%s/packages/%s", repos[i].url, name);
 
         int code = 0;
+        pid_t sp = spinner_start();
         char *manifest = http_get_body(url, &code);
+        spinner_stop(sp);
         if (code == 200 && manifest) {
             *out_endpoint = strdup(repos[i].url);
             return manifest;
@@ -424,6 +552,7 @@ static int file_list_contains(const char *buf, size_t buf_sz, const char *line, 
 
 static int resolve_dependencies(const char *name, ResolvedPkg *out, int out_max,
                                 char visited[][128], int *vis_count) {
+    if (!valid_pkg_name(name)) dief("invalid dependency name");
     for (int i = 0; i < *vis_count; i++) {
         if (strcmp(visited[i], name) == 0) {
             dief("circular dependency detected: %s -> %s", visited[i], name);
@@ -461,6 +590,11 @@ static int resolve_dependencies(const char *name, ResolvedPkg *out, int out_max,
         }
         free(manifest);
 
+        if (strcmp(pkg.name, name) != 0) {
+            free(ep);
+            dief("repository returned manifest for '%s' while resolving '%s'",
+                 pkg.name, name);
+        }
         if (strcmp(pkg.arch, "x86-64") != 0) {
             free(ep);
             dief("architecture %s not supported", pkg.arch);
@@ -477,7 +611,14 @@ static int resolve_dependencies(const char *name, ResolvedPkg *out, int out_max,
         char *ep = NULL;
         manifest = fetch_manifest_from_repos(name, &ep);
         if (manifest) {
-            parse_manifest(manifest, &pkg);
+            PackageInfo remote_pkg;
+            if (parse_manifest(manifest, &remote_pkg) == 0 &&
+                strcmp(remote_pkg.name, name) == 0 &&
+                strcmp(remote_pkg.arch, "x86-64") == 0) {
+                pkg = remote_pkg;
+            } else {
+                log_warn("ignoring malformed manifest for installed package '%s'", name);
+            }
             free(manifest);
         }
         free(ep);
@@ -513,6 +654,7 @@ static int resolve_dependencies(const char *name, ResolvedPkg *out, int out_max,
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 static int do_install(const char *name, const char *endpoint, long download_size,
                       const char *requested_by, int explicit) {
+    if (!valid_pkg_name(name)) dief("invalid resolved package");
     char url[2048];
     snprintf(url, sizeof(url), "%s/packages/%s", endpoint, name);
 
@@ -530,6 +672,8 @@ static int do_install(const char *name, const char *endpoint, long download_size
     }
     free(manifest);
 
+    if (strcmp(pkg.name, name) != 0)
+        dief("package identity mismatch: expected '%s', got '%s'", name, pkg.name);
     if (strcmp(pkg.arch, "x86-64") != 0) dief("architecture %s not supported", pkg.arch);
 
     fprintf(stdout, "\n  version: %s rev %d", pkg.version, pkg.revision);
@@ -587,8 +731,14 @@ static int do_install(const char *name, const char *endpoint, long download_size
 
     fprintf(stdout, "%s=>%s extracting...", ANSI_CYAN, ANSI_RESET);
     fflush(stdout);
-    char *tar_argv[] = { "tar", "-xzf", archive_path, NULL };
-    if (run_cmd_in(extract_dir, tar_argv) != 0) dief("archive extraction failed");
+    char *tar_argv[] = {
+        "tar", "-x", "-I", "gzip -dcf", "-f", archive_path,
+        "-C", extract_dir,
+        "--transform=flags=r;s|^\\.$|__skip__|",
+        "--no-same-owner", "--no-same-permissions",
+        NULL
+    };
+    if (run_cmd(tar_argv) != 0) dief("archive extraction failed");
     fprintf(stdout, " %sok%s\n", ANSI_GREEN, ANSI_RESET);
 
     char pre_scan[1024];
@@ -599,15 +749,14 @@ static int do_install(const char *name, const char *endpoint, long download_size
     char *sh_argv[] = { "sh", script_path, extract_dir, archive_path, checksum_path, (char *)install_dir, NULL };
     if (run_cmd(sh_argv) != 0) dief("install script failed");
 
-    const char *home = home_dir();
     char reg_parent[512];
-    snprintf(reg_parent, sizeof(reg_parent), "%s/.pkg", home);
+    snprintf(reg_parent, sizeof(reg_parent), "%s", PKG_STATE_DIR);
     ensure_dir(reg_parent);
-    snprintf(reg_parent, sizeof(reg_parent), "%s/.pkg/installed", home);
+    snprintf(reg_parent, sizeof(reg_parent), "%s/installed", PKG_STATE_DIR);
     ensure_dir(reg_parent);
 
     char reg_dir[1024];
-    snprintf(reg_dir, sizeof(reg_dir), "%s/.pkg/installed/%s", home, name);
+    snprintf(reg_dir, sizeof(reg_dir), "%s/installed/%s", PKG_STATE_DIR, name);
     ensure_dir(reg_dir);
 
     char files_path[1024];
@@ -655,12 +804,10 @@ static int do_install(const char *name, const char *endpoint, long download_size
         fprintf(mf, "description=%s\n", pkg.description);
         fprintf(mf, "arch=%s\n", pkg.arch);
         fprintf(mf, "install_dir=%s\n", install_dir);
-        /* write forward dependencies */
         fprintf(mf, "depends=");
         for (int i = 0; i < pkg.depends_count; i++)
             fprintf(mf, "%s%s", i > 0 ? "," : "", pkg.depends[i]);
         fprintf(mf, "\n");
-        /* write reverse: requested_by */
         fprintf(mf, "required_by=%s\n", requested_by ? requested_by : "");
         fprintf(mf, "explicit=%d\n", explicit);
         fclose(mf);
@@ -668,12 +815,10 @@ static int do_install(const char *name, const char *endpoint, long download_size
 
     /* update required_by for each dependency that's already installed */
     for (int i = 0; i < pkg.depends_count; i++) {
-        if (is_installed(pkg.depends[i])) {
+        if (is_installed(pkg.depends[i]))
             manifest_list_add(pkg.depends[i], "required_by", name);
-        }
     }
 
-    /* => installed to /path */
     fprintf(stdout, "%s=>%s installed to %s%s%s\n", ANSI_CYAN, ANSI_RESET, ANSI_DIM, install_dir, ANSI_RESET);
     fprintf(stdout, "%s[*]%s %s %sinstalled%s\n", ANSI_GREEN, ANSI_RESET, pkg.name, ANSI_GREEN, ANSI_RESET);
 
@@ -711,6 +856,7 @@ void cmd_repo(const char *subcmd, const char *arg) {
         int priority = 50;
 
         char buf[1024];
+        if (strlen(arg) >= sizeof(buf)) dief("repository arguments are too long");
         snprintf(buf, sizeof(buf), "%s", arg);
         char *tok = strtok(buf, " \t");
         if (tok) snprintf(name, sizeof(name), "%s", tok);
@@ -722,11 +868,19 @@ void cmd_repo(const char *subcmd, const char *arg) {
             int neg = 1;
             const char *p = tok;
             if (*p == '-') { neg = -1; p++; }
-            while (*p >= '0' && *p <= '9') { val = val * 10 + (*p - '0'); p++; }
+            if (!isdigit((unsigned char) *p)) dief("invalid repository priority");
+            while (*p >= '0' && *p <= '9') {
+                if (val > (INT_MAX - (*p - '0')) / 10)
+                    dief("repository priority is out of range");
+                val = val * 10 + (*p - '0');
+                p++;
+            }
+            if (*p) dief("invalid repository priority");
             priority = val * neg;
         }
 
-        if (!name[0] || !url[0]) dief("usage: pkg repo add <name> <url> [priority]");
+        if (!valid_repo_name(name) || !valid_repo_url(url))
+            dief("invalid repository name or URL");
         add_repo(name, url, priority);
         return;
     }
@@ -751,7 +905,9 @@ void cmd_repo(const char *subcmd, const char *arg) {
             log_step("pinging", "%s (%s)", repos[i].name, repos[i].url);
 
             int code = 0;
+            pid_t sp = spinner_start();
             char *body = http_get_body(url, &code);
+            spinner_stop(sp);
             free(body);
 
             if (code == 200)
@@ -848,18 +1004,10 @@ void cmd_get(const char *name) {
         return;
     }
 
-    fprintf(stdout, "\n  Do you want to continue? [Y/n] ");
-    fflush(stdout);
-
-    if (!yes_mode) {
-        char answer[16] = "";
-        if (fgets(answer, sizeof(answer), stdin)) {
-            if (answer[0] != '\n' && answer[0] != 'y' && answer[0] != 'Y') {
-                fprintf(stdout, "\n");
-                log_info("aborted");
-                return;
-            }
-        }
+    if (!yes_mode && !confirm_prompt("\n  Do you want to continue? [Y/n] ")) {
+        fprintf(stdout, "\n");
+        log_info("aborted");
+        return;
     }
     fprintf(stdout, "\n");
 
@@ -878,9 +1026,8 @@ void cmd_get(const char *name) {
 }
 
 void cmd_list(void) {
-    const char *home = home_dir();
     char reg_dir[512];
-    snprintf(reg_dir, sizeof(reg_dir), "%s/.pkg/installed", home);
+    snprintf(reg_dir, sizeof(reg_dir), "%s/installed", PKG_STATE_DIR);
 
     DIR *d = opendir(reg_dir);
     if (!d) {
@@ -891,7 +1038,7 @@ void cmd_list(void) {
     int count = 0;
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL) {
-        if (ent->d_name[0] == '.') continue;
+        if (!valid_pkg_name(ent->d_name)) continue;
 
         char manifest_path[1024];
         snprintf(manifest_path, sizeof(manifest_path), "%s/%s/manifest", reg_dir, ent->d_name);
@@ -943,9 +1090,9 @@ void cmd_list(void) {
 }
 
 void cmd_remove(const char *name) {
-    const char *home = home_dir();
+    if (!valid_pkg_name(name)) dief("invalid package name");
     char reg_dir[512];
-    snprintf(reg_dir, sizeof(reg_dir), "%s/.pkg/installed/%s", home, name);
+    snprintf(reg_dir, sizeof(reg_dir), "%s/installed/%s", PKG_STATE_DIR, name);
 
     struct stat st;
     if (stat(reg_dir, &st) != 0) {
@@ -959,7 +1106,7 @@ void cmd_remove(const char *name) {
         fprintf(stderr, "\n  %s[!]%s Cannot remove '%s': the following packages depend on it:\n", ANSI_YELLOW, ANSI_RESET, name);
         for (int i = 0; i < rb_count; i++)
             fprintf(stderr, "    - %s\n", rb_items[i]);
-        fprintf(stderr, "\n  Remove them first, or use %s--force%s to override.\n\n", ANSI_BOLD, ANSI_RESET);
+        fprintf(stderr, "\n  Remove dependent packages first.\n\n");
         return;
     }
 
@@ -983,8 +1130,13 @@ void cmd_remove(const char *name) {
             if (len == 0) continue;
 
             struct stat fst;
-            if (stat(line, &fst) == 0) {
-                if (remove(line) == 0) {
+            if (!safe_managed_path(line)) {
+                log_warn("refusing unsafe registry path: %s", line);
+                continue;
+            }
+            if (lstat(line, &fst) == 0) {
+                if ((S_ISREG(fst.st_mode) || S_ISLNK(fst.st_mode)) &&
+                    unlink(line) == 0) {
                     removed++;
                 } else {
                     log_warn("could not remove %s", line);
@@ -992,6 +1144,19 @@ void cmd_remove(const char *name) {
             }
         }
         fclose(f);
+
+        /* second pass: remove empty directories */
+        f = fopen(files_path, "r");
+        if (f) {
+            char line[512];
+            while (fgets(line, sizeof(line), f)) {
+                size_t len = strlen(line);
+                while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = '\0';
+                if (len == 0) continue;
+                rmdir(line);
+            }
+            fclose(f);
+        }
     }
 
     /* remove this package from each dependency's required_by */
@@ -1000,8 +1165,7 @@ void cmd_remove(const char *name) {
     }
 
     /* delete the package registration directory */
-    char *rm_argv[] = { "rm", "-rf", reg_dir, NULL };
-    run_cmd(rm_argv);
+    if (remove_tree(reg_dir) != 0) log_warn("could not remove package registry");
 
     log_done("removed %s (%d file%s deleted)", name, removed, removed == 1 ? "" : "s");
 
@@ -1010,12 +1174,12 @@ void cmd_remove(const char *name) {
     int orphan_count = 0;
 
     char installed_dir[512];
-    snprintf(installed_dir, sizeof(installed_dir), "%s/.pkg/installed", home);
+    snprintf(installed_dir, sizeof(installed_dir), "%s/installed", PKG_STATE_DIR);
     DIR *d = opendir(installed_dir);
     if (d) {
         struct dirent *ent;
         while ((ent = readdir(d)) != NULL) {
-            if (ent->d_name[0] == '.') continue;
+            if (!valid_pkg_name(ent->d_name)) continue;
             if (strcmp(ent->d_name, name) == 0) continue; /* skip the one we just removed */
             char items[MAX_DEPS][128];
             int cnt = manifest_read_list(ent->d_name, "required_by", items, MAX_DEPS);
@@ -1041,9 +1205,8 @@ void cmd_remove(const char *name) {
 }
 
 void cmd_autoremove(void) {
-    const char *home = home_dir();
     char installed_dir[512];
-    snprintf(installed_dir, sizeof(installed_dir), "%s/.pkg/installed", home);
+    snprintf(installed_dir, sizeof(installed_dir), "%s/installed", PKG_STATE_DIR);
 
     /* first pass: collect orphan candidates */
     char orphans[64][256];
@@ -1057,7 +1220,7 @@ void cmd_autoremove(void) {
 
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL) {
-        if (ent->d_name[0] == '.') continue;
+        if (!valid_pkg_name(ent->d_name)) continue;
         char items[MAX_DEPS][128];
         int cnt = manifest_read_list(ent->d_name, "required_by", items, MAX_DEPS);
         /* only auto-installed packages with no dependents are orphan candidates */
@@ -1083,18 +1246,10 @@ void cmd_autoremove(void) {
     fprintf(stdout, "\n");
 
     /* prompt (skip if -y/--yes) */
-    fprintf(stdout, "  Do you want to remove them? [Y/n] ");
-    fflush(stdout);
-
-    if (!yes_mode) {
-        char answer[16] = "";
-        if (fgets(answer, sizeof(answer), stdin)) {
-            if (answer[0] != '\n' && answer[0] != 'y' && answer[0] != 'Y') {
-                fprintf(stdout, "\n");
-                log_info("aborted");
-                return;
-            }
-        }
+    if (!yes_mode && !confirm_prompt("  Do you want to remove them? [Y/n] ")) {
+        fprintf(stdout, "\n");
+        log_info("aborted");
+        return;
     }
     fprintf(stdout, "\n");
 
@@ -1107,7 +1262,7 @@ void cmd_autoremove(void) {
         if (!d) break;
 
         while ((ent = readdir(d)) != NULL) {
-            if (ent->d_name[0] == '.') continue;
+            if (!valid_pkg_name(ent->d_name)) continue;
 
             char items[MAX_DEPS][128];
             int cnt = manifest_read_list(ent->d_name, "required_by", items, MAX_DEPS);
@@ -1139,13 +1294,16 @@ void cmd_autoremove(void) {
                     size_t len = strlen(line);
                     while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = '\0';
                     if (len == 0) continue;
-                    remove(line);
+                    struct stat fst;
+                    if (safe_managed_path(line) && lstat(line, &fst) == 0 &&
+                        (S_ISREG(fst.st_mode) || S_ISLNK(fst.st_mode)))
+                        unlink(line);
                 }
                 fclose(f);
             }
 
-            char *rm_argv[] = { "rm", "-rf", pkg_dir, NULL };
-            run_cmd(rm_argv);
+            if (remove_tree(pkg_dir) != 0)
+                log_warn("could not remove registry for %s", ent->d_name);
             total_removed++;
             changed = 1;
         }

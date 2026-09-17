@@ -1,5 +1,6 @@
 #include "usb.h"
 #include "../../lib/log.h"
+#include "../../lib/printf.h"
 #include "../../lib/string.h"
 #include "../../mm/heap.h"
 #include "../../mm/pmm.h"
@@ -234,9 +235,7 @@ static void usbnet_poll(netdev_t *nd) {
     }
 }
 
-void usbnet_asix_probe(void *vdev, void *viface) {
-    usb_device_t *dev = (usb_device_t *) vdev;
-    usb_interface_t *iface = (usb_interface_t *) viface;
+void usbnet_asix_probe(usb_device_t *dev, usb_interface_t *iface) {
     if (g_nunet >= USBNET_MAX) return;
 
     usb_endpoint_t *ep_in = NULL, *ep_out = NULL;
@@ -278,9 +277,7 @@ void usbnet_asix_probe(void *vdev, void *viface) {
     g_nunet++;
 }
 
-void usbnet_rtl8152_probe(void *vdev, void *viface) {
-    usb_device_t *dev = (usb_device_t *) vdev;
-    usb_interface_t *iface = (usb_interface_t *) viface;
+void usbnet_rtl8152_probe(usb_device_t *dev, usb_interface_t *iface) {
     if (g_nunet >= USBNET_MAX) return;
 
     usb_endpoint_t *ep_in = NULL, *ep_out = NULL;

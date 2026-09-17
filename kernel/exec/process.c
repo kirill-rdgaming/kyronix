@@ -23,7 +23,7 @@ uint64_t kern_rand64(void) {
 
 #define STACK_MAX_ARGS 4096
 
-/* write bytes into user stack pages, handling page boundaries */
+// write bytes into user stack pages, handling page boundaries
 static void stack_write(uint64_t uva, const void *src, uint64_t len, uint64_t *phys_arr,
                         uint64_t stack_base) {
     const uint8_t *s = (const uint8_t *) src;
@@ -44,8 +44,20 @@ static void stack_write_u64(uint64_t uva, uint64_t val, uint64_t *phys_arr, uint
     stack_write(uva, &val, 8, phys_arr, stack_base);
 }
 
+static void stack_release(vmm_space_t *space, uint64_t stack_base, uint64_t *phys, int mapped,
+                          bool vma_added) {
+    if (vma_added)
+        vma_remove(space, stack_base, (uint64_t) USER_STACK_PAGES * PAGE_SIZE);
+    for (int i = 0; i < mapped; i++) {
+        vmm_unmap(space, stack_base + (uint64_t) i * PAGE_SIZE);
+        pmm_free((void *) phys[i]);
+    }
+}
+
 uint64_t setup_user_stack(vmm_space_t *space, const elf_load_result_t *elf, int argc,
-                          const char *const *argv, const char *const *envp) {
+                          const char *const *argv, const char *const *envp,
+                          uint32_t uid, uint32_t euid, uint32_t gid, uint32_t egid,
+                          bool secure_exec) {
     int envc = 0;
     if (envp)
         while (envp[envc]) envc++;
@@ -59,24 +71,29 @@ uint64_t setup_user_stack(vmm_space_t *space, const elf_load_result_t *elf, int 
     for (int i = 0; i < USER_STACK_PAGES; i++) {
         phys[i] = (uint64_t) pmm_alloc_zeroed();
         if (!phys[i]) {
-            for (int j = 0; j < i; j++) pmm_free((void *) phys[j]);
+            stack_release(space, stack_base, phys, i, false);
             return 0;
         }
         uint64_t va = stack_base + (uint64_t) i * PAGE_SIZE;
         if (vmm_map(space, va, phys[i], VMM_UDATA) < 0) {
-            for (int j = 0; j <= i; j++) pmm_free((void *) phys[j]);
+            pmm_free((void *) phys[i]);
+            stack_release(space, stack_base, phys, i, false);
             return 0;
         }
     }
 
-    vma_add(space, stack_base, (uint64_t) USER_STACK_PAGES * PAGE_SIZE, PROT_READ | PROT_WRITE, 0,
-            true);
+    if (vma_add(space, USER_STACK_GROW_BASE, stack_top - USER_STACK_GROW_BASE,
+                PROT_READ | PROT_WRITE, 0, true) < 0) {
+        stack_release(space, stack_base, phys, USER_STACK_PAGES, false);
+        return 0;
+    }
 
     uint64_t *env_uva = envc ? (uint64_t *) kmalloc((uint64_t) envc * 8) : NULL;
     uint64_t *arg_uva = (uint64_t *) kmalloc((uint64_t) (argc + 1) * 8);
     if (!arg_uva || (envc && !env_uva)) {
         kfree(env_uva);
         kfree(arg_uva);
+        stack_release(space, stack_base, phys, USER_STACK_PAGES, true);
         return 0;
     }
     memset(arg_uva, 0, (uint64_t) (argc + 1) * 8);
@@ -85,6 +102,9 @@ uint64_t setup_user_stack(vmm_space_t *space, const elf_load_result_t *elf, int 
     uint64_t sp = stack_top;
     sp -= 16;
     uint64_t random_uva = sp;
+    uint8_t random_bytes[16];
+    chacha20_rng_bytes(&g_chacha20_rng, random_bytes, sizeof(random_bytes));
+    stack_write(random_uva, random_bytes, sizeof(random_bytes), phys, stack_base);
 
     for (int i = envc - 1; i >= 0; i--) {
         uint64_t len = (uint64_t) strlen(envp[i]) + 1;
@@ -93,6 +113,7 @@ uint64_t setup_user_stack(vmm_space_t *space, const elf_load_result_t *elf, int 
         if (sp < stack_base) {
             kfree(env_uva);
             kfree(arg_uva);
+            stack_release(space, stack_base, phys, USER_STACK_PAGES, true);
             return 0;
         }
         env_uva[i] = sp;
@@ -107,6 +128,7 @@ uint64_t setup_user_stack(vmm_space_t *space, const elf_load_result_t *elf, int 
         if (sp < stack_base) {
             kfree(env_uva);
             kfree(arg_uva);
+            stack_release(space, stack_base, phys, USER_STACK_PAGES, true);
             return 0;
         }
         arg_uva[i] = sp;
@@ -119,6 +141,11 @@ uint64_t setup_user_stack(vmm_space_t *space, const elf_load_result_t *elf, int 
         AT_PHENT,  elf->phentsize,
         AT_PHNUM,  elf->phnum,
         AT_PAGESZ, PAGE_SIZE,
+        AT_UID,    uid,
+        AT_EUID,   euid,
+        AT_GID,    gid,
+        AT_EGID,   egid,
+        AT_SECURE, secure_exec ? 1 : 0,
         AT_RANDOM, random_uva,
         AT_BASE,   elf->interp_base,
         AT_EXECFN, argc > 0 ? arg_uva[0] : 0,
@@ -131,6 +158,7 @@ uint64_t setup_user_stack(vmm_space_t *space, const elf_load_result_t *elf, int 
     if (sp < stack_base) {
         kfree(env_uva);
         kfree(arg_uva);
+        stack_release(space, stack_base, phys, USER_STACK_PAGES, true);
         return 0;
     }
 
@@ -171,7 +199,8 @@ int process_exec(const void *data, uint64_t size, const char *name) {
     const char *init_argv[] = { name, NULL };
     const char *init_envp[] = { "TERM=xterm-color", "HOME=/", "PATH=/:/bin:/usr/bin", "SHELL=/init",
                                 NULL };
-    uint64_t rsp = setup_user_stack(res.space, &res, 1, init_argv, init_envp);
+    uint64_t rsp = setup_user_stack(res.space, &res, 1, init_argv, init_envp,
+                                    0, 0, 0, 0, false);
     if (!rsp) {
         log_error("process_exec: stack setup failed");
         vmm_space_free(res.space);
@@ -190,7 +219,7 @@ int process_exec(const void *data, uint64_t size, const char *name) {
     p->brk_base = p->brk;
     p->mmap_bump = 0x0000500000000000ULL + ((kern_rand64() & 0x1FFULL) << 21); /* +-1 GB aslr */
     p->jail_id = JAIL_HOST;
-    p->jail_exempt = 1; /* init lineage is never auto-isolated */
+    p->jail_exempt = 1; // init lineage is never auto-isolated
     p->state = PROC_RUNNING;
 
     vfs_copy_fdtable(p->fds, vfs_get_fdtable());

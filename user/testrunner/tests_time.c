@@ -44,6 +44,33 @@ int test_clock_gettime(void) {
 }
 REGISTER_TEST(clock_gettime, "Phase 6: Timers & Time");
 
+int test_clock_settime(void) {
+    struct timespec original, desired, actual;
+    ASSERT_EQ(0, clock_gettime(CLOCK_REALTIME, &original));
+
+    desired.tv_sec = original.tv_sec + 2;
+    desired.tv_nsec = 123000000;
+    ASSERT_EQ(0, clock_settime(CLOCK_REALTIME, &desired));
+    ASSERT_EQ(0, clock_gettime(CLOCK_REALTIME, &actual));
+    ASSERT_TRUE(actual.tv_sec > desired.tv_sec ||
+                (actual.tv_sec == desired.tv_sec && actual.tv_nsec >= desired.tv_nsec));
+    ASSERT_TRUE(actual.tv_sec <= desired.tv_sec + 1);
+
+    struct timespec invalid = desired;
+    invalid.tv_nsec = 1000000000L;
+    errno = 0;
+    ASSERT_EQ(-1, clock_settime(CLOCK_REALTIME, &invalid));
+    ASSERT_EQ(EINVAL, errno);
+
+    errno = 0;
+    ASSERT_EQ(-1, clock_settime(CLOCK_MONOTONIC, &desired));
+    ASSERT_EQ(EINVAL, errno);
+
+    ASSERT_EQ(0, clock_settime(CLOCK_REALTIME, &original));
+    return 1;
+}
+REGISTER_TEST(clock_settime, "Phase 6: Timers & Time");
+
 int test_clock_getres(void) {
     struct timespec ts;
 
@@ -196,3 +223,47 @@ int test_times(void) {
     return 1;
 }
 REGISTER_TEST(times, "Phase 6: Timers & Time");
+
+/*
+ * libwayland arms every event-loop timer with TFD_TIMER_ABSTIME, so an
+ * absolute deadline must not be mistaken for a relative delay.
+ */
+int test_timerfd_abstime(void) {
+    int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (tfd < 0 && (errno == ENOSYS || errno == EINVAL)) return 1;
+    ASSERT_GE(tfd, 0);
+
+    struct timespec now;
+    ASSERT_EQ(0, clock_gettime(CLOCK_MONOTONIC, &now));
+
+    struct itimerspec its;
+    memset(&its, 0, sizeof(its));
+    its.it_value = now;
+    its.it_value.tv_nsec += 60 * 1000 * 1000; /* +60 ms */
+    if (its.it_value.tv_nsec >= 1000000000L) {
+        its.it_value.tv_nsec -= 1000000000L;
+        its.it_value.tv_sec++;
+    }
+    ASSERT_EQ(0, timerfd_settime(tfd, TFD_TIMER_ABSTIME, &its, NULL));
+
+    /* not expired yet */
+    uint64_t ticks = 0;
+    ASSERT_EQ((ssize_t) -1, read(tfd, &ticks, sizeof(ticks)));
+    ASSERT(errno == EAGAIN);
+
+    int ep = epoll_create1(0);
+    ASSERT_GE(ep, 0);
+    struct epoll_event ev = { .events = EPOLLIN, .data = { .fd = tfd } };
+    ASSERT_EQ(0, epoll_ctl(ep, EPOLL_CTL_ADD, tfd, &ev));
+
+    struct epoll_event out[1];
+    /* a relative-vs-absolute mixup would push this far into the future */
+    ASSERT_EQ(1, epoll_wait(ep, out, 1, 1000));
+    ASSERT_EQ((ssize_t) sizeof(ticks), read(tfd, &ticks, sizeof(ticks)));
+    ASSERT_GE(ticks, (uint64_t) 1);
+
+    close(ep);
+    close(tfd);
+    return 1;
+}
+REGISTER_TEST(timerfd_abstime, "Phase 6: Timers & Time");

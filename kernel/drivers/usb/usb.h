@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "../../arch/x86_64/cpu.h"
+
 #define USB_CLASS_HUB 0x09
 #define USB_CLASS_MASS_STORAGE 0x08
 #define USB_CLASS_HID 0x03

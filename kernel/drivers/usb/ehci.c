@@ -61,6 +61,9 @@
 #define QH_LINK_TERMINATE (1u << 0)
 #define QH_LINK_TYPE_SHIFT 1
 #define QH_LINK_TYPE_QH (1u << 1)
+#define QH_LINK_TYPE_ITD (2u << 1)
+#define QH_LINK_TYPE_SITD (3u << 1)
+#define QH_LINK_TYPE_FSTN (4u << 1)
 
 #define QH_EP_RL_SHIFT 28
 #define QH_EP_C (1u << 27)
@@ -247,7 +250,7 @@ static int ehci_control(usb_hc_t *hc, usb_device_t *dev, const usb_setup_pkt_t *
     qh->ep_cap = (1u << QH_CAP_MULT_SHIFT) | (0xFFu << QH_CAP_CMASK_SHIFT) |
                  (0x01u << QH_CAP_SMASK_SHIFT);
     qh->link = (uint32_t) (e->qhs_phys + (uint32_t) qh_idx * sizeof(ehci_qh_t)) |
-               (QH_LINK_TYPE_QH << QH_LINK_TYPE_SHIFT);
+               QH_LINK_TYPE_QH;
 
     int ndata = len > 0 ? (len + mps - 1) / mps : 0;
     int nqtds = 1 + ndata + 1;
@@ -270,7 +273,7 @@ static int ehci_control(usb_hc_t *hc, usb_device_t *dev, const usb_setup_pkt_t *
     }
 
     int idx = first;
-    e->qtds[idx].status = QTD_STATUS_ACTIVE | (3u << QTD_CERR_SHIFT) | QTD_DT;
+    e->qtds[idx].status = QTD_STATUS_ACTIVE | (3u << QTD_CERR_SHIFT);
     e->qtds[idx].buffer[0] = (uint32_t) virt_to_phys(setup);
     e->qtds[idx].status |= (uint32_t) sizeof(usb_setup_pkt_t) << QTD_TB_SHIFT;
     e->qtds[idx].status |= QTD_PID_SETUP << QTD_PID_SHIFT;
@@ -329,7 +332,7 @@ static int ehci_bulk_int(usb_hc_t *hc, usb_device_t *dev, uint8_t ep_addr, uint8
     qh->ep_cap = (1u << QH_CAP_MULT_SHIFT) | (0xFFu << QH_CAP_CMASK_SHIFT) |
                  (0x01u << QH_CAP_SMASK_SHIFT);
     qh->link = (uint32_t) (e->qhs_phys + (uint32_t) qh_idx * sizeof(ehci_qh_t)) |
-               (QH_LINK_TYPE_QH << QH_LINK_TYPE_SHIFT);
+               QH_LINK_TYPE_QH;
 
     int nqtds = (len + mps - 1) / mps;
     if (nqtds < 1) nqtds = 1;
@@ -412,9 +415,10 @@ static int ehci_probe_one(uint8_t bus, uint8_t dev, uint8_t fn) {
     uint16_t cmd = pci_read16(bus, dev, fn, 0x04);
     pci_write32(bus, dev, fn, 0x04, cmd | 0x06u);
 
+    uint64_t bar0_phys = bar0 & PAGE_MASK;
     for (int i = 0; i < 8; i++) {
         vmm_map(&g_kernel_space, EHCI_MMIO_VBASE + (uint64_t) i * PAGE_SIZE,
-                bar0 + (uint64_t) i * PAGE_SIZE, VMM_KDATA | VMM_PCD);
+                bar0_phys + (uint64_t) i * PAGE_SIZE, VMM_KDATA | VMM_PCD);
     }
     volatile uint8_t *mmio = (volatile uint8_t *) (EHCI_MMIO_VBASE + (bar0 & (PAGE_SIZE - 1)));
     uint8_t caplength = mmio[EHCI_CAPLENGTH];

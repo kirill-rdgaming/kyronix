@@ -9,29 +9,32 @@
 #include "arch/x86_64/pit.h"
 #include "arch/x86_64/syscall_setup.h"
 #include "boot/limine.h"
-#include "drivers/fb.h"
+#include "drivers/video/fb.h"
+#include "proc/loadavg.h"
 #include "proc/smp.h"
 #include "version.h"
 
 #include "crypto/chacha20.h"
 #include "auth/auth.h"
-#include "drivers/acpi.h"
-#include "drivers/ahci.h"
 #include "drivers/netdev.h"
 #include "drivers/server.h"
-#include "drivers/block.h"
-#include "drivers/blockdev.h"
-#include "drivers/fbdev.h"
-#include "drivers/input.h"
-#include "drivers/kbd.h"
-#include "drivers/pci.h"
-#include "drivers/ps2mouse.h"
-#include "drivers/serial.h"
-#include "drivers/tty.h"
-#include "drivers/uio.h"
-#include "drivers/virtio_net.h"
-#include "drivers/vt.h"
 #include "drivers/usb/usb.h"
+#include "net/net.h"
+#include "drivers/acpi/acpi.h"
+#include "drivers/ata/ahci.h"
+#include "drivers/block/block.h"
+#include "drivers/block/blockdev.h"
+#include "drivers/video/fbdev.h"
+#include "drivers/input/input.h"
+#include "drivers/input/kbd.h"
+#include "drivers/bus/pci/pci.h"
+#include "drivers/input/ps2mouse.h"
+#include "drivers/char/serial.h"
+#include "drivers/bus/spi/spi.h"
+#include "drivers/hwmon/tmp117.h"
+#include "drivers/tty/tty.h"
+#include "drivers/char/uio.h"
+#include "drivers/tty/vt.h"
 #include "exec/process.h"
 #include "fs/cpio.h"
 #include "fs/ext2.h"
@@ -45,9 +48,11 @@
 #include "mm/heap.h"
 #include "mm/pmm.h"
 #include "mm/vmm.h"
-#include "net/net.h"
+#include "module/loader.h"
 #include "proc/jail.h"
 #include "proc/proc.h"
+#include "security/anti_toctou.h"
+#include "security/phantom.h"
 
 #define STATUS_COL 72
 #define COL_GRN "\033[0;32m"
@@ -324,8 +329,12 @@ void kmain(void) {
     kstatus("Initialising syscalls", true);
     proc_init();
     kstatus("Initialising scheduler", true);
+    loadavg_init();
+    kstatus("Initialising load average", true);
     jail_init();
     kstatus("Initialising jails", true);
+    phantom_init();
+    kstatus("Initialising phantom hooks", true);
     vfs_init();
     {
         vfs_node_t *_n = vfs_lookup("/proc");
@@ -342,7 +351,6 @@ void kmain(void) {
         kstatus("Mounting /dev/pts", _n != NULL);
         vfs_node_unref_internal(_n);
     }
-    /* Limine base revision >= 3 reports the RSDP as a physical address. */
     acpi_init(rsdp_req.response ? (uint64_t) rsdp_req.response->address : 0);
     kstatus("Initialising ACPI", acpi_available());
     int n_ecam = server_tables_init();
@@ -350,28 +358,10 @@ void kmain(void) {
     if (n_ecam > 0) kstatus("Server platform (ECAM/NUMA/IOAPIC)", true);
     pci_enumerate();
     kstatus("Enumerating PCI", true);
-    auth_init();
-    kstatus("Loading user database", auth_passwd_count() > 0);
     block_init();
     ahci_init();
     kstatus("Initialising AHCI", ahci_ready());
-    usbhid_init();
-    usbms_init();
-    usb_init();
-    kstatus("Initialising USB stack", usb_ready());
-    blockdev_init();
-    partition_scan_all();
-    blockdev_create_all();
-    kstatus("Initialising block devices", true);
     netdev_init();
-    e1000_init();
-    rtl8139_init();
-    rtl8169_init();
-    ath5k_init();
-    virtnet_init();
-    kstatus("Initialising virtio-net", virtnet_ready());
-    net_init();
-    kstatus("Initialising network stack", true);
     uio_init();
     kstatus("Initialising UIO", true);
     fbdev_init();
@@ -391,6 +381,9 @@ void kmain(void) {
     }
     vt_init();
     kstatus("Initialising virtual tty", true);
+    spi_stub_create_controller(0);
+    tmp117_subsys_init();
+    kstatus("Initialising TMP117 sensor", true);
     pit_init();
     kstatus("Starting PIT timer", true);
     lapic_calibrate_timer();
@@ -403,6 +396,8 @@ void kmain(void) {
         }
     }
     smp_boot_aps();
+    kstatus("Starting phantom fault worker", phantom_worker_start());
+    kstatus("Starting Anti-TOCTOU jitter", anti_toctou_init());
 
     {
         uint8_t seed[32];
@@ -429,6 +424,17 @@ void kmain(void) {
     }
 
     sti();
+    usbhid_init();
+    usbms_init();
+    usb_init();
+    kstatus("Initialising USB stack", usb_ready());
+    blockdev_init();
+    partition_scan_all();
+    blockdev_create_all();
+    kstatus("Initialising block devices", true);
+    rtl8139_init();
+    rtl8169_init();
+    ath5k_init();
     ps2mouse_init();
     kstatus("Initialising PS/2 mouse", true);
     kprintf("\n");
@@ -582,6 +588,23 @@ void kmain(void) {
         bool fstab_ok = fstab_mount_all("/etc/fstab");
         kstatus("Mounting fstab entries", fstab_ok);
     }
+
+    auth_init();
+    kstatus("Loading user database", auth_passwd_count() > 0);
+
+    {
+        int result = module_load_path("/lib/modules/virtio_net.ko");
+        if (result == 0) {
+            kstatus("Loading virtio-net module", true);
+        }
+    }
+    {
+        int result = module_load_path("/lib/modules/e1000.ko");
+        if (result == 0) {
+            kstatus("Loading e1000 module", true);
+        }
+    }
+    net_init();
 
     {
         vfs_node_t *init_node = vfs_lookup("/init");

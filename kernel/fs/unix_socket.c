@@ -7,6 +7,7 @@
 #include "mm/heap.h"
 #include "proc/jail.h"
 #include "proc/proc.h"
+#include "syscall/poll.h"
 
 #define EACCES 13
 #define EADDRINUSE 98
@@ -39,6 +40,8 @@ typedef struct {
     int state;
     char path[108];
     unix_conn_t *backlog;
+    unix_conn_t *backlog_tail;
+    int pending; // queued connections, mirrored into node->sock_backlog
     proc_t *accept_waiter;
     spinlock_t lock;
 } unix_sock_t;
@@ -58,9 +61,9 @@ static bool ipc_isolated(void) {
 
 int fd_socket(int domain, int type, int proto) {
     (void) proto;
-    if (domain == 2) return fd_inet_socket(type, proto); /* AF_INET */
+    if (domain == 2) return fd_inet_socket(type, proto); // AF_INET
     if (domain != 1) return -(int) EINVAL;
-    if ((type & 0xf) != 1) return -(int) EOPNOTSUPP; /* only SOCK_STREAM supported on AF_UNIX */
+    if ((type & 0xf) != 1) return -(int) EOPNOTSUPP; // only SOCK_STREAM supported on AF_UNIX
     unix_sock_t *s = (unix_sock_t *) kcalloc(1, sizeof(unix_sock_t));
     if (!s) return -(int) ENOMEM;
     vfs_node_t *n = vfs_node_alloc_internal("", VFS_TYPE_SOCK, S_IFSOCK | 0666);
@@ -77,6 +80,7 @@ int fd_socket(int domain, int type, int proto) {
     }
     vfs_file_t *f = vfs_file_alloc();
     if (!f) {
+        vfs_fd_clear(fd);
         kfree(s);
         kfree(n);
         return -(int) ENOMEM;
@@ -172,7 +176,8 @@ int fd_accept_unix(int fd, char *path_out, int path_max, int flags) {
     spin_lock(&s->lock);
     unix_conn_t *conn = s->backlog;
     s->backlog = conn->next;
-    f->node->sock_backlog--;
+    if (!s->backlog) s->backlog_tail = NULL;
+    if (s->pending) s->pending--;
     spin_unlock(&s->lock);
     pipe_t *srv_rx = conn->srv_rx;
     pipe_t *cli_rx = conn->cli_rx;
@@ -182,25 +187,24 @@ int fd_accept_unix(int fd, char *path_out, int path_max, int flags) {
     kfree(conn);
     int nfd = vfs_fd_alloc_from(0);
     if (nfd < 0) {
-        if (srv_rx->read_refs) srv_rx->read_refs--;
-        vfs_pipe_maybe_free(srv_rx);
+        vfs_pipe_drop_read(srv_rx);
         vfs_pipe_drop_write(cli_rx);
-        vfs_pipe_maybe_free(cli_rx);
         return -(int) EMFILE;
     }
     vfs_file_t *nf = vfs_file_alloc();
     if (!nf) {
-        if (srv_rx->read_refs) srv_rx->read_refs--;
-        vfs_pipe_maybe_free(srv_rx);
+        vfs_fd_clear(nfd);
+        vfs_pipe_drop_read(srv_rx);
         vfs_pipe_drop_write(cli_rx);
-        vfs_pipe_maybe_free(cli_rx);
         return -(int) ENOMEM;
     }
     nf->pipe = srv_rx;
     nf->wpipe = cli_rx;
     nf->pipe_end = PIPE_END_READ;
-    nf->flags = O_RDWR | (flags & O_NONBLOCK);
-    nf->cloexec = (flags & O_CLOEXEC) ? 1 : 0;
+    /* Linux: plain accept() inherits O_NONBLOCK/O_CLOEXEC from the listener;
+     * accept4() supplies them via flags. */
+    nf->flags = O_RDWR | (flags & O_NONBLOCK) | (f->flags & O_NONBLOCK);
+    nf->cloexec = ((flags & O_CLOEXEC) || f->cloexec) ? 1 : 0;
     nf->peer_pid = peer_pid;
     nf->peer_uid = peer_uid;
     nf->peer_gid = peer_gid;
@@ -219,7 +223,7 @@ int fd_connect_unix(int fd, const char *path) {
         for (int i = 0; i < MAX_ABSTRACT_SOCKS; i++) {
             if (g_abstract_socks[i].node && strncmp(g_abstract_socks[i].name, path + 1, 106) == 0) {
                 if (ipc_isolated() && g_abstract_socks[i].jail_id != cur_jail())
-                    continue; /* abstract name in another jail is invisible */
+                    continue; // abstract name in another jail is invisible
                 sn = g_abstract_socks[i].node;
                 break;
             }
@@ -243,10 +247,10 @@ int fd_connect_unix(int fd, const char *path) {
         pipe_free(srv_rx);
         return -(int) ENOMEM;
     }
-    cli_rx->read_refs = 1;
-    cli_rx->write_refs = 1;
-    srv_rx->read_refs = 1;
-    srv_rx->write_refs = 1;
+    pipe_ref_read(cli_rx);
+    pipe_ref_write(cli_rx);
+    pipe_ref_read(srv_rx);
+    pipe_ref_write(srv_rx);
     unix_conn_t *conn = (unix_conn_t *) kcalloc(1, sizeof(unix_conn_t));
     if (!conn) {
         pipe_free(cli_rx);
@@ -262,16 +266,19 @@ int fd_connect_unix(int fd, const char *path) {
     if (!srv->backlog) {
         srv->backlog = conn;
     } else {
-        unix_conn_t *tail = srv->backlog;
-        while (tail->next) tail = tail->next;
-        tail->next = conn;
+        srv->backlog_tail->next = conn;
     }
-    sn->sock_backlog++;
+    srv->backlog_tail = conn;
+    srv->pending++;
+    sn->sock_backlog = srv->pending;
     if (srv->accept_waiter) {
         proc_t *w = srv->accept_waiter;
         if (__sync_bool_compare_and_swap(&w->state, PROC_WAITING, PROC_READY)) proc_set_ready(w);
     }
     spin_unlock(&srv->lock);
+    // pollers wait on the shared socket state: the listening fd's node and the
+    // directory entry created by bind() are two different nodes
+    poll_notify_object(srv);
     vfs_node_unref_internal(sn);
     unix_sock_t *cs = (unix_sock_t *) f->node->data;
     kfree(cs);
@@ -282,6 +289,17 @@ int fd_connect_unix(int fd, const char *path) {
     f->wpipe = srv_rx;
     f->pipe_end = PIPE_END_READ;
     return 0;
+}
+
+bool unix_socket_has_pending(vfs_node_t *n) {
+    if (!n || n->type != VFS_TYPE_SOCK) return false;
+    unix_sock_t *s = (unix_sock_t *) n->data;
+    return s && s->state == SOCK_LISTENING && s->backlog != NULL;
+}
+
+void *unix_socket_wait_object(vfs_node_t *n) {
+    if (!n || n->type != VFS_TYPE_SOCK) return NULL;
+    return n->data;
 }
 
 void unix_socket_close(vfs_file_t *f) {
@@ -298,12 +316,12 @@ void unix_socket_close(vfs_file_t *f) {
             }
         }
         unix_conn_t *c = s->backlog;
+        s->backlog = NULL;
+        s->backlog_tail = NULL;
         while (c) {
             unix_conn_t *nx = c->next;
             vfs_pipe_drop_write(c->cli_rx);
-            vfs_pipe_maybe_free(c->cli_rx);
-            if (c->srv_rx->read_refs) c->srv_rx->read_refs--;
-            vfs_pipe_maybe_free(c->srv_rx);
+            vfs_pipe_drop_read(c->srv_rx);
             kfree(c);
             c = nx;
         }

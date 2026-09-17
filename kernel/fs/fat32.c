@@ -2,6 +2,7 @@
 #include "lib/log.h"
 #include "lib/string.h"
 #include "mm/heap.h"
+#include "arch/x86_64/spinlock.h"
 #include "vfs.h"
 
 #define FAT32_EOC 0x0FFFFFF8u
@@ -16,9 +17,8 @@
 #define FAT_ATTR_ARC 0x20
 #define FAT_ATTR_LFN 0x0F
 
-/* 255 UTF-16 chars max, 13 per LFN entry */
+// 255 UTF-16 chars max, 13 per LFN entry
 #define FAT32_LFN_SLOTS 20
-#define FAT32_MAX_FILE (64u * 1024u * 1024u)
 #define FAT32_MAX_DEPTH 16
 
 typedef struct __attribute__((packed)) {
@@ -92,18 +92,29 @@ typedef struct {
     uint32_t total_clusters;
     uint8_t *fat_sec;
     uint64_t fat_sec_lba;
+    spinlock_t fat_lock;
 } fat32_ctx_t;
+
+typedef struct {
+    fat32_ctx_t *ctx;
+    uint32_t start_cluster;
+} fat32_file_t;
 
 static uint32_t fat_next(fat32_ctx_t *ctx, uint32_t cluster) {
     uint32_t fat_off = cluster * 4;
     uint64_t lba = ctx->reserved_sectors + fat_off / ctx->bytes_per_sector;
     uint32_t off = fat_off % ctx->bytes_per_sector;
+    spin_lock(&ctx->fat_lock);
     if (lba != ctx->fat_sec_lba) {
-        if (ctx->read(ctx->ctx, lba, 1, ctx->fat_sec) < 0) return FAT32_EOC;
+        if (ctx->read(ctx->ctx, lba, 1, ctx->fat_sec) < 0) {
+            spin_unlock(&ctx->fat_lock);
+            return FAT32_EOC;
+        }
         ctx->fat_sec_lba = lba;
     }
     uint32_t v;
     memcpy(&v, ctx->fat_sec + off, 4);
+    spin_unlock(&ctx->fat_lock);
     return v & FAT32_MASK;
 }
 
@@ -149,6 +160,16 @@ static void ucs2_to_utf8(const uint16_t *src, int nchars, char *dst, int dstlen)
 
 static char fat_lower(char c) { return (c >= 'A' && c <= 'Z') ? (char) (c + 32) : c; }
 
+static bool fat_name_safe(const char *name) {
+    if (!name || !name[0] || strcmp(name, ".") == 0 || strcmp(name, "..") == 0) return false;
+    for (const unsigned char *p = (const unsigned char *) name; *p; p++) {
+        if (*p < 0x20 || *p == '/' || *p == '\\' || *p == ':' || *p == '*' || *p == '?' ||
+            *p == '"' || *p == '<' || *p == '>' || *p == '|')
+            return false;
+    }
+    return true;
+}
+
 static void build_83_name(const fat_dirent_t *e, char *out) {
     bool lc_name = (e->_nt & 0x08) != 0;
     bool lc_ext = (e->_nt & 0x10) != 0;
@@ -169,23 +190,62 @@ static void build_83_name(const fat_dirent_t *e, char *out) {
     out[n] = '\0';
 }
 
-static uint8_t *read_chain(fat32_ctx_t *ctx, uint32_t start, uint32_t fsize) {
-    if (fsize == 0 || fsize > FAT32_MAX_FILE) return NULL;
-    uint32_t alloc_sz = (fsize + ctx->cluster_size - 1) / ctx->cluster_size * ctx->cluster_size;
-    uint8_t *buf = kmalloc(alloc_sz);
-    if (!buf) return NULL;
-    uint64_t done = 0;
-    uint32_t cl = start;
-    while ((cl & FAT32_MASK) < FAT32_BAD && cl >= 2 && cl <= ctx->total_clusters + 1 &&
-           done < fsize) {
-        uint64_t lba = ctx->data_start + (uint64_t) (cl - 2) * ctx->sectors_per_cluster;
-        if (ctx->read(ctx->ctx, lba, ctx->sectors_per_cluster, buf + done) < 0) break;
-        done += ctx->cluster_size;
+static int64_t fat32_reg_read(vfs_node_t *n, char *buf, uint64_t off, uint64_t len) {
+    fat32_file_t *file = (fat32_file_t *) n->fs_private;
+    if (!file || !file->ctx) return -(int64_t) 5;
+    if (off >= n->size) return 0;
+    if (len > n->size - off) len = n->size - off;
+    if (!buf || !len) return (int64_t) len;
+
+    fat32_ctx_t *ctx = file->ctx;
+    uint32_t cl = file->start_cluster;
+    uint64_t skip = off / ctx->cluster_size;
+    for (uint64_t i = 0; i < skip; i++) {
         cl = fat_next(ctx, cl);
+        if (cl < 2 || cl >= FAT32_BAD || cl > ctx->total_clusters + 1) return -(int64_t) 5;
     }
-    if (done < fsize) memset(buf + done, 0, fsize - done);
-    return buf;
+
+    uint8_t *scratch = NULL;
+    uint64_t done = 0;
+    uint32_t in_cluster = (uint32_t) (off % ctx->cluster_size);
+    while (done < len && cl >= 2 && cl < FAT32_BAD && cl <= ctx->total_clusters + 1) {
+        uint64_t chunk = ctx->cluster_size - in_cluster;
+        if (chunk > len - done) chunk = len - done;
+        uint64_t lba = ctx->data_start + (uint64_t) (cl - 2) * ctx->sectors_per_cluster;
+        if (!in_cluster && chunk == ctx->cluster_size) {
+            if (ctx->read(ctx->ctx, lba, ctx->sectors_per_cluster, buf + done) < 0) break;
+        } else {
+            if (!scratch) scratch = (uint8_t *) kmalloc(ctx->cluster_size);
+            if (!scratch || ctx->read(ctx->ctx, lba, ctx->sectors_per_cluster, scratch) < 0)
+                break;
+            memcpy(buf + done, scratch + in_cluster, (size_t) chunk);
+        }
+        done += chunk;
+        in_cluster = 0;
+        if (done < len) cl = fat_next(ctx, cl);
+    }
+    if (scratch) kfree(scratch);
+    return done ? (int64_t) done : -(int64_t) 5;
 }
+
+static void fat32_reg_close(vfs_node_t *n) {
+    kfree(n->fs_private);
+    n->fs_private = NULL;
+}
+
+static int64_t fat32_reg_write_ro(vfs_node_t *n, const char *buf, uint64_t off, uint64_t len) {
+    (void) n;
+    (void) buf;
+    (void) off;
+    (void) len;
+    return -(int64_t) 30; /* EROFS */
+}
+
+static struct vfs_fs_ops fat32_reg_ops = {
+    .read = fat32_reg_read,
+    .write = fat32_reg_write_ro,
+    .close = fat32_reg_close,
+};
 
 static void walk_dir(fat32_ctx_t *ctx, uint32_t start_cl, const char *path, int depth, int *count);
 
@@ -207,15 +267,18 @@ static void process_dirent(fat32_ctx_t *ctx, const fat_dirent_t *e, const char *
         return;
     }
 
-    uint8_t *data = read_chain(ctx, cluster, e->size);
-    if (e->size > 0 && !data) {
-        log_warn("FAT32: skipping %s (size=%u)", fullpath, (unsigned) e->size);
-        return;
-    }
     uint32_t mode = (e->attr & FAT_ATTR_RO) ? 0444 : 0644;
-    vfs_node_t *n = vfs_create_file(fullpath, mode, data, e->size);
-    if (data) kfree(data);
-    if (n) (*count)++;
+    vfs_node_t *n = vfs_create_file(fullpath, mode, NULL, 0);
+    if (n) {
+        fat32_file_t *file = (fat32_file_t *) kmalloc(sizeof(*file));
+        if (!file) return;
+        file->ctx = ctx;
+        file->start_cluster = cluster;
+        n->size = e->size;
+        n->fs_private = file;
+        n->fs_ops = &fat32_reg_ops;
+        (*count)++;
+    }
 }
 
 static void walk_dir(fat32_ctx_t *ctx, uint32_t start_cl, const char *path, int depth, int *count) {
@@ -230,7 +293,9 @@ static void walk_dir(fat32_ctx_t *ctx, uint32_t start_cl, const char *path, int 
     } while (0)
 
     uint32_t cl = start_cl;
-    while ((cl & FAT32_MASK) < FAT32_BAD && cl >= 2 && cl <= ctx->total_clusters + 1) {
+    uint32_t traversed = 0;
+    while ((cl & FAT32_MASK) < FAT32_BAD && cl >= 2 && cl <= ctx->total_clusters + 1 &&
+           traversed++ < ctx->total_clusters) {
         uint8_t *cdata = read_cluster(ctx, cl);
         if (!cdata) break;
 
@@ -273,7 +338,7 @@ static void walk_dir(fat32_ctx_t *ctx, uint32_t start_cl, const char *path, int 
             } else {
                 build_83_name(e, fname);
             }
-            if (fname[0] == '\0') continue;
+            if (!fat_name_safe(fname)) continue;
 
             process_dirent(ctx, e, fname, path, depth, count);
         }
@@ -310,16 +375,22 @@ int fat32_mount(fat32_read_fn read, void *opaque, const char *mountpoint) {
         log_error("FAT32: invalid bytes_per_sector=%u", bpb.bytes_per_sector);
         return -1;
     }
-    if (bpb.sectors_per_cluster == 0) {
-        log_error("FAT32: sectors_per_cluster is zero");
+    if (bpb.sectors_per_cluster == 0 || bpb.sectors_per_cluster > 128 ||
+        (bpb.sectors_per_cluster & (bpb.sectors_per_cluster - 1)) != 0) {
+        log_error("FAT32: invalid sectors_per_cluster=%u", bpb.sectors_per_cluster);
         return -1;
     }
-    if (bpb.fat_size_32 == 0) {
-        log_error("FAT32: fat_size_32 is zero (not FAT32?)");
+    if (bpb.fat_size_32 == 0 || bpb.num_fats == 0 || bpb.reserved_sectors == 0) {
+        log_error("FAT32: invalid FAT geometry");
         return -1;
     }
 
-    fat32_ctx_t ctx = {
+    uint64_t data_start =
+        (uint64_t) bpb.reserved_sectors + (uint64_t) bpb.num_fats * bpb.fat_size_32;
+    if (data_start > UINT32_MAX) return -1;
+    fat32_ctx_t *ctx = (fat32_ctx_t *) kcalloc(1, sizeof(*ctx));
+    if (!ctx) return -1;
+    *ctx = (fat32_ctx_t) {
         .read = read,
         .ctx = opaque,
         .bytes_per_sector = bpb.bytes_per_sector,
@@ -328,24 +399,36 @@ int fat32_mount(fat32_read_fn read, void *opaque, const char *mountpoint) {
         .reserved_sectors = bpb.reserved_sectors,
         .num_fats = bpb.num_fats,
         .fat_size = bpb.fat_size_32,
-        .data_start = bpb.reserved_sectors + (uint32_t) bpb.num_fats * bpb.fat_size_32,
+        .data_start = (uint32_t) data_start,
         .root_cluster = bpb.root_cluster,
         .fat_sec_lba = UINT64_MAX,
     };
 
     uint32_t total_sectors = bpb.total_sectors_32 ? bpb.total_sectors_32 : bpb.total_sectors_16;
-    uint32_t data_sectors = total_sectors > ctx.data_start ? total_sectors - ctx.data_start : 0;
-    ctx.total_clusters = data_sectors / ctx.sectors_per_cluster;
+    uint32_t data_sectors = total_sectors > ctx->data_start ? total_sectors - ctx->data_start : 0;
+    ctx->total_clusters = data_sectors / ctx->sectors_per_cluster;
+    uint64_t fat_bytes = (uint64_t) ctx->fat_size * ctx->bytes_per_sector;
+    if (ctx->total_clusters == 0 || ctx->total_clusters > FAT32_BAD - 2 ||
+        ctx->root_cluster < 2 || ctx->root_cluster > ctx->total_clusters + 1 ||
+        ((uint64_t) ctx->total_clusters + 2) * 4 > fat_bytes) {
+        kfree(ctx);
+        return -1;
+    }
 
-    ctx.fat_sec = kmalloc(ctx.bytes_per_sector);
-    if (!ctx.fat_sec) return -1;
+    ctx->fat_sec = kmalloc(ctx->bytes_per_sector);
+    if (!ctx->fat_sec) { kfree(ctx); return -1; }
 
-    log_info("FAT32: %u B/sec, %u sec/cluster, data LBA %u, root cluster %u", ctx.bytes_per_sector,
-             ctx.sectors_per_cluster, ctx.data_start, ctx.root_cluster);
+    log_info("FAT32: %u B/sec, %u sec/cluster, data LBA %u, root cluster %u", ctx->bytes_per_sector,
+             ctx->sectors_per_cluster, ctx->data_start, ctx->root_cluster);
 
     char mp_buf[512];
     const char *mp = mountpoint;
     size_t mp_len = strlen(mountpoint);
+    if (mp_len >= sizeof(mp_buf)) {
+        kfree(ctx->fat_sec);
+        kfree(ctx);
+        return -1;
+    }
     if (mp_len > 1) {
         memcpy(mp_buf, mountpoint, mp_len + 1);
         if (mp_buf[mp_len - 1] == '/') mp_buf[--mp_len] = '\0';
@@ -355,9 +438,8 @@ int fat32_mount(fat32_read_fn read, void *opaque, const char *mountpoint) {
     }
 
     int count = 0;
-    walk_dir(&ctx, ctx.root_cluster, mp, 0, &count);
-    kfree(ctx.fat_sec);
-    log_info("FAT32: loaded %d files", count);
+    walk_dir(ctx, ctx->root_cluster, mp, 0, &count);
+    log_info("FAT32: indexed %d files lazily", count);
     return 0;
 }
 
@@ -369,18 +451,23 @@ typedef struct {
 
 static int mem_read(void *ctx, uint64_t lba, uint32_t count, void *buf) {
     mem_disk_t *d = ctx;
+    if (lba > UINT64_MAX / d->sector_size) return -1;
     uint64_t off = lba * d->sector_size;
     uint64_t len = (uint64_t) count * d->sector_size;
-    if (off + len > d->size) return -1;
+    if (off > d->size || len > d->size - off) return -1;
     memcpy(buf, d->base + off, len);
     return 0;
 }
 
 int fat32_mount_mem(const void *image, uint64_t size, const char *mountpoint) {
     if (!image || size < 512) return -1;
-    mem_disk_t d = { .base = image, .size = size, .sector_size = 512 };
+    mem_disk_t *d = (mem_disk_t *) kmalloc(sizeof(*d));
+    if (!d) return -1;
+    *d = (mem_disk_t) { .base = image, .size = size, .sector_size = 512 };
     uint16_t bps;
     memcpy(&bps, (const uint8_t *) image + 11, 2);
-    if (bps >= 512 && bps <= 4096 && (bps & (bps - 1)) == 0) d.sector_size = bps;
-    return fat32_mount(mem_read, &d, mountpoint);
+    if (bps >= 512 && bps <= 4096 && (bps & (bps - 1)) == 0) d->sector_size = bps;
+    int rc = fat32_mount(mem_read, d, mountpoint);
+    if (rc < 0) kfree(d);
+    return rc;
 }

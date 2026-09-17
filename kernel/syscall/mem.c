@@ -4,9 +4,12 @@
 #include "internal.h"
 #include "lib/string.h"
 #include "mm/pmm.h"
+#include "mm/shmem.h"
 #include "mm/vma.h"
 #include "mm/vmm.h"
 #include "proc/proc.h"
+#include "lib/log.h"
+#include "security/anti_toctou.h"
 
 #define PROT_READ 0x1
 #define PROT_WRITE 0x2
@@ -24,11 +27,13 @@ void syscall_set_brk(uint64_t brk_base) {
     if (p) p->brk = p->brk_base = PAGE_ALIGN_UP(brk_base);
 }
 
-int64_t sys_brk(uint64_t addr) {
+static int64_t sys_brk_impl(uint64_t addr) {
     proc_t *p = cur();
     if (!p || !p->space) return -(int64_t) ENOMEM;
     if (addr == 0) return (int64_t) p->brk;
     if (addr < p->brk_base) return (int64_t) p->brk;
+    if (addr >= USER_LIMIT || addr > USER_LIMIT - (PAGE_SIZE - 1))
+        return (int64_t) p->brk;
 
     if (addr <= p->brk) {
         uint64_t new_end = PAGE_ALIGN_UP(addr);
@@ -79,6 +84,15 @@ int64_t sys_brk(uint64_t addr) {
     return (int64_t) addr;
 }
 
+int64_t sys_brk(uint64_t addr) {
+    proc_t *p = cur();
+    if (!p || !p->space) return -(int64_t) ENOMEM;
+    if (!vmm_space_mutation_begin(p->space)) return -(int64_t) EAGAIN;
+    int64_t rc = sys_brk_impl(addr);
+    vmm_space_mutation_end(p->space);
+    return rc;
+}
+
 static bool user_map_range_ok(uint64_t addr, uint64_t len) {
     if (!len || (addr & (PAGE_SIZE - 1))) return false;
     if (addr >= USER_LIMIT || len > USER_LIMIT - addr) return false;
@@ -86,13 +100,14 @@ static bool user_map_range_ok(uint64_t addr, uint64_t len) {
 }
 
 static bool prot_valid(uint64_t prot) {
-    return (prot & ~(uint64_t) (PROT_READ | PROT_WRITE | PROT_EXEC)) == 0;
+    if (prot & ~(uint64_t) (PROT_READ | PROT_WRITE | PROT_EXEC)) return false;
+    return (prot & (PROT_WRITE | PROT_EXEC)) != (PROT_WRITE | PROT_EXEC);
 }
 
 static bool mmap_flags_valid(uint64_t flags) {
     if (flags & ~(uint64_t) (MAP_ANON | MAP_FIXED | MAP_PRIVATE | MAP_SHARED)) return false;
-    if (!(flags & MAP_ANON) && !(flags & (MAP_PRIVATE | MAP_SHARED))) return false;
-    return true;
+    uint64_t kind = flags & (MAP_PRIVATE | MAP_SHARED);
+    return kind == MAP_PRIVATE || kind == MAP_SHARED;
 }
 
 static int mmap_pick_addr(proc_t *p, uint64_t addr, uint64_t length, uint64_t flags,
@@ -149,16 +164,30 @@ static int mmap_fixed_replace(proc_t *p, uint64_t addr, uint64_t len, uint64_t f
     return vma_remove_overlaps(p->space, addr, len);
 }
 
-int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t flags, uint64_t fd,
-                 uint64_t off) {
+static int64_t sys_mmap_impl(uint64_t addr, uint64_t length, uint64_t prot, uint64_t flags,
+                             uint64_t fd, uint64_t off) {
     (void) fd;
     (void) off;
     proc_t *p = cur();
     if (!p || !p->space) return -(int64_t) ENOMEM;
     if (!length) return -(int64_t) EINVAL;
+    if (length > UINT64_MAX - (PAGE_SIZE - 1)) return -(int64_t) EINVAL;
     length = PAGE_ALIGN_UP(length);
     if (!prot_valid(prot) || !mmap_flags_valid(flags)) return -(int64_t) EINVAL;
     if ((off & (PAGE_SIZE - 1)) != 0) return -(int64_t) EINVAL;
+
+    vfs_file_t *file = NULL;
+    vfs_node_t *fn = NULL;
+    if (!(flags & MAP_ANON)) {
+        file = fd_get_file((int) fd);
+        fn = file ? file->node : NULL;
+        if (!fn) return -(int64_t) EBADF;
+        if (fn->type != VFS_TYPE_REG && !(fn->type == VFS_TYPE_CHR && fn->chr_mmap))
+            return -(int64_t) EBADF;
+        if ((flags & MAP_SHARED) && (prot & PROT_WRITE) &&
+            (file->flags & O_ACCMODE) == O_RDONLY)
+            return -(int64_t) EACCES;
+    }
 
     uint64_t va = 0;
     int pick = mmap_pick_addr(p, addr, length, flags, &va);
@@ -172,10 +201,7 @@ int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t flags, 
     bool reserve_only = (prot & (PROT_READ | PROT_WRITE | PROT_EXEC)) == 0;
 
     if (!(flags & MAP_ANON)) {
-        vfs_node_t *fn = fd_get_node((int) fd);
-        if (!fn) return -(int64_t) EBADF;
-
-        /* chr-dev with custom mmap (e.g. UIO physical BAR mapping) */
+        // chr-dev with custom mmap (e.g. uio physical bar mapping)
         if (fn->type == VFS_TYPE_CHR && fn->chr_mmap) {
             int rc = vma_add(p->space, va, length, (uint32_t) prot, (uint32_t) flags, false);
             if (rc < 0) return rc;
@@ -189,15 +215,49 @@ int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t flags, 
         }
 
         if (fn->type != VFS_TYPE_REG) return -(int64_t) EBADF;
+        if (fn->shmem) {
+            if (off > UINT64_MAX - length) return -(int64_t) EINVAL;
+            int rc = vma_add(p->space, va, length, (uint32_t) prot, (uint32_t) flags, true);
+            if (rc < 0) return rc;
+            if (reserve_only) return (int64_t) va;
+            for (uint64_t o = 0; o < length; o += PAGE_SIZE) {
+                if (flags & MAP_SHARED) {
+                    uint64_t phys = shmem_page_phys(fn->shmem, off + o);
+                    if (!phys || !pmm_retain((void *) phys)) {
+                        rollback_new_mapping(p, va, o, length);
+                        return -(int64_t) ENOMEM;
+                    }
+                    if (vmm_map(p->space, va + o, phys, vf) < 0) {
+                        pmm_free((void *) phys);
+                        rollback_new_mapping(p, va, o, length);
+                        return -(int64_t) ENOMEM;
+                    }
+                    continue;
+                }
+                void *ph = pmm_alloc_zeroed();
+                if (!ph) {
+                    rollback_new_mapping(p, va, o, length);
+                    return -(int64_t) ENOMEM;
+                }
+                if (vmm_map(p->space, va + o, (uint64_t) ph, vf) < 0) {
+                    pmm_free(ph);
+                    rollback_new_mapping(p, va, o, length);
+                    return -(int64_t) ENOMEM;
+                }
+                shmem_read(fn->shmem, phys_to_virt((uint64_t) ph), off + o, PAGE_SIZE);
+            }
+            p->pages_alloc += (flags & MAP_SHARED) ? 0 : length / PAGE_SIZE;
+            return (int64_t) va;
+        }
 
         int rc = vma_add(p->space, va, length, (uint32_t) prot, (uint32_t) flags, true);
         if (rc < 0) return rc;
         if (reserve_only) return (int64_t) va;
 
-        /* Lazily load file data if filesystem hasn't populated fn->data yet (ext2) */
+        // lazily load file data if filesystem hasnt populated fn->data yet (ext2)
         if (!fn->data && fn->fs_ops && fn->fs_ops->read) fn->fs_ops->read(fn, NULL, 0, 0);
 
-        /* file-backed: MAP_PRIVATE - allocate pages and copy file content */
+        // file-backed: MAP_PRIVATE - allocate pages and copy file content
         uint64_t file_size = fn->size;
         uint64_t nallocd_file = 0;
         for (uint64_t o = 0; o < length; o += PAGE_SIZE) {
@@ -211,10 +271,11 @@ int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t flags, 
                 rollback_new_mapping(p, va, o, length);
                 return -(int64_t) ENOMEM;
             }
-            if (fn->data && off + o < file_size) {
-                uint64_t copy = file_size - (off + o);
+            if (fn->data && off < file_size && o < file_size - off) {
+                uint64_t file_off = off + o;
+                uint64_t copy = file_size - file_off;
                 if (copy > PAGE_SIZE) copy = PAGE_SIZE;
-                memcpy(phys_to_virt((uint64_t) ph), fn->data + off + o, copy);
+                memcpy(phys_to_virt((uint64_t) ph), fn->data + file_off, copy);
             }
             nallocd_file++;
         }
@@ -244,10 +305,21 @@ int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t flags, 
     return (int64_t) va;
 }
 
-int64_t sys_munmap(uint64_t addr, uint64_t len) {
+int64_t sys_mmap(uint64_t addr, uint64_t length, uint64_t prot, uint64_t flags, uint64_t fd,
+                 uint64_t off) {
+    proc_t *p = cur();
+    if (!p || !p->space) return -(int64_t) ENOMEM;
+    if (!vmm_space_mutation_begin(p->space)) return -(int64_t) EAGAIN;
+    int64_t rc = sys_mmap_impl(addr, length, prot, flags, fd, off);
+    vmm_space_mutation_end(p->space);
+    return rc;
+}
+
+static int64_t sys_munmap_impl(uint64_t addr, uint64_t len) {
     proc_t *p = cur();
     if (!p) return -(int64_t) EINVAL;
     if ((addr & (PAGE_SIZE - 1)) || !len) return -(int64_t) EINVAL;
+    if (len > UINT64_MAX - (PAGE_SIZE - 1)) return -(int64_t) EINVAL;
     len = PAGE_ALIGN_UP(len);
     if (!user_map_range_ok(addr, len)) return -(int64_t) EINVAL;
     unmap_owned_pages(p, addr, len);
@@ -255,14 +327,25 @@ int64_t sys_munmap(uint64_t addr, uint64_t len) {
     return 0;
 }
 
-int64_t sys_mprotect(uint64_t addr, uint64_t len, uint64_t prot) {
+int64_t sys_munmap(uint64_t addr, uint64_t len) {
+    proc_t *p = cur();
+    if (!p || !p->space) return -(int64_t) EINVAL;
+    if (!vmm_space_mutation_begin(p->space)) return -(int64_t) EAGAIN;
+    int64_t rc = sys_munmap_impl(addr, len);
+    vmm_space_mutation_end(p->space);
+    return rc;
+}
+
+static int64_t sys_mprotect_impl(uint64_t addr, uint64_t len, uint64_t prot) {
     proc_t *p = cur();
     if (!p || !len) return 0;
     if (addr & (PAGE_SIZE - 1)) return -(int64_t) EINVAL;
     if (!prot_valid(prot)) return -(int64_t) EINVAL;
     addr = PAGE_ALIGN_DOWN(addr);
+    if (len > UINT64_MAX - (PAGE_SIZE - 1)) return -(int64_t) EINVAL;
     len = PAGE_ALIGN_UP(len);
     if (!user_map_range_ok(addr, len)) return -(int64_t) EINVAL;
+    anti_toctou_observe_memory(addr, ANTI_TOCTOU_MEM_PROTECT);
     bool tracked = vma_range_ok(p->space, addr, len);
     if (!tracked && !vmm_user_range_ok(p->space, addr, len, false)) return -(int64_t) EINVAL;
     if (tracked) {
@@ -283,6 +366,18 @@ int64_t sys_mprotect(uint64_t addr, uint64_t len, uint64_t prot) {
     return 0;
 }
 
+int64_t sys_mprotect(uint64_t addr, uint64_t len, uint64_t prot) {
+    proc_t *p = cur();
+    if (!p || !p->space) return -(int64_t) EINVAL;
+    if (!vmm_space_mutation_begin(p->space)) return -(int64_t) EAGAIN;
+    int64_t rc = sys_mprotect_impl(addr, len, prot);
+    if (rc < 0)
+        log_warn("DBG mprotect fail pid=%u rc=%ld addr=%lx len=%lx prot=%lx", p->pid, (long) rc,
+                 (unsigned long) addr, (unsigned long) len, (unsigned long) prot);
+    vmm_space_mutation_end(p->space);
+    return rc;
+}
+
 int64_t sys_madvise(void *addr, uint64_t len, int advice) {
     (void) addr;
     (void) len;
@@ -290,17 +385,24 @@ int64_t sys_madvise(void *addr, uint64_t len, int advice) {
     return 0;
 }
 
-int64_t sys_mremap(uint64_t old_addr, uint64_t old_sz, uint64_t new_sz, uint64_t flags,
-                   uint64_t new_addr) {
+static int64_t sys_mremap_impl(uint64_t old_addr, uint64_t old_sz, uint64_t new_sz,
+                               uint64_t flags, uint64_t new_addr) {
     proc_t *p = cur();
     if (!p || !old_sz || !new_sz) return -(int64_t) EINVAL;
     if (flags & ~(uint64_t) (MREMAP_MAYMOVE | MREMAP_FIXED)) return -(int64_t) EINVAL;
     if ((flags & MREMAP_FIXED) && !(flags & MREMAP_MAYMOVE)) return -(int64_t) EINVAL;
     if ((old_addr & (PAGE_SIZE - 1)) || ((flags & MREMAP_FIXED) && (new_addr & (PAGE_SIZE - 1))))
         return -(int64_t) EINVAL;
+    if (old_sz > UINT64_MAX - (PAGE_SIZE - 1) ||
+        new_sz > UINT64_MAX - (PAGE_SIZE - 1))
+        return -(int64_t) EINVAL;
     old_sz = PAGE_ALIGN_UP(old_sz);
     new_sz = PAGE_ALIGN_UP(new_sz);
-    if (!user_map_range_ok(old_addr, old_sz) || !vma_range_ok(p->space, old_addr, old_sz))
+    uint32_t old_prot, old_map_flags;
+    bool old_owned;
+    if (!user_map_range_ok(old_addr, old_sz) ||
+        !vma_range_info(p->space, old_addr, old_sz, &old_prot, &old_map_flags, &old_owned) ||
+        !old_owned)
         return -(int64_t) EINVAL;
     if (new_sz <= old_sz) {
         uint64_t tail = old_sz - new_sz;
@@ -322,16 +424,19 @@ int64_t sys_mremap(uint64_t old_addr, uint64_t old_sz, uint64_t new_sz, uint64_t
         if (pick < 0) return pick;
     }
 
-    int rc = vma_add(p->space, new_va, new_sz, PROT_READ | PROT_WRITE, MAP_ANON, true);
+    int rc = vma_add(p->space, new_va, new_sz, old_prot, old_map_flags, true);
     if (rc < 0) return rc;
 
+    uint64_t page_flags = VMM_USER | VMM_NX;
+    if (old_prot & PROT_WRITE) page_flags |= VMM_WRITE;
+    if (old_prot & PROT_EXEC) page_flags &= ~(uint64_t) VMM_NX;
     for (uint64_t o = 0; o < new_sz; o += PAGE_SIZE) {
         void *ph = pmm_alloc_zeroed();
         if (!ph) {
             rollback_new_mapping(p, new_va, o, new_sz);
             return -(int64_t) ENOMEM;
         }
-        if (vmm_map(p->space, new_va + o, (uint64_t) ph, VMM_UDATA) < 0) {
+        if (vmm_map(p->space, new_va + o, (uint64_t) ph, page_flags) < 0) {
             pmm_free(ph);
             rollback_new_mapping(p, new_va, o, new_sz);
             return -(int64_t) ENOMEM;
@@ -344,5 +449,16 @@ int64_t sys_mremap(uint64_t old_addr, uint64_t old_sz, uint64_t new_sz, uint64_t
     unmap_owned_pages(p, old_addr, old_sz);
     rc = vma_remove(p->space, old_addr, old_sz);
     if (rc < 0) return rc;
+    p->pages_alloc += new_sz / PAGE_SIZE;
     return (int64_t) new_va;
+}
+
+int64_t sys_mremap(uint64_t old_addr, uint64_t old_sz, uint64_t new_sz, uint64_t flags,
+                   uint64_t new_addr) {
+    proc_t *p = cur();
+    if (!p || !p->space) return -(int64_t) EINVAL;
+    if (!vmm_space_mutation_begin(p->space)) return -(int64_t) EAGAIN;
+    int64_t rc = sys_mremap_impl(old_addr, old_sz, new_sz, flags, new_addr);
+    vmm_space_mutation_end(p->space);
+    return rc;
 }

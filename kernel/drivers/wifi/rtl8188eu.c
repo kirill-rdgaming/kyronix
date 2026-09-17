@@ -2,6 +2,7 @@
 #include "../../fs/vfs.h"
 #include "../../fs/vfs_internal.h"
 #include "../../lib/log.h"
+#include "../../lib/printf.h"
 #include "../../lib/string.h"
 #include "../../mm/heap.h"
 #include "../../mm/pmm.h"
@@ -361,9 +362,7 @@ static void rtl8188eu_poll_rx(rtl8188eu_t *r) {
     }
 }
 
-void rtl8188eu_probe(void *vdev, void *viface) {
-    usb_device_t *dev = (usb_device_t *) vdev;
-    usb_interface_t *iface = (usb_interface_t *) viface;
+void rtl8188eu_probe(usb_device_t *dev, usb_interface_t *iface) {
     if (g_nr8e >= 2) return;
 
     usb_endpoint_t *ep_in = NULL, *ep_out = NULL;

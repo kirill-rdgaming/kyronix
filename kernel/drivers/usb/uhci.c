@@ -31,7 +31,7 @@
 #define UHCI_PORT_PR 0x0400
 
 #define TD_LINK_TERMINATE 0x00000001u
-#define TD_LINK_QH 0x00000002u
+#define TD_LINK_QH (1u << 1)
 
 #define TD_CTRL_SPD (1u << 29)
 #define TD_CTRL_ERR_SHIFT 27
@@ -148,7 +148,7 @@ static int uhci_run_tds(uhci_t *u, int first_td, int ntds, int *actual) {
             uint32_t ctrl = u->tds[idx].ctrl;
             if (ctrl & TD_CTRL_ACTIVE) {
                 done = false;
-                if (!(ctrl & TD_CTRL_NAK)) break;
+                break;
             }
             if (ctrl & (TD_CTRL_STALLED | TD_CTRL_DATABUFFER | TD_CTRL_BABBLE |
                         TD_CTRL_CRCTO | TD_CTRL_BITSTUFF)) {

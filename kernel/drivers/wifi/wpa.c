@@ -1,6 +1,7 @@
 #include "wpa.h"
 #include "../../crypto/chacha20.h"
 #include "../../lib/string.h"
+#include "../../mm/heap.h"
 
 typedef struct {
     uint32_t h[5];

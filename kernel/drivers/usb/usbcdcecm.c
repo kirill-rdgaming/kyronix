@@ -1,5 +1,6 @@
 #include "usb.h"
 #include "../../lib/log.h"
+#include "../../lib/printf.h"
 #include "../../lib/string.h"
 #include "../../mm/heap.h"
 #include "../../mm/pmm.h"
@@ -75,9 +76,7 @@ static int usbcdcecm_get_mac(usbcdcecm_t *e, uint8_t imac_idx) {
     return 0;
 }
 
-void usbcdcecm_probe(void *vdev, void *viface) {
-    usb_device_t *dev = (usb_device_t *) vdev;
-    usb_interface_t *iface = (usb_interface_t *) viface;
+void usbcdcecm_probe(usb_device_t *dev, usb_interface_t *iface) {
     if (g_necm >= CDC_ECM_MAX) return;
 
     usb_endpoint_t *ep_in = NULL, *ep_out = NULL;

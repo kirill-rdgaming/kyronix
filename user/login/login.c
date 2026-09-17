@@ -1,6 +1,8 @@
+#define _DEFAULT_SOURCE
 #define _XOPEN_SOURCE 700
 #include <ctype.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <pwd.h>
 #include <shadow.h>
 #include <stdio.h>
@@ -8,6 +10,7 @@
 #include <string.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <unistd.h>
 
 #define PROMPT_MAX 64
@@ -15,25 +18,44 @@
 
 static void putstr(const char *s) { write(STDERR_FILENO, s, strlen(s)); }
 
-static void read_line(char *buf, size_t size, int echo) {
+static void redraw_line(const char *prompt, const char *buf, size_t length, int echo) {
+    putstr("\r\033[2K");
+    putstr(prompt);
+    if (echo > 0) {
+        write(STDERR_FILENO, buf, length);
+    } else if (echo < 0) {
+        for (size_t j = 0; j < length; j++) putstr("*");
+    }
+}
+
+static void read_line(const char *prompt, char *buf, size_t size, int echo) {
+    struct termios saved;
+    int restore_termios = 0;
+    if (tcgetattr(STDIN_FILENO, &saved) == 0) {
+        struct termios input = saved;
+        input.c_lflag &= (tcflag_t) ~(ICANON | ECHO);
+        input.c_cc[VMIN] = 1;
+        input.c_cc[VTIME] = 0;
+        restore_termios = tcsetattr(STDIN_FILENO, TCSAFLUSH, &input) == 0;
+    }
+
+    putstr(prompt);
     size_t i = 0;
     int c;
     for (;;) {
         c = getchar();
         if (c == EOF) {
             buf[i] = '\0';
-            return;
+            break;
         }
         if (c == '\n' || c == '\r') {
             buf[i] = '\0';
-            putstr("\r\n");
-            return;
+            putstr("\n");
+            break;
         }
         if (c == '\b' || c == 0x7f) {
-            if (i > 0) {
-                i--;
-                if (echo) putstr("\b \b");
-            }
+            if (i > 0) i--;
+            redraw_line(prompt, buf, i, echo);
             continue;
         }
         if (i < size - 1) {
@@ -44,6 +66,7 @@ static void read_line(char *buf, size_t size, int echo) {
                 putstr("*");
         }
     }
+    if (restore_termios) tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved);
 }
 
 static void print_issue(void) {
@@ -54,6 +77,24 @@ static void print_issue(void) {
     while ((n = read(fd, buf, sizeof(buf))) > 0) write(STDERR_FILENO, buf, n);
     close(fd);
     puts("");
+}
+
+/* 1 = password required, 0 = intentionally empty, -1 = locked account */
+static int password_state(const char *user) {
+    struct spwd *sp = getspnam(user);
+    if (sp && sp->sp_pwdp) {
+        const char *p = sp->sp_pwdp;
+        if (p[0] == '*' || p[0] == '!') return -1;
+        if (p[0] == '\0') return 0;
+        return 1;
+    }
+
+    struct passwd *pw = getpwnam(user);
+    if (!pw || !pw->pw_passwd) return 0;
+    if (pw->pw_passwd[0] == '\0') return 0;
+    if (pw->pw_passwd[0] == '*' || pw->pw_passwd[0] == '!') return -1;
+
+    return 1;
 }
 
 static int check_password(const char *user, const char *pass) {
@@ -102,13 +143,10 @@ int main(void) {
                 print_issue();
                 first = 0;
             }
-            putstr(uts.nodename);
-            putstr(" login: ");
-            read_line(user, sizeof(user), 1);
+            char prompt[128];
+            snprintf(prompt, sizeof(prompt), "%.64s login: ", uts.nodename);
+            read_line(prompt, user, sizeof(user), 1);
             if (user[0] == '\0') continue;
-
-            putstr("Password: ");
-            read_line(pass, sizeof(pass), -1);
 
             pw = getpwnam(user);
             if (!pw) {
@@ -116,6 +154,18 @@ int main(void) {
                 sleep(1);
                 continue;
             }
+
+            int pwstate = password_state(user);
+            if (pwstate < 0) {
+                putstr("Login incorrect\n");
+                sleep(1);
+                continue;
+            }
+            if (pwstate == 0) {
+                break;
+            }
+
+            read_line("Password: ", pass, sizeof(pass), -1);
 
             if (!check_password(user, pass)) {
                 putstr("Login incorrect\n");
@@ -137,6 +187,7 @@ int main(void) {
 
         if (chdir(pw->pw_dir) < 0) chdir("/");
 
+        initgroups(pw->pw_name, pw->pw_gid);
         setgid(pw->pw_gid);
         setuid(pw->pw_uid);
         execlp(pw->pw_shell, pw->pw_shell, NULL);

@@ -1,5 +1,7 @@
 #include "usb.h"
+#include "../../arch/x86_64/pit.h"
 #include "../../lib/log.h"
+#include "../../lib/printf.h"
 #include "../../lib/string.h"
 #include "../../mm/heap.h"
 #include "../../mm/pmm.h"
@@ -47,7 +49,7 @@ static int acm_send_bytes(usbcdcacm_t *a, const uint8_t *data, int len) {
 }
 
 static int acm_recv_bytes(usbcdcacm_t *a, uint8_t *buf, int maxlen, int timeout_ms) {
-    uint64_t end = g_ticks + ((uint64_t) timeout_ms * 1000u) / 54945u + 1u;
+    uint64_t end = g_ticks + (uint64_t) timeout_ms + 1u;
     while (g_ticks < end) {
         int actual = 0;
         int ret = usb_bulk_transfer(a->dev, a->ep_in, a->toggle_in, a->xfer, CDC_ACM_XFER,
@@ -77,7 +79,7 @@ static int acm_at_cmd(usbcdcacm_t *a, const char *cmd, const char *expect, int t
     buf[n++] = '\n';
     acm_send_bytes(a, (const uint8_t *) buf, n);
 
-    uint64_t end = g_ticks + ((uint64_t) timeout_ms * 1000u) / 54945u + 1u;
+    uint64_t end = g_ticks + (uint64_t) timeout_ms + 1u;
     char resp[256];
     int rlen = 0;
     while (g_ticks < end) {
@@ -193,9 +195,7 @@ static void usbcdcacm_poll(netdev_t *nd) {
     }
 }
 
-void usbcdcacm_probe(void *vdev, void *viface) {
-    usb_device_t *dev = (usb_device_t *) vdev;
-    usb_interface_t *iface = (usb_interface_t *) viface;
+void usbcdcacm_probe(usb_device_t *dev, usb_interface_t *iface) {
     if (g_nacm >= CDC_ACM_MAX) return;
 
     usb_endpoint_t *ep_in = NULL, *ep_out = NULL;

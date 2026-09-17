@@ -8,7 +8,6 @@ Operating system that sucks less.
 [![test](https://github.com/kyronix-project/kyronix/actions/workflows/test.yml/badge.svg)](https://github.com/kyronix-project/kyronix/actions/workflows/test.yml)
 [![ISC](https://img.shields.io/badge/license-ISC-blue)](#)
 [![x86-64](https://img.shields.io/badge/arch-x86__64-lightgrey)](#)
-[![AI](https://img.shields.io/badge/AI--assisted-blueviolet)](#)
 
 <br clear="left"/>
 
@@ -22,9 +21,10 @@ performance, security and stability.
 ### Kernel
 - x86-64, 4-level paging, SMEP, NX-bit
 - Limine bootloader (BIOS + UEFI)
-- Preemptive scheduler (~1000 Hz)
+- Preemptive scheduler (~250 Hz)
 - ELF64 loader (PIE + musl)
 - 150+ Linux-compatible syscalls
+- Loadable ELF64 kernel modules (`insmod`, `rmmod`, `lsmod`)
 - Demand paging (`mmap`, `mprotect`, `mremap`, `brk`)
 - RTC, CPUID, RDRAND
 
@@ -70,40 +70,62 @@ performance, security and stability.
 - epoll, poll, select
 - Continuous integration test suite
 
+### Security hooks
+
+`PHANTOM_FORKING` records suspicious faults, VFS access and network activity.
+Trap mode can create a COW sandbox with an isolated synthetic VFS, dummy crypto
+material, sanitized descriptors and simulated network replies.
+
+Quarantine mode parks the source process. User write/NX faults are queued to a
+kernel worker, which builds the sandbox and resumes the exact faulting
+instruction there. Sandbox setup is atomic and fails closed.
+
+This is an experimental mechanism: the queue is bounded, unsupported faults use
+the normal signal/panic path, and fault-quarantined sources cannot be safely
+resumed.
+
+`Anti-TOCTOU jitter` correlates rapid cross-thread VFS and futex/memory access,
+then delays the flagged thread's next wake-up by 25–250 µs.
+
 ## Build
 
 ### Dependencies
 
 ```sh
-gcc musl-tools qemu-system xorriso nasm
+gcc binutils make nasm bison flex musl-tools qemu-system xorriso cpio
+dosfstools mtools e2fsprogs gawk libncurses-dev curl wget tar file git
 ```
 
 ### Quick start
 
 ```sh
-make clean && make all && make run
+make iso
+make run
 ```
 
-Without graphics:
+`make run` boots the live system and attaches a persistent 512 MiB disk. Log
+in as `root`/`root` and run `installer`. After installation, boot that disk
+directly with:
 
 ```sh
-make clean && make all && make run-serial
+make boot
 ```
+
+The installed system is stored in `dist/kyronix-disk.img`. `make clean` keeps
+this file.
 
 ### Make targets
 
 | Target | Description |
 |---------|-------------|
-| `all` | Build everything |
-| `iso` | Build ISO image |
-| `run` | Launch in QEMU |
-| `run-serial` | Launch with serial console |
-| `test-run` | Run tests |
-| `test-run-log` | Run tests with logging |
-| `user-build` | Build userspace |
-| `fmt` | Format source |
-| `fmt-check` | Check formatting |
-| `clean` | Remove build artifacts |
+| `make` / `make iso` | Build `dist/kyronix.iso` |
+| `make live` | Build a RELEASE image `dist/kyronix-<ver>-RELEASE-amd64-live.iso` (+ `.sha256`) |
+| `make run` | Build and boot the ISO with the persistent disk |
+| `make boot` | Boot the installed disk without the ISO |
+| `make test` | Build and run all tests in QEMU |
+| `make clean` | Remove build output, preserving the installed disk |
+
+To build in a container, append `CRUNTIME=podman` or `CRUNTIME=docker`.
 
 ## Project structure
 
@@ -112,6 +134,7 @@ make clean && make all && make run-serial
 | `kernel/` | Kernel source |
 | `user/` | Userspace |
 | `rootfs/` | Initramfs |
+| `boot/` | Limine boot configs & boot wallpaper |
 | `limine/` | Bootloader |
 | `meta/` | Assets & screenshots |
 

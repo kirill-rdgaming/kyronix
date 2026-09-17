@@ -57,7 +57,9 @@ void path_canon(const char *in, char *out, size_t sz) {
 void jail_canon_clamp(char *path, size_t sz, const char *root) {
     size_t rlen = strlen(root);
     if (rlen == 0) return; /* host: keep current behavior */
-    const char *sub = (strncmp(path, root, rlen) == 0) ? path + rlen : path;
+    bool under_root = strncmp(path, root, rlen) == 0 &&
+                      (path[rlen] == '\0' || path[rlen] == '/');
+    const char *sub = under_root ? path + rlen : path;
     char canon[512];
     path_canon(sub, canon, sizeof(canon));
     char tmp[768];
@@ -128,7 +130,17 @@ void jail_unref(uint32_t jid) {
     jail_t *j = jail_find(jid);
     if (!j) return;
     if (j->nprocs) j->nprocs--;
-    if (j->state == JAIL_DYING && j->nprocs == 0) j->state = JAIL_UNUSED;
+}
+
+void jail_retire(uint32_t jid) {
+    jail_t *j = jail_find(jid);
+    if (!j) return;
+    j->state = JAIL_DYING;
+}
+
+void jail_reap(uint32_t jid) {
+    jail_t *j = jail_find(jid);
+    if (j && j->state == JAIL_DYING && j->nprocs == 0) j->state = JAIL_UNUSED;
 }
 
 bool jail_can_fork(uint32_t jid) {

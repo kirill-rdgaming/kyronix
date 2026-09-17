@@ -269,7 +269,7 @@ static int ohci_control(usb_hc_t *hc, usb_device_t *dev, const usb_setup_pkt_t *
                ((uint32_t) mps << ED_MPS_SHIFT);
     ed->nexted = 0;
 
-    int ntds = len > 0 ? 2 : 2;
+    int ntds = 3;
     int first = ohci_alloc_td(o);
     if (first < 0) {
         ohci_free_ed(o, ed_idx);
@@ -292,7 +292,7 @@ static int ohci_control(usb_hc_t *hc, usb_device_t *dev, const usb_setup_pkt_t *
     ohci_td_t *td1 = &o->tds[(first + 1) % OHCI_NUM_TDS];
     uint32_t dp = (setup->bmRequestType & USB_REQTYPE_DIR_IN) ? TD_DP_IN : TD_DP_OUT;
     td1->info = (TD_CC_NOTACCESSED << TD_INFO_CC_SHIFT) | (dp << TD_INFO_DP_SHIFT) |
-                (2u << TD_INFO_T_SHIFT) | TD_INFO_R;
+                (1u << TD_INFO_T_SHIFT) | TD_INFO_R;
     if (len > 0) {
         td1->cbp = (uint32_t) virt_to_phys(buf);
         td1->be = td1->cbp + (uint32_t) len - 1;
@@ -301,8 +301,16 @@ static int ohci_control(usb_hc_t *hc, usb_device_t *dev, const usb_setup_pkt_t *
         td1->be = 0;
     }
 
+    ohci_td_t *td2 = &o->tds[(first + 2) % OHCI_NUM_TDS];
+    uint32_t status_dp = (setup->bmRequestType & USB_REQTYPE_DIR_IN) ? TD_DP_OUT : TD_DP_IN;
+    td2->info = (TD_CC_NOTACCESSED << TD_INFO_CC_SHIFT) | (status_dp << TD_INFO_DP_SHIFT) |
+                (1u << TD_INFO_T_SHIFT) | TD_INFO_R;
+    td2->cbp = 0;
+    td2->be = 0;
+
     td0->nexttd = o->tds_phys + (uint32_t) ((first + 1) % OHCI_NUM_TDS) * sizeof(ohci_td_t);
-    td1->nexttd = 0;
+    td1->nexttd = o->tds_phys + (uint32_t) ((first + 2) % OHCI_NUM_TDS) * sizeof(ohci_td_t);
+    td2->nexttd = 0;
 
     int r = ohci_submit_and_wait(o, ed_idx, first, ntds, OHCI_CONTROLHEADED, OHCI_CMD_CLF, actual);
     ohci_free_td_chain(o, first, ntds);
@@ -372,8 +380,8 @@ static int ohci_bulk_int(usb_hc_t *hc, usb_device_t *dev, uint8_t ep_addr, uint8
         tog ^= 1;
     }
 
-    uint32_t list_reg = is_int ? OHCI_PERIODCURRENTED : OHCI_BULKHEADED;
-    uint32_t cmd_bit = is_int ? 0 : OHCI_CMD_BLF;
+    uint32_t list_reg = OHCI_BULKHEADED;
+    uint32_t cmd_bit = OHCI_CMD_BLF;
     int r = ohci_submit_and_wait(o, ed_idx, first, ntds, list_reg, cmd_bit, actual);
     if (r == 0) *toggle = (uint8_t) tog;
     ohci_free_td_chain(o, first, ntds);

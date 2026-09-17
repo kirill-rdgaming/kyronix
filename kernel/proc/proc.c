@@ -6,6 +6,7 @@
 #include "mm/heap.h"
 #include "mm/pmm.h"
 #include "mm/vmm.h"
+#include "proc/jail.h"
 #include "proc/smp.h"
 #include "syscall/syscall.h"
 
@@ -42,8 +43,8 @@ proc_t *proc_alloc(uint32_t ppid) {
         proc_t *p = &g_proctable[i];
         memset(p, 0, sizeof(*p));
 
-        p->state = PROC_READY;
-        proc_set_ready(p);
+        p->state = PROC_EMBRYO;
+        proc_set_used(p);
         p->pid = (uint32_t) (i + 1);
         p->ppid = ppid;
         p->pgid = (uint32_t) (i + 1);
@@ -55,7 +56,7 @@ proc_t *proc_alloc(uint32_t ppid) {
         for (int pg = 0; pg < KSTACK_PAGES; pg++) {
             void *phys = pmm_alloc_zeroed();
             if (!phys) {
-                /* free already-mapped pages */
+                // free already-mapped pages
                 for (int j = 0; j < pg; j++) {
                     uint64_t va = guard_va + PAGE_SIZE + (uint64_t) j * PAGE_SIZE;
                     uint64_t pa = vmm_virt_to_phys(&g_kernel_space, va);
@@ -111,7 +112,7 @@ proc_t *proc_alloc(uint32_t ppid) {
         p->cwd[0] = '/';
         p->cwd[1] = '\0';
 
-        /* default x87 fpu + sse state: clean area, mask all exceptions */
+        // default x87 fpu + sse state: clean area, mask all exceptions
         memset(p->fpu_state, 0, sizeof(p->fpu_state));
         ((uint16_t *) p->fpu_state)[0] = 0x037F;        /* FCW */
         ((uint32_t *) (p->fpu_state + 24))[0] = 0x1F80; /* MXCSR */
@@ -125,13 +126,13 @@ proc_t *proc_alloc(uint32_t ppid) {
 
 void proc_reap_pending(void) {
     proc_t *p = g_reap_thread;
-    if (!p || p == g_current_proc) return; /* never free the stack we are running on */
+    if (!p || p == g_current_proc) return; // never free the stack we are running on
     g_reap_thread = NULL;
     proc_unref(p);
 }
 
 void proc_defer_thread_reap(proc_t *p) {
-    proc_reap_pending(); /* flush any previous one first (not on its stack) */
+    proc_reap_pending(); // flush any previous one first (not on its stack)
     g_reap_thread = p;
 }
 
@@ -150,7 +151,9 @@ void proc_kstack_free(proc_t *p) {
 proc_t *proc_find(uint32_t pid) {
     spin_lock(&g_proctable_lock);
     for (int i = 0; i < PROC_MAX; i++) {
-        if (g_proctable[i].state != PROC_UNUSED && g_proctable[i].pid == pid) {
+        if (g_proctable[i].state != PROC_UNUSED &&
+            g_proctable[i].state != PROC_EMBRYO &&
+            g_proctable[i].pid == pid) {
             proc_ref(&g_proctable[i]);
             spin_unlock(&g_proctable_lock);
             return &g_proctable[i];
@@ -163,10 +166,10 @@ proc_t *proc_find(uint32_t pid) {
 proc_t *proc_next_ready(proc_t *skip) {
     static uint32_t g_last_scheduled[MAX_CPUS] = { 0 };
     uint32_t cpu = this_cpu_id();
-    uint64_t ready = __atomic_load_n(&g_ready_mask, __ATOMIC_RELAXED);
+    uint64_t ready = __atomic_load_n(&g_ready_mask, __ATOMIC_ACQUIRE);
     int start = ((int) g_last_scheduled[cpu] + 1) % PROC_MAX;
 
-    /* Fast path: bitmap scan from start, wrap around */
+    // fast path: bitmap scan from start, wrap around
     uint64_t mask = ready >> start;
     while (mask) {
         int bit = __builtin_ctzll(mask) + start;
@@ -190,11 +193,20 @@ proc_t *proc_next_ready(proc_t *skip) {
 }
 
 proc_t *sched_claim_next(proc_t *skip) {
-    proc_t *next = proc_next_ready(skip);
-    if (!next) return NULL;
-    if (__sync_bool_compare_and_swap(&next->state, PROC_READY, PROC_RUNNING)) {
-        __atomic_fetch_and(&g_ready_mask, ~(1ULL << proc_slot(next)), __ATOMIC_RELAXED);
-        return next;
+    for (int tries = 0; tries < PROC_MAX; tries++) {
+        proc_t *next = proc_next_ready(skip);
+        if (!next) return NULL;
+        if (__sync_bool_compare_and_swap(&next->state, PROC_READY, PROC_RUNNING)) {
+            __atomic_fetch_and(&g_ready_mask, ~(1ULL << proc_slot(next)), __ATOMIC_RELAXED);
+            return next;
+        }
+        int st = __atomic_load_n(&next->state, __ATOMIC_ACQUIRE);
+        if (st != PROC_READY) {
+            if (st == PROC_RUNNING)
+                log_warn("SCHED: proc slot=%d pid=%d RUNNING while still in ready mask (double-sched)",
+                         proc_slot(next), next->pid);
+            __atomic_fetch_and(&g_ready_mask, ~(1ULL << proc_slot(next)), __ATOMIC_RELAXED);
+        }
     }
     return NULL;
 }
@@ -209,13 +221,19 @@ proc_t *proc_idle_until_ready(proc_t *skip) {
     }
 }
 
-void sched_yield_blocking(void) {
+void sched_block_current(void) {
     proc_t *p = g_current_proc;
+    proc_clear_ready(p);
+    // a waker may have published us after the caller changed state but before
+    // we reached the scheduler. consume that wake locally instead of clearing
+    // its ready bit and sleeping forever
+    if (__sync_bool_compare_and_swap(&p->state, PROC_READY, PROC_RUNNING)) {
+        proc_clear_ready(p);
+        log_debug("SCHED: pid=%d consumed lost-wakeup while blocking", p->pid);
+        return;
+    }
 
     for (;;) {
-        p->state = PROC_WAITING;
-        proc_clear_ready(p);
-
         proc_t *next = sched_claim_next(p);
         if (!next) {
             uint32_t cpu_id = this_cpu_id();
@@ -245,10 +263,37 @@ void sched_yield_blocking(void) {
         cli();
 
         if (p->state == PROC_READY) {
+            proc_clear_ready(p);
             p->state = PROC_RUNNING;
             return;
         }
     }
+}
+
+void sched_yield_blocking(void) {
+    g_current_proc->state = PROC_WAITING;
+    sched_block_current();
+}
+
+// non-blocking voluntary yield: requeue ourselves and run the next ready task
+void sched_yield(void) {
+    proc_t *p = g_current_proc;
+    if (!p) return;
+    uint64_t flags = irq_save();
+    proc_t *next = sched_claim_next(p);
+    if (next) {
+        p->state = PROC_READY;
+        proc_set_ready(p);
+        vfs_set_fdtable(next->fds);
+        g_current_space = next->space;
+        cpu_set_kernel_stack(next->kstack_top);
+        sched_switch(next);
+        p->state = PROC_RUNNING;
+        vfs_set_fdtable(p->fds);
+        g_current_space = p->space;
+        cpu_set_kernel_stack(p->kstack_top);
+    }
+    irq_restore(flags);
 }
 
 proc_t *proc_create_idle(uint32_t cpu_id, void (*entry)(void)) {
@@ -310,6 +355,28 @@ proc_t *proc_create_idle(uint32_t cpu_id, void (*entry)(void)) {
         return p;
     }
     return NULL;
+}
+
+proc_t *proc_create_kernel(const char *name, void (*entry)(void)) {
+    if (!entry) return NULL;
+    proc_t *p = proc_alloc(0);
+    if (!p) return NULL;
+
+    p->space = &g_kernel_space;
+    p->is_thread = 1;
+    p->jail_id = JAIL_HOST;
+    p->jail_exempt = 1;
+    if (name) strncpy(p->exe_path, name, sizeof(p->exe_path) - 1);
+
+    uint8_t *ksp = p->kstack + KSTACK_SIZE;
+    ksp -= 8;
+    *(uint64_t *) ksp = (uint64_t) (uintptr_t) entry;
+    ksp -= 6 * 8;
+    memset(ksp, 0, 6 * 8);
+    p->kstack_rsp = (uint64_t) ksp;
+
+    proc_publish_ready(p);
+    return p;
 }
 
 void proc_ptrace_stop(proc_t *p, int sig, int frame_kind, void *frame, uint64_t *rflags_slot) {

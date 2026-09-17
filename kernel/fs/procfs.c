@@ -3,18 +3,27 @@
 #include "arch/x86_64/percpu.h"
 #include "arch/x86_64/pit.h"
 #include "arch/x86_64/spinlock.h"
+#include "drivers/bus/pci/pci.h"
 #include "lib/log.h"
 #include "lib/printf.h"
 #include "lib/string.h"
 #include "mm/heap.h"
+#include "proc/loadavg.h"
+#include "proc/smp.h"
 #include "version.h"
 #ifdef CONFIG_KMEMLEAK
 #include "mm/kmemleak.h"
 #endif
+#ifdef CONFIG_PROFILER
+#include "prof/profiler.h"
+#endif
 #include "mm/pmm.h"
 #include "mm/vmm.h"
+#include "mm/vma.h"
+#include "module/loader.h"
 #include "proc/jail.h"
 #include "proc/proc.h"
+#include "syscall/fsops.h"
 #include "syscall/mount.h"
 #include "syscall/syscall.h"
 
@@ -23,6 +32,7 @@
 #define EPERM 1
 #define EFAULT 14
 #define ENOMEM 12
+#define EAGAIN 11
 
 static int64_t read_buf(char *out, uint64_t len, uint64_t off, const char *src, uint64_t sz) {
     if (off >= sz) return 0;
@@ -60,18 +70,10 @@ static char proc_state_char(proc_t *p) {
     }
 }
 
-static int proc_count(int state) {
+static int proc_count_system(int state) {
     int n = 0;
     for (int i = 0; i < PROC_MAX; i++)
-        if (g_proctable[i].state == state && jail_can_see(g_current_proc, &g_proctable[i])) n++;
-    return n;
-}
-
-static int proc_alive_count(void) {
-    int n = 0;
-    for (int i = 0; i < PROC_MAX; i++)
-        if (g_proctable[i].state != PROC_UNUSED && jail_can_see(g_current_proc, &g_proctable[i]))
-            n++;
+        if (g_proctable[i].state == state) n++;
     return n;
 }
 
@@ -88,6 +90,26 @@ static int64_t proc_version_read(vfs_node_t *n, char *buf, uint64_t len, uint64_
     (void) n;
     static const char ver[] = "Kyronix version " KERNEL_VERSION " (x86_64)\n";
     return read_buf(buf, len, off, ver, sizeof(ver) - 1);
+}
+
+static int64_t proc_pci_devices_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
+    (void) n;
+    char data[8192];
+    size_t used = 0;
+    for (int i = 0; i < g_pci_ndevs && used < sizeof(data); i++) {
+        pci_dev_t *d = &g_pci_devs[i];
+        int written = snprintf(data + used, sizeof(data) - used,
+                               "%02x:%02x.%x %04x:%04x class %02x:%02x prog-if %02x irq %u\n",
+                               d->bus, d->dev, d->fn, d->vendor, d->device,
+                               d->class, d->subclass, d->prog_if, d->irq_line);
+        if (written < 0) break;
+        if ((size_t)written >= sizeof(data) - used) {
+            used = sizeof(data);
+            break;
+        }
+        used += (size_t)written;
+    }
+    return read_buf(buf, len, off, data, used);
 }
 
 static int64_t proc_cpuinfo_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
@@ -109,7 +131,6 @@ static int64_t proc_cpuinfo_read(vfs_node_t *n, char *buf, uint64_t len, uint64_
     uint32_t family = (eax >> 8) & 0xf;
     uint32_t ext_model = (eax >> 16) & 0xf;
     uint32_t ext_family = (eax >> 20) & 0xff;
-    uint32_t apicid = (ebx >> 24) & 0xff;
     uint32_t feat_ecx = ecx;
     uint32_t feat_edx = edx;
 
@@ -186,25 +207,33 @@ static int64_t proc_cpuinfo_read(vfs_node_t *n, char *buf, uint64_t len, uint64_
 
     flags[fpos] = '\0';
 
-    char tmp[2048];
-    int sz = snprintf(tmp, sizeof(tmp),
-                      "processor\t: 0\n"
-                      "vendor_id\t: %s\n"
-                      "cpu family\t: %u\n"
-                      "model\t\t: %u\n"
-                      "model name\t: %s\n"
-                      "stepping\t: %u\n"
-                      "cpu MHz\t\t: 1000.000\n"
-                      "cache size\t: 0 KB\n"
-                      "physical id\t: 0\n"
-                      "siblings\t: 1\n"
-                      "core id\t\t: 0\n"
-                      "cpu cores\t: 1\n"
-                      "apicid\t\t: %u\n"
-                      "initial apicid\t: %u\n"
-                      "flags\t\t: %s\n"
-                      "\n",
-                      vendor, family, model, brand, stepping, apicid, apicid, flags);
+    char tmp[4096];
+    int sz = 0;
+    uint32_t ncpus = g_cpu_count;
+    if (ncpus > MAX_CPUS) ncpus = MAX_CPUS;
+    for (uint32_t i = 0; i < ncpus; i++) {
+        if (!g_cpu_local[i].online) continue;
+        sz += snprintf(tmp + sz, sizeof(tmp) - (uint64_t) sz,
+                       "processor\t: %u\n"
+                       "vendor_id\t: %s\n"
+                       "cpu family\t: %u\n"
+                       "model\t\t: %u\n"
+                       "model name\t: %s\n"
+                       "stepping\t: %u\n"
+                       "cpu MHz\t\t: 1000.000\n"
+                       "cache size\t: 0 KB\n"
+                       "physical id\t: 0\n"
+                       "siblings\t: %u\n"
+                       "core id\t\t: %u\n"
+                       "cpu cores\t: %u\n"
+                       "apicid\t\t: %u\n"
+                       "initial apicid\t: %u\n"
+                       "flags\t\t: %s\n"
+                       "\n",
+                       i, vendor, family, model, brand, stepping, ncpus, i, ncpus,
+                       g_cpu_local[i].lapic_id, g_cpu_local[i].lapic_id, flags);
+        if (sz >= (int) sizeof(tmp) - 512) break;
+    }
     return read_buf(buf, len, off, tmp, (uint64_t) sz);
 }
 
@@ -272,36 +301,47 @@ static int64_t proc_uptime_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t
 static int64_t proc_loadavg_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
     (void) n;
     char tmp[96];
-    int runnable = proc_count(PROC_READY) + proc_count(PROC_RUNNING);
-    int alive = proc_alive_count();
+    int runnable = proc_count_system(PROC_READY) + proc_count_system(PROC_RUNNING);
+    int alive = 0;
+    for (int i = 0; i < PROC_MAX; i++)
+        if (g_proctable[i].state != PROC_UNUSED && g_proctable[i].state != PROC_EMBRYO) alive++;
+    uint64_t l1 = avenrun[0] >> LOAD_SHIFT;
+    uint64_t l1f = ((avenrun[0] & (LOAD_FIXED - 1)) * 100) >> LOAD_SHIFT;
+    uint64_t l5 = avenrun[1] >> LOAD_SHIFT;
+    uint64_t l5f = ((avenrun[1] & (LOAD_FIXED - 1)) * 100) >> LOAD_SHIFT;
+    uint64_t l15 = avenrun[2] >> LOAD_SHIFT;
+    uint64_t l15f = ((avenrun[2] & (LOAD_FIXED - 1)) * 100) >> LOAD_SHIFT;
     int sz =
-        snprintf(tmp, sizeof(tmp), "0.00 0.00 0.00 %d/%d %d\n", runnable, alive, proc_last_pid());
+        snprintf(tmp, sizeof(tmp), "%lu.%02lu %lu.%02lu %lu.%02lu %d/%d %d\n",
+                 l1, l1f, l5, l5f, l15, l15f, runnable, alive, proc_last_pid());
     return read_buf(buf, len, off, tmp, (uint64_t) sz);
 }
 
 static int64_t proc_stat_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
     (void)n;
     uint64_t ticks = g_ticks / 10;
-    char tmp[512];
-    static uint64_t intr_count;
-    static uint64_t ctx_count;
-    intr_count++;
-    ctx_count += 2;
-    int sz =
-        snprintf(tmp, sizeof(tmp),
-                 "cpu  %lu 0 %lu %lu 0 0 0 0 0 0\n"
-                 "cpu0 %lu 0 %lu %lu 0 0 0 0 0 0\n"
-                 "intr %lu\n"
-                 "ctxt %lu\n"
-                 "btime %lu\n"
-                 "processes %d\n"
-                 "procs_running %d\n"
-                 "procs_blocked %d\n",
-                 ticks, ticks / 4, ticks, ticks, ticks / 4, ticks,
-                 intr_count, ctx_count,
-                 g_epoch_base, proc_last_pid(),
-                 proc_count(PROC_READY) + proc_count(PROC_RUNNING), proc_count(PROC_WAITING));
-    return read_buf(buf, len, off, tmp, (uint64_t)sz);
+    char tmp[2048];
+    int sz = 0;
+    uint32_t ncpus = g_cpu_count;
+    if (ncpus > MAX_CPUS) ncpus = MAX_CPUS;
+
+    sz += snprintf(tmp + sz, sizeof(tmp) - (uint64_t) sz,
+                   "cpu  %lu 0 %lu %lu 0 0 0 0 0 0\n", ticks, ticks / 4, ticks);
+    for (uint32_t i = 0; i < ncpus; i++) {
+        sz += snprintf(tmp + sz, sizeof(tmp) - (uint64_t) sz,
+                       "cpu%u %lu 0 %lu %lu 0 0 0 0 0 0\n", i, ticks, ticks / 4, ticks);
+    }
+    sz += snprintf(tmp + sz, sizeof(tmp) - (uint64_t) sz,
+                   "intr 0\n"
+                   "ctxt 0\n"
+                   "btime %lu\n"
+                   "processes %d\n"
+                   "procs_running %d\n"
+                   "procs_blocked %d\n",
+                   g_epoch_base, proc_last_pid(),
+                   proc_count_system(PROC_READY) + proc_count_system(PROC_RUNNING),
+                   proc_count_system(PROC_WAITING));
+   return read_buf(buf, len, off, tmp, (uint64_t) sz);
 }
 
 static int64_t proc_mounts_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
@@ -316,8 +356,8 @@ static int64_t proc_mounts_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t
     int mc = mount_count();
     for (int i = 0; i < mc && sz < (int) sizeof(tmp) - 128; i++) {
         if (!mt[i].used) continue;
-        sz += snprintf(tmp + sz, sizeof(tmp) - (uint64_t) sz, "%s %s %s rw 0 0\n",
-                       mt[i].source, mt[i].target, mt[i].fstype);
+        sz += snprintf(tmp + sz, sizeof(tmp) - (uint64_t) sz, "%s %s %s rw 0 0\n", mt[i].source,
+                       mt[i].target, mt[i].fstype);
     }
     return read_buf(buf, len, off, tmp, (uint64_t) sz);
 }
@@ -411,22 +451,35 @@ static int64_t proc_osrelease_read(vfs_node_t *n, char *buf, uint64_t len, uint6
 
 static int64_t proc_hostname_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
     (void) n;
-    static const char s[] = "kx\n";
-    return read_buf(buf, len, off, s, sizeof(s) - 1);
+    char hostname[66];
+    uint64_t size = system_hostname_copy(hostname, sizeof(hostname) - 1);
+    hostname[size++] = '\n';
+    hostname[size] = '\0';
+    return read_buf(buf, len, off, hostname, size);
+}
+
+static proc_t *node_to_proc(vfs_node_t *n) {
+    if (n->fs_private) {
+        uint32_t pid = (uint32_t)(uintptr_t) n->fs_private;
+        return proc_find(pid);
+    }
+    return g_current_proc;
 }
 
 static int64_t proc_self_exe_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
-    (void) n;
-    proc_t *p = g_current_proc;
-    if (!p || !p->exe_path[0]) return 0;
-    return read_buf(buf, len, off, p->exe_path, strlen(p->exe_path));
+    proc_t *p = node_to_proc(n);
+    if (!p || !p->exe_path[0]) { if (p && n->fs_private) proc_unref(p); return 0; }
+    int64_t r = read_buf(buf, len, off, p->exe_path, strlen(p->exe_path));
+    if (n->fs_private) proc_unref(p);
+    return r;
 }
 
 static int64_t proc_self_cmdline_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
-    (void) n;
-    proc_t *p = g_current_proc;
-    if (!p || !p->exe_path[0]) return 0;
-    return read_buf(buf, len, off, p->exe_path, strlen(p->exe_path) + 1);
+    proc_t *p = node_to_proc(n);
+    if (!p || !p->exe_path[0]) { if (p && n->fs_private) proc_unref(p); return 0; }
+    int64_t r = read_buf(buf, len, off, p->exe_path, strlen(p->exe_path) + 1);
+    if (n->fs_private) proc_unref(p);
+    return r;
 }
 
 static int64_t proc_self_environ_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
@@ -447,8 +500,7 @@ static int64_t proc_self_environ_read(vfs_node_t *n, char *buf, uint64_t len, ui
 }
 
 static int64_t proc_self_status_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
-    (void) n;
-    proc_t *p = g_current_proc;
+    proc_t *p = node_to_proc(n);
     if (!p) return 0;
     char tmp[1024];
     int threads = 0;
@@ -467,70 +519,141 @@ static int64_t proc_self_status_read(vfs_node_t *n, char *buf, uint64_t len, uin
         "Threads:\t%d\n"
         "SigPnd:\t%016lx\n"
         "SigBlk:\t%016lx\n"
+        "Syscall:\t%lu\n"
         "VmPeak:\t0 kB\n"
         "VmSize:\t0 kB\n"
         "VmRSS:\t%lu kB\n"
         "VmLeak:\t%ld kB\n",
         proc_name(p), proc_state_char(p), p->pid, p->pid, p->ppid, p->uid, p->euid, p->suid,
         p->fsuid, p->gid, p->egid, p->sgid, p->fsgid, VFS_FD_MAX, threads ? threads : 1,
-        p->pending_sigs, p->sig_mask, (unsigned long) ((p->pages_alloc * PAGE_SIZE) / 1024),
+        p->pending_sigs, p->sig_mask, (unsigned long) p->ptrace_orig_rax,
+        (unsigned long) ((p->pages_alloc * PAGE_SIZE) / 1024),
         (long) ((int64_t) (p->pages_alloc - p->pages_freed) * (int64_t) (PAGE_SIZE / 1024)));
+    if (n->fs_private) proc_unref(p);
     return read_buf(buf, len, off, tmp, (uint64_t) sz);
 }
 
 static int64_t proc_self_stat_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
-    (void) n;
-    proc_t *p = g_current_proc;
+    proc_t *p = node_to_proc(n);
     if (!p) return 0;
     char tmp[512];
     int sz = snprintf(tmp, sizeof(tmp),
-                      "%u (%s) %c %u %d 0 0 0 0 0 0 0 0 0 0 0 20 0 1 0 %lu 0 0 0 0 0 0 0 0 0 0 0 0 "
+                      "%u (%s) %c %u %d 0 0 0 0 0 0 0 0 0 0 0 0 20 0 1 0 %lu 0 0 0 0 0 0 0 0 0 0 0 0 "
                       "0 0 0 0 0 0 0\n",
                       p->pid, proc_name(p), proc_state_char(p), p->ppid, p->pgid, g_ticks / 10);
+    if (n->fs_private) proc_unref(p);
+    return read_buf(buf, len, off, tmp, (uint64_t) sz);
+}
+
+static int64_t proc_self_statm_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
+    proc_t *p = node_to_proc(n);
+    if (!p) return 0;
+    char tmp[64];
+    uint64_t pages = p->pages_alloc > p->pages_freed ? p->pages_alloc - p->pages_freed : 0;
+    int sz = snprintf(tmp, sizeof(tmp), "%lu %lu 0 0 0 0 0\n",
+                      (unsigned long) pages, (unsigned long) pages);
+    if (n->fs_private) proc_unref(p);
     return read_buf(buf, len, off, tmp, (uint64_t) sz);
 }
 
 static int64_t proc_self_maps_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
-    (void)n;
-    proc_t *p = g_current_proc;
-    if (!p) return 0;
-    char tmp[4096];
-    int pos = 0;
-    int limit = (int)(sizeof(tmp) - 128);
-    const char *exe = p->exe_path[0] ? p->exe_path : "[anon]";
-    for (uint32_t i = 0; i < VMM_VMA_MAX; i++) {
-        if (!p->space || !p->space->vmas[i].used) continue;
-        vmm_vma_t *vma = &p->space->vmas[i];
-        const char *prot_str = "---";
-        switch (vma->prot & 0x7) {
-        case 0x7: prot_str = "rwx"; break;
-        case 0x5: prot_str = "r-x"; break;
-        case 0x3: prot_str = "rw-"; break;
-        case 0x1: prot_str = "r--"; break;
-        case 0x6: prot_str = "-wx"; break;
-        case 0x2: prot_str = "-w-"; break;
-        case 0x4: prot_str = "--x"; break;
+    if (!len) return 0;
+    proc_t *self = g_current_proc;
+    if (!self) return -(int64_t) EPERM;
+    vmm_vma_t *maps = kmalloc(sizeof(vmm_vma_t) * VMM_VMA_MAX);
+    if (!maps) return -(int64_t) ENOMEM;
+
+    uint64_t flags = irq_save();
+    spin_lock(&g_proctable_lock);
+    proc_t *p = self;
+    if (n->fs_private) {
+        p = NULL;
+        uint32_t pid = (uint32_t) (uintptr_t) n->fs_private;
+        for (int i = 0; i < PROC_MAX; i++) {
+            proc_t *candidate = &g_proctable[i];
+            if (candidate->pid == pid && candidate->state != PROC_UNUSED &&
+                candidate->state != PROC_EMBRYO && candidate->state != PROC_DYING) {
+                p = candidate;
+                break;
+            }
         }
-        char priv = (vma->prot & 0x1) ? 'p' : 's';
-        const char *path = exe;
-        if (vma->map_flags & 0x20) path = "[heap]";
-        else if (vma->map_flags & 0x2000) path = "[stack]";
-        else if (vma->map_flags & 0x20000) path = "[vdso]";
-        else if (vma->map_flags & 0x40000) path = "[vvar]";
-        int n = snprintf(tmp + pos, (uint64_t)(limit - pos),
-                         "%016lx-%016lx %s%c 00000000 00:00 0 %s\n",
-                         vma->start, vma->end, prot_str, priv, path);
-        if (n < 0 || pos + n >= limit) break;
-        pos += n;
     }
-    return read_buf(buf, len, off, tmp, (uint64_t)pos);
+    int64_t error = 0;
+    vmm_space_t *space = NULL;
+    if (!p || !jail_can_see(self, p)) {
+        error = -(int64_t) ENOENT;
+    } else if (p != self && !jail_host_priv(self) &&
+               (self->fsuid != p->uid || self->fsuid != p->euid ||
+                self->fsuid != p->suid || self->fsgid != p->gid ||
+                self->fsgid != p->egid || self->fsgid != p->sgid)) {
+        error = -(int64_t) EPERM;
+    } else if (p->space && p->space != &g_kernel_space) {
+        space = p->space;
+        vmm_space_retain(space);
+    }
+    spin_unlock(&g_proctable_lock);
+    irq_restore(flags);
+    if (!space) {
+        kfree(maps);
+        return error;
+    }
+    if (!vmm_space_mutation_begin(space)) {
+        vmm_space_free(space);
+        kfree(maps);
+        return -(int64_t) EAGAIN;
+    }
+    memcpy(maps, space->vmas, sizeof(space->vmas));
+    vmm_space_mutation_end(space);
+    vmm_space_free(space);
+
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < VMM_VMA_MAX; i++) {
+        if (!maps[i].used || maps[i].end <= maps[i].start) continue;
+        vmm_vma_t entry = maps[i];
+        uint32_t j = count;
+        while (j && maps[j - 1].start > entry.start) {
+            maps[j] = maps[j - 1];
+            j--;
+        }
+        maps[j] = entry;
+        count++;
+    }
+
+    char tmp[4096];
+    uint64_t used = 0;
+    uint64_t capacity = len < sizeof(tmp) ? len : sizeof(tmp);
+    for (uint32_t i = 0; i < count && used < capacity; i++) {
+        vmm_vma_t *vma = &maps[i];
+        char line[96];
+        int size = snprintf(line, sizeof(line),
+                            "%016lx-%016lx %c%c%c%c 00000000 00:00 0\n",
+                            (unsigned long) vma->start, (unsigned long) vma->end,
+                            (vma->prot & PROT_READ) ? 'r' : '-',
+                            (vma->prot & PROT_WRITE) ? 'w' : '-',
+                            (vma->prot & PROT_EXEC) ? 'x' : '-',
+                            (vma->map_flags & VMA_MAP_SHARED) ? 's' : 'p');
+        if (size < 0 || (uint64_t) size >= sizeof(line)) {
+            kfree(maps);
+            return -(int64_t) EINVAL;
+        }
+        if (off >= (uint64_t) size) {
+            off -= (uint64_t) size;
+            continue;
+        }
+        uint64_t take = (uint64_t) size - off;
+        if (take > capacity - used) take = capacity - used;
+        memcpy(tmp + used, line + off, take);
+        used += take;
+        off = 0;
+    }
+    kfree(maps);
+    return read_buf(buf, len, 0, tmp, used);
 }
 
 static int64_t proc_self_pagemap_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
-    (void) n;
-    proc_t *p = g_current_proc;
-    if (p && p->euid != 0) return -(int64_t) EPERM;
-    if (!p || !p->space || len < 8) return 0;
+    proc_t *p = node_to_proc(n);
+    if (p && p->euid != 0) { if (n->fs_private) proc_unref(p); return -(int64_t) EPERM; }
+    if (!p || !p->space || len < 8) { if (p && n->fs_private) proc_unref(p); return 0; }
     uint64_t nentries = len / 8;
     uint64_t written = 0;
     for (uint64_t i = 0; i < nentries; i++) {
@@ -540,6 +663,7 @@ static int64_t proc_self_pagemap_read(vfs_node_t *n, char *buf, uint64_t len, ui
         memcpy(buf + i * 8, &entry, 8);
         written += 8;
     }
+    if (n->fs_private) proc_unref(p);
     return (int64_t) written;
 }
 
@@ -566,6 +690,54 @@ static bool emit_dirent(uint8_t *out, uint64_t count, uint64_t *done, uint64_t i
 bool procfs_getdents64(vfs_node_t *dir, uint64_t *pos, void *buf, uint64_t count, int *out) {
     char path[512];
     vfs_node_abspath(dir, path, sizeof(path));
+
+    if (strcmp(path, "/proc") == 0) {
+        uint8_t *dst = (uint8_t *) buf;
+        uint64_t done = 0;
+        uint64_t emitted = 0;
+        uint64_t idx = 0;
+        uint64_t skip = *pos;
+
+        if (idx++ >= skip && emit_dirent(dst, count, &done, dir->ino, (int64_t) idx, DT_DIR, "."))
+            emitted++;
+        if (idx++ >= skip && emit_dirent(dst, count, &done, dir->parent ? dir->parent->ino : dir->ino,
+                                         (int64_t) idx, DT_DIR, ".."))
+            emitted++;
+
+        for (vfs_node_t *c = dir->children; c; c = c->next) {
+            const char *n = c->name;
+            bool is_numeric = *n != 0;
+            for (; *n; n++)
+                if (*n < '0' || *n > '9') { is_numeric = false; break; }
+
+            if (is_numeric) continue;
+            if (idx++ < skip) continue;
+            uint8_t t = (c->type == VFS_TYPE_DIR) ? DT_DIR :
+                        (c->type == VFS_TYPE_CHR) ? DT_CHR :
+                        (c->type == VFS_TYPE_SYM) ? DT_LNK : DT_REG;
+            if (!emit_dirent(dst, count, &done, c->ino, (int64_t) idx, t, c->name)) break;
+            emitted++;
+        }
+
+        for (int i = 0; i < PROC_MAX; i++) {
+            proc_t *p = &g_proctable[i];
+            int st = __atomic_load_n(&p->state, __ATOMIC_RELAXED);
+            if (st == PROC_UNUSED || st == PROC_EMBRYO) continue;
+            if (p->pid == 0) continue; /* idle CPUs are not /proc processes */
+            if (!jail_can_see(g_current_proc, p)) continue;
+            char name[16];
+            snprintf(name, sizeof(name), "%u", p->pid);
+            if (idx++ < skip) continue;
+            if (!emit_dirent(dst, count, &done, 1000000u + p->pid, (int64_t) idx, DT_DIR, name))
+                break;
+            emitted++;
+        }
+
+        *pos += emitted;
+        *out = (int) done;
+        return true;
+    }
+
     if (strcmp(path, "/proc/self/fd") != 0 && strcmp(path, "/dev/fd") != 0) return false;
 
     uint8_t *dst = (uint8_t *) buf;
@@ -608,7 +780,7 @@ static int parse_fd_link(const char *path) {
     int fd = 0;
     while (*s) {
         if (*s < '0' || *s > '9') return -1;
-        if (fd >= 102400) /* prevent overflow - max fd is 1024 */
+        if (fd >= 102400) // prevent overflow - max fd is 1024
             return -1;
         fd = fd * 10 + (*s - '0');
         s++;
@@ -635,6 +807,28 @@ bool procfs_readlink(const char *path, char *buf, uint64_t bufsz, int *out) {
         return true;
     }
 
+    if (strncmp(path, "/proc/", 6) == 0 && strcmp(path + strlen(path) - 4, "/exe") == 0) {
+        const char *start = path + 6;
+        const char *end = path + strlen(path) - 4;
+        uint32_t pid = 0;
+        bool valid = start < end;
+        for (const char *c = start; c < end && valid; c++) {
+            if (*c < '0' || *c > '9') { valid = false; break; }
+            pid = pid * 10 + (uint32_t) (*c - '0');
+        }
+        if (valid && pid > 0) {
+            proc_t *p = proc_find(pid);
+            if (!p) { *out = -(int) ENOENT; return true; }
+            if (!p->exe_path[0]) { proc_unref(p); *out = -(int) ENOENT; return true; }
+            uint64_t n = strlen(p->exe_path);
+            if (n > bufsz) n = bufsz;
+            memcpy(buf, p->exe_path, n);
+            *out = (int) n;
+            proc_unref(p);
+            return true;
+        }
+    }
+
     int fd = parse_fd_link(path);
     if (fd < 0) return false;
     vfs_file_t *f = fd_get_file(fd);
@@ -657,6 +851,63 @@ bool procfs_readlink(const char *path, char *buf, uint64_t bufsz, int *out) {
     if (n > bufsz) n = bufsz;
     memcpy(buf, tmp, n);
     *out = (int) n;
+    return true;
+}
+
+bool procfs_try_pid_dir(vfs_node_t *parent, const char *name) {
+    if (!parent || !name || !*name) return false;
+
+    // name must be purely numeric
+    for (const char *c = name; *c; c++)
+        if (*c < '0' || *c > '9') return false;
+
+    uint32_t pid = 0;
+    for (const char *c = name; *c; c++)
+        pid = pid * 10 + (uint32_t) (*c - '0');
+
+    proc_t *p = proc_find(pid);
+    if (!p) return false;
+    proc_unref(p);
+
+    // create /proc/<N>/ directory
+    char dir_path[128];
+    snprintf(dir_path, sizeof(dir_path), "/proc/%s", name);
+    vfs_node_t *dir = vfs_mkdir_p(dir_path, 0555);
+    if (!dir) return false;
+
+    // create stat, status, cmdline, exe inside the directory
+    void *pid_tag = (void *) (uintptr_t) pid;
+
+    char stat_path[160];
+    snprintf(stat_path, sizeof(stat_path), "%s/stat", dir_path);
+    vfs_node_t *stat = vfs_create_chr(stat_path, proc_self_stat_read, NULL);
+    if (stat) stat->fs_private = pid_tag;
+
+    char statm_path[160];
+    snprintf(statm_path, sizeof(statm_path), "%s/statm", dir_path);
+    vfs_node_t *statm = vfs_create_chr(statm_path, proc_self_statm_read, NULL);
+    if (statm) statm->fs_private = pid_tag;
+
+    char status_path[160];
+    snprintf(status_path, sizeof(status_path), "%s/status", dir_path);
+    vfs_node_t *status = vfs_create_chr(status_path, proc_self_status_read, NULL);
+    if (status) status->fs_private = pid_tag;
+
+    char cmdline_path[160];
+    snprintf(cmdline_path, sizeof(cmdline_path), "%s/cmdline", dir_path);
+    vfs_node_t *cmdline = vfs_create_chr(cmdline_path, proc_self_cmdline_read, NULL);
+    if (cmdline) cmdline->fs_private = pid_tag;
+
+    char exe_path[160];
+    snprintf(exe_path, sizeof(exe_path), "%s/exe", dir_path);
+    vfs_node_t *exe = vfs_create_chr(exe_path, proc_self_exe_read, NULL);
+    if (exe) exe->fs_private = pid_tag;
+
+    char maps_path[160];
+    snprintf(maps_path, sizeof(maps_path), "%s/maps", dir_path);
+    vfs_node_t *maps = vfs_create_chr(maps_path, proc_self_maps_read, NULL);
+    if (maps) maps->fs_private = pid_tag;
+
     return true;
 }
 
@@ -691,6 +942,53 @@ static int64_t proc_kmemleak_read(vfs_node_t *n, char *buf, uint64_t len, uint64
     }
     if (!kmem_buf) return 0;
     return read_buf(buf, len, off, kmem_buf, strlen(kmem_buf));
+}
+#endif
+
+#ifdef CONFIG_PROFILER
+static int64_t proc_profile_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
+    (void) n;
+    static char *prof_buf = NULL;
+    static uint64_t prof_sz = 0;
+
+    if (off == 0) {
+        uint64_t sz = 16384;
+        for (;;) {
+            char *nb = krealloc(prof_buf, sz);
+            if (!nb) {
+                kfree(prof_buf);
+                prof_buf = NULL;
+                prof_sz = 0;
+                return -(int64_t) ENOMEM;
+            }
+            prof_buf = nb;
+            prof_sz = sz;
+            int written = prof_render(prof_buf, prof_sz);
+            if (written < (int) sz - 128) break;
+            if (sz >= 262144) break;
+            sz *= 2;
+        }
+    }
+    if (!prof_buf) return 0;
+    return read_buf(buf, len, off, prof_buf, strlen(prof_buf));
+}
+
+static int64_t proc_profile_write(vfs_node_t *n, const char *buf, uint64_t len, uint64_t pos) {
+    (void) n;
+    (void) pos;
+    if (g_current_proc && g_current_proc->euid != 0) return -(int64_t) EPERM;
+    if (!len || !uptr_ok(buf, 1)) return -(int64_t) EFAULT;
+
+    if (len >= 5 && memcmp(buf, "start", 5) == 0) {
+        prof_start();
+    } else if (len >= 4 && memcmp(buf, "stop", 4) == 0) {
+        prof_stop();
+    } else if (len >= 5 && memcmp(buf, "reset", 5) == 0) {
+        prof_reset();
+    } else {
+        return -(int64_t) EINVAL;
+    }
+    return (int64_t) len;
 }
 #endif
 
@@ -730,6 +1028,25 @@ static int64_t proc_loglevel_write(vfs_node_t *n, const char *buf, uint64_t len,
     return -(int64_t) EINVAL;
 }
 
+static int64_t sysfs_cpu_range_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
+    (void) n;
+    char tmp[64];
+    uint32_t ncpus = g_cpu_count;
+    if (ncpus > MAX_CPUS) ncpus = MAX_CPUS;
+    int sz;
+    if (ncpus <= 1)
+        sz = snprintf(tmp, sizeof(tmp), "0\n");
+    else
+        sz = snprintf(tmp, sizeof(tmp), "0-%u\n", ncpus - 1);
+    return read_buf(buf, len, off, tmp, (uint64_t) sz);
+}
+
+static int64_t sysfs_cpu_online_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
+    (void) n;
+    static const char on[] = "1\n";
+    return read_buf(buf, len, off, on, sizeof(on) - 1);
+}
+
 void procfs_init(void) {
     vfs_mkdir_p("/proc", 0555);
     vfs_mkdir_p("/proc/self", 0555);
@@ -739,6 +1056,7 @@ void procfs_init(void) {
     vfs_mkdir_p("/proc/sys/kernel", 0555);
 
     vfs_create_chr("/proc/version", proc_version_read, NULL);
+    vfs_create_chr("/proc/bus/pci/devices", proc_pci_devices_read, NULL);
     {
         vfs_node_t *km = vfs_create_chr("/proc/kmsg", proc_kmsg_read, NULL);
         if (km) km->mode = S_IFCHR | 0400;
@@ -754,6 +1072,7 @@ void procfs_init(void) {
     vfs_create_symlink("/proc/self/mounts", "/proc/mounts");
     vfs_create_chr("/proc/filesystems", proc_filesystems_read, NULL);
     vfs_create_chr("/proc/devices", proc_devices_read, NULL);
+    vfs_create_chr("/proc/modules", module_proc_read, NULL);
     vfs_create_chr("/proc/sys/kernel/ostype", proc_ostype_read, NULL);
     vfs_create_chr("/proc/sys/kernel/osrelease", proc_osrelease_read, NULL);
     vfs_create_chr("/proc/sys/kernel/hostname", proc_hostname_read, NULL);
@@ -772,8 +1091,29 @@ void procfs_init(void) {
     vfs_node_t *ll = vfs_create_chr("/proc/loglevel", proc_loglevel_read, proc_loglevel_write);
     if (ll) ll->mode = S_IFCHR | 0644;
 
+    vfs_mkdir_p("/sys/devices/system/cpu", 0555);
+    vfs_create_chr("/sys/devices/system/cpu/possible", sysfs_cpu_range_read, NULL);
+    vfs_create_chr("/sys/devices/system/cpu/present", sysfs_cpu_range_read, NULL);
+    vfs_create_chr("/sys/devices/system/cpu/online", sysfs_cpu_range_read, NULL);
+
+    uint32_t ncpus = g_cpu_count;
+    if (ncpus > MAX_CPUS) ncpus = MAX_CPUS;
+    for (uint32_t i = 0; i < ncpus; i++) {
+        char cpudir[64];
+        snprintf(cpudir, sizeof(cpudir), "/sys/devices/system/cpu/cpu%u", i);
+        vfs_mkdir_p(cpudir, 0555);
+        char cpuonline[80];
+        snprintf(cpuonline, sizeof(cpuonline), "%s/online", cpudir);
+        vfs_create_chr(cpuonline, sysfs_cpu_online_read, NULL);
+    }
+
 #ifdef CONFIG_KMEMLEAK
     vfs_node_t *kml = vfs_create_chr("/proc/kmemleak", proc_kmemleak_read, NULL);
     if (kml) kml->mode = S_IFCHR | 0400;
+#endif
+
+#ifdef CONFIG_PROFILER
+    vfs_node_t *pf = vfs_create_chr("/proc/profile", proc_profile_read, proc_profile_write);
+    if (pf) pf->mode = S_IFCHR | 0644;
 #endif
 }

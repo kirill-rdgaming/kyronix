@@ -556,7 +556,7 @@ int test_statfs(void) {
 REGISTER_TEST(statfs, "Phase 2: File System");
 
 int test_openat_mkdirat(void) {
-    char path[PATH_MAX];
+    char path[PATH_MAX], nested[PATH_MAX];
 
     /* openat with AT_FDCWD + absolute path */
     tmpfile_path(path, sizeof(path), "openat_file");
@@ -569,6 +569,19 @@ int test_openat_mkdirat(void) {
     ASSERT_EQ(0, fstatat(AT_FDCWD, path, &st, 0));
     ASSERT_TRUE(S_ISREG(st.st_mode));
     unlink(path);
+
+    /* Relative paths must resolve from dirfd, not from the process cwd. */
+    int dirfd = open(tmpdir, O_RDONLY | O_DIRECTORY);
+    ASSERT_GE(dirfd, 0);
+    fd = openat(dirfd, "openat_relative", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    ASSERT_GE(fd, 0);
+    ASSERT_EQ(4, write(fd, "data", 4));
+    close(fd);
+    close(dirfd);
+    snprintf(nested, sizeof(nested), "%s/openat_relative", tmpdir);
+    ASSERT_EQ(0, stat(nested, &st));
+    ASSERT_EQ(4, st.st_size);
+    unlink(nested);
 
     return 1;
 }
@@ -713,6 +726,58 @@ int test_pread_pwrite(void) {
 }
 REGISTER_TEST(pread_pwrite, "Phase 2: File System");
 
+int test_positional_io_validation(void) {
+    char path[PATH_MAX], buf[8] = {};
+    tmpfile_path(path, sizeof(path), "positional_validation");
+    ASSERT_TRUE(write_file(path, "data"));
+
+    int fd = open(path, O_RDONLY);
+    ASSERT_GE(fd, 0);
+    errno = 0;
+    ASSERT_EQ(-1, pwrite(fd, "x", 1, 0));
+    ASSERT_ERRNO(EBADF);
+    close(fd);
+
+    fd = open(path, O_WRONLY);
+    ASSERT_GE(fd, 0);
+    errno = 0;
+    ASSERT_EQ(-1, pread(fd, buf, 1, 0));
+    ASSERT_ERRNO(EBADF);
+    close(fd);
+
+    fd = open(path, O_RDWR);
+    ASSERT_GE(fd, 0);
+    errno = 0;
+    ASSERT_EQ(-1, pwrite(fd, "x", 1, (off_t) -1));
+    ASSERT_ERRNO(EINVAL);
+    close(fd);
+
+    ASSERT_EQ(4, read_file(path, buf, sizeof(buf)));
+    ASSERT_STREQ("data", buf);
+    unlink(path);
+    return 1;
+}
+REGISTER_TEST(positional_io_validation, "Phase 2: File System");
+
+int test_at_syscall_numbers(void) {
+    char path[PATH_MAX], buf[16];
+    tmpfile_path(path, sizeof(path), "at_syscalls");
+    ASSERT_TRUE(write_file(path, "unchanged"));
+
+    ASSERT_EQ(0, fchownat(AT_FDCWD, path, 123, 456, 0));
+    struct stat st;
+    ASSERT_EQ(0, stat(path, &st));
+    ASSERT_EQ(123, st.st_uid);
+    ASSERT_EQ(456, st.st_gid);
+
+    ASSERT_EQ(0, utimensat(AT_FDCWD, path, NULL, 0));
+    ASSERT_EQ(9, read_file(path, buf, sizeof(buf)));
+    ASSERT_STREQ("unchanged", buf);
+    unlink(path);
+    return 1;
+}
+REGISTER_TEST(at_syscall_numbers, "Phase 2: File System");
+
 int test_readv_writev(void) {
     char path[PATH_MAX];
     tmpfile_path(path, sizeof(path), "rv_test");
@@ -792,6 +857,50 @@ int test_memfd_create(void) {
     return 1;
 }
 REGISTER_TEST(memfd_create, "Phase 2: File System");
+
+/* wayland's os_create_anonymous_file() seals the memfd and gives up if it can't */
+int test_memfd_seals(void) {
+    int fd = memfd_create("seal_mem", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    if (fd < 0 && errno == ENOSYS) return 1;
+    ASSERT_GE(fd, 0);
+    ASSERT_EQ(0, ftruncate(fd, 4096));
+    ASSERT_EQ(0, fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK));
+    int seals = fcntl(fd, F_GET_SEALS);
+    ASSERT_TRUE(seals >= 0);
+    ASSERT_TRUE((seals & F_SEAL_SHRINK) != 0);
+    /* shrinking is refused once sealed, growing still works */
+    ASSERT_TRUE(ftruncate(fd, 2048) != 0);
+    ASSERT_EQ(0, ftruncate(fd, 8192));
+    struct stat st;
+    ASSERT_EQ(0, fstat(fd, &st));
+    ASSERT_EQ((off_t) 8192, st.st_size);
+    close(fd);
+    return 1;
+}
+REGISTER_TEST(memfd_seals, "Phase 2: File System");
+
+/* display servers check st_rdev before taking over a VT or a framebuffer */
+int test_device_rdev(void) {
+    struct {
+        const char *path;
+        unsigned major;
+        unsigned minor;
+    } devs[] = {
+        { "/dev/tty1", 4, 1 },
+        { "/dev/fb0", 29, 0 },
+        { "/dev/input/event0", 13, 64 },
+        { "/dev/null", 1, 3 },
+    };
+    for (unsigned i = 0; i < sizeof(devs) / sizeof(devs[0]); i++) {
+        struct stat st;
+        if (stat(devs[i].path, &st) != 0) continue; /* device not present in this build */
+        ASSERT_TRUE(S_ISCHR(st.st_mode));
+        ASSERT_EQ(devs[i].major, (unsigned) ((st.st_rdev >> 8) & 0xfff));
+        ASSERT_EQ(devs[i].minor, (unsigned) (st.st_rdev & 0xff));
+    }
+    return 1;
+}
+REGISTER_TEST(device_rdev, "Phase 2: File System");
 
 int test_sendfile(void) {
     char src[PATH_MAX], dst[PATH_MAX];

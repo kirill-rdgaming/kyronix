@@ -1,5 +1,6 @@
 #include "usb.h"
 #include "../../lib/log.h"
+#include "../../lib/printf.h"
 #include "../../lib/string.h"
 #include "../../mm/heap.h"
 #include "../../mm/pmm.h"

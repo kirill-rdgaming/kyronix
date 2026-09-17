@@ -4,6 +4,9 @@
 #include "../lib/string.h"
 #include "../mm/heap.h"
 #include "../proc/proc.h"
+#include "../proc/jail.h"
+#include "security/phantom.h"
+#include "../syscall/poll.h"
 #include "../syscall/syscall.h"
 #include "vfs.h"
 #include "vfs_internal.h"
@@ -25,7 +28,9 @@
 #define EMSGSIZE 90
 #define ENOTSUP 95
 #define ENOTCONN 107
+#define EPERM 1
 #define ECONNREFUSED 111
+#define EINPROGRESS 115
 
 #define AF_INET 2
 #define SOCK_STREAM 1
@@ -42,21 +47,23 @@ typedef struct {
 static uint32_t ring_avail(const rx_ring_t *r) { return (r->head - r->tail) & (RX_BUF_SZ - 1); }
 
 static void ring_push(rx_ring_t *r, const uint8_t *data, uint32_t len) {
-    for (uint32_t i = 0; i < len; i++) {
-        uint32_t next = (r->head + 1) & (RX_BUF_SZ - 1);
-        if (next == r->tail) break;
-        r->buf[r->head] = data[i];
-        r->head = next;
-    }
+    uint32_t free = (RX_BUF_SZ - 1u) - ring_avail(r);
+    if (len > free) len = free;
+    uint32_t first = RX_BUF_SZ - r->head;
+    if (first > len) first = len;
+    memcpy(r->buf + r->head, data, first);
+    memcpy(r->buf, data + first, len - first);
+    r->head = (r->head + len) & (RX_BUF_SZ - 1u);
 }
 
 static uint32_t ring_pop(rx_ring_t *r, uint8_t *out, uint32_t want) {
     uint32_t have = ring_avail(r);
     if (want > have) want = have;
-    for (uint32_t i = 0; i < want; i++) {
-        out[i] = r->buf[r->tail];
-        r->tail = (r->tail + 1) & (RX_BUF_SZ - 1);
-    }
+    uint32_t first = RX_BUF_SZ - r->tail;
+    if (first > want) first = want;
+    memcpy(out, r->buf + r->tail, first);
+    memcpy(out + first, r->buf, want - first);
+    r->tail = (r->tail + want) & (RX_BUF_SZ - 1u);
     return want;
 }
 
@@ -71,12 +78,14 @@ typedef struct {
 } udp_dgram_t;
 
 struct net_conn {
+    uint32_t refcount;
     int type;             /* SOCK_STREAM, SOCK_DGRAM, or SOCK_RAW */
     int proto;            /* IP protocol (SOCK_RAW only) */
     struct tcp_pcb *pcb;  /* tcp only */
     struct udp_pcb *upcb; /* udp only */
     struct raw_pcb *rpcb; /* raw only */
     bool is_server;
+    bool phantom_fake;
     bool peer_closed;
     bool error;
     int err_code;
@@ -105,6 +114,7 @@ static err_t on_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) 
         proc_t *w = c->rx_waiter;
         if (w && __sync_bool_compare_and_swap(&w->state, PROC_WAITING, PROC_READY))
             proc_set_ready(w);
+        poll_notify_object(c);
         return ERR_OK;
     }
 
@@ -113,6 +123,7 @@ static err_t on_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) 
         proc_t *w = c->rx_waiter;
         if (w && __sync_bool_compare_and_swap(&w->state, PROC_WAITING, PROC_READY))
             proc_set_ready(w);
+        poll_notify_object(c);
         return ERR_MEM;
     }
 
@@ -126,6 +137,7 @@ static err_t on_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) 
 
     proc_t *w = c->rx_waiter;
     if (w && __sync_bool_compare_and_swap(&w->state, PROC_WAITING, PROC_READY)) proc_set_ready(w);
+    poll_notify_object(c);
     return ERR_OK;
 }
 
@@ -136,9 +148,11 @@ static err_t on_connected(void *arg, struct tcp_pcb *pcb, err_t err) {
     if (err != ERR_OK) {
         c->error = true;
         c->err_code = -(int) ECONNREFUSED;
+        phantom_record(PHANTOM_EVENT_NETWORK, (uint32_t) err, 0, 0, "TCP connect failed");
     }
     proc_t *w = c->connect_waiter;
     if (w && __sync_bool_compare_and_swap(&w->state, PROC_WAITING, PROC_READY)) proc_set_ready(w);
+    poll_notify_object(c);
     return ERR_OK;
 }
 
@@ -153,6 +167,7 @@ static void on_err(void *arg, err_t err) {
     if (w && __sync_bool_compare_and_swap(&w->state, PROC_WAITING, PROC_READY)) proc_set_ready(w);
     proc_t *r = c->rx_waiter;
     if (r && __sync_bool_compare_and_swap(&r->state, PROC_WAITING, PROC_READY)) proc_set_ready(r);
+    poll_notify_object(c);
 }
 
 static err_t on_accept(void *arg, struct tcp_pcb *new_pcb, err_t err) {
@@ -167,6 +182,7 @@ static err_t on_accept(void *arg, struct tcp_pcb *new_pcb, err_t err) {
     }
 
     child->type = SOCK_STREAM;
+    child->refcount = 1;
     child->pcb = new_pcb;
     tcp_arg(new_pcb, child);
     tcp_recv(new_pcb, on_recv);
@@ -187,6 +203,7 @@ static err_t on_accept(void *arg, struct tcp_pcb *new_pcb, err_t err) {
     spin_unlock(&srv->accept_lock);
 
     tcp_accepted(srv->pcb);
+    poll_notify_object(srv);
     return ERR_OK;
 }
 
@@ -216,6 +233,7 @@ static void on_udp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip
     c->udq_head = next;
     proc_t *w = c->rx_waiter;
     if (w && __sync_bool_compare_and_swap(&w->state, PROC_WAITING, PROC_READY)) proc_set_ready(w);
+    poll_notify_object(c);
 }
 
 static uint8_t on_raw_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p, const ip4_addr_t *addr) {
@@ -238,6 +256,7 @@ static uint8_t on_raw_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p, const
     pbuf_free(p);
     proc_t *w = c->rx_waiter;
     if (w && __sync_bool_compare_and_swap(&w->state, PROC_WAITING, PROC_READY)) proc_set_ready(w);
+    poll_notify_object(c);
     return 1; /* consumed */
 }
 
@@ -245,10 +264,12 @@ int fd_inet_socket(int type, int flags) {
     int sock_type = type & 0xF;
     if (sock_type != SOCK_STREAM && sock_type != SOCK_DGRAM && sock_type != SOCK_RAW)
         return -(int) ENOTSUP;
+    if (sock_type == SOCK_RAW && !jail_host_priv(g_current_proc)) return -(int) EPERM;
 
     net_conn_t *c = (net_conn_t *) kcalloc(1, sizeof(net_conn_t));
     if (!c) return -(int) ENOMEM;
     c->type = sock_type;
+    c->refcount = 1;
     c->proto = flags; /* proto arg passed as flags for SOCK_RAW */
 
     if (sock_type == SOCK_STREAM) {
@@ -288,6 +309,7 @@ int fd_inet_socket(int type, int flags) {
 
     vfs_file_t *f = vfs_file_alloc();
     if (!f) {
+        vfs_fd_clear(fd);
         if (sock_type == SOCK_STREAM)
             tcp_abort(c->pcb);
         else if (sock_type == SOCK_DGRAM)
@@ -335,6 +357,10 @@ int64_t inet_fd_read(net_conn_t *c, void *buf, uint64_t len, int fd_flags) {
 
 int64_t inet_fd_write(net_conn_t *c, const void *buf, uint64_t len) {
     if (!c) return -(int64_t) ENOTCONN;
+    if (c->phantom_fake) {
+        phantom_record(PHANTOM_EVENT_NETWORK, 0, 0, len, "spoofed network write accepted");
+        return (int64_t) len;
+    }
     if (c->type == SOCK_DGRAM || c->type == SOCK_RAW) {
         if (len > DGRAM_MAX_LEN) return -(int64_t) EMSGSIZE;
     } else if (len > DGRAM_MAX_LEN) {
@@ -368,6 +394,7 @@ int64_t inet_fd_write(net_conn_t *c, const void *buf, uint64_t len) {
 
 void inet_conn_close(net_conn_t *c) {
     if (!c) return;
+    if (__atomic_fetch_sub(&c->refcount, 1, __ATOMIC_ACQ_REL) > 1) return;
     if (c->type == SOCK_DGRAM) {
         if (c->upcb) {
             udp_remove(c->upcb);
@@ -390,23 +417,51 @@ void inet_conn_close(net_conn_t *c) {
     kfree(c);
 }
 
+void inet_conn_addref(net_conn_t *c) {
+    if (c) __atomic_fetch_add(&c->refcount, 1, __ATOMIC_RELAXED);
+}
+
+net_conn_t *inet_phantom_clone(net_conn_t *source) {
+    if (!source) return NULL;
+    net_conn_t *fake = (net_conn_t *) kcalloc(1, sizeof(net_conn_t));
+    if (!fake) return NULL;
+    fake->refcount = 1;
+    fake->type = source->type;
+    fake->proto = source->proto;
+    fake->phantom_fake = true;
+    return fake;
+}
+
 bool inet_poll_in(net_conn_t *c) {
     if (!c) return false;
     if (c->type == SOCK_DGRAM || c->type == SOCK_RAW) return c->udq_head != c->udq_tail;
-    return ring_avail(&c->rx) > 0 || c->peer_closed;
+    return ring_avail(&c->rx) > 0 || c->peer_closed || c->error;
 }
 
 bool inet_poll_out(net_conn_t *c) {
     if (!c) return false;
     if (c->type == SOCK_DGRAM) return c->upcb != NULL;
     if (c->type == SOCK_RAW) return c->rpcb != NULL;
-    return c->pcb && !c->error;
+    return c->phantom_fake || c->error ||
+           (c->pcb && c->pcb->state == ESTABLISHED);
 }
 
 int inet_get_type(net_conn_t *c) { return c ? c->type : 1; }
 
-int64_t inet_connect(net_conn_t *c, const struct sockaddr_in *addr) {
+int inet_get_error(net_conn_t *c) {
+    if (!c || !c->error) return 0;
+    return c->err_code < 0 ? -c->err_code : c->err_code;
+}
+
+int64_t inet_connect(net_conn_t *c, const struct sockaddr_in *addr, int fd_flags) {
     if (!c) return -(int64_t) EBADF;
+
+    if (g_current_proc && g_current_proc->phantom_sandbox) {
+        c->phantom_fake = true;
+        phantom_record(PHANTOM_EVENT_NETWORK, 0, addr->sin_addr, lwip_ntohs(addr->sin_port),
+                       "spoofed network acknowledgment");
+        return 0;
+    }
 
     ip4_addr_t dst;
     dst.addr = addr->sin_addr;
@@ -424,6 +479,7 @@ int64_t inet_connect(net_conn_t *c, const struct sockaddr_in *addr) {
 
     err_t e = tcp_connect(c->pcb, &dst, port, on_connected);
     if (e != ERR_OK) return -(int64_t) ECONNREFUSED;
+    if (fd_flags & O_NONBLOCK) return -(int64_t) EINPROGRESS;
 
     while (!c->error && c->pcb && c->pcb->state != ESTABLISHED) {
         c->connect_waiter = g_current_proc;
@@ -432,6 +488,7 @@ int64_t inet_connect(net_conn_t *c, const struct sockaddr_in *addr) {
     }
 
     if (c->error) return (int64_t) c->err_code;
+    phantom_record(PHANTOM_EVENT_NETWORK, 0, addr->sin_addr, port, "TCP connect acknowledged");
     return 0;
 }
 
@@ -489,6 +546,7 @@ int64_t inet_accept(net_conn_t *c, struct sockaddr_in *addr_out, int flags) {
 
     vfs_file_t *f = vfs_file_alloc();
     if (!f) {
+        vfs_fd_clear(fd);
         inet_conn_close(child);
         return -(int64_t) ENOMEM;
     }

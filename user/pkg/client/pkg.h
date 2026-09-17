@@ -15,13 +15,18 @@
 #define ANSI_DIM     "\x1b[2m"
 
 #define USER_AGENT "K9PackageManager/2.0"
-#define PKG_VERSION "0.2.0"
+#define PKG_VERSION "0.2"
 
 #define MAX_DEPS      32
 #define MAX_REPOS     16
 #define MAX_DEP_DEPTH 64
 
 #define REPO_SOURCES_PATH "/etc/pkg/sources"
+#define PKG_STATE_DIR "/var/lib/pkg"
+#define PKG_MAX_METADATA (1024U * 1024U)
+#define PKG_MAX_DOWNLOAD (256U * 1024U * 1024U)
+#define PKG_MAX_EXTRACT (256U * 1024U * 1024U)
+#define PKG_MAX_LOCAL_FILE (32U * 1024U * 1024U)
 
 typedef struct {
     char name[128];

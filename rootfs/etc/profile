@@ -24,3 +24,7 @@ alias fgrep='fgrep --color=auto'
 alias egrep='egrep --color=auto'
 
 umask 022
+
+export TERMINFO=/etc/terminfo
+export XDG_RUNTIME_DIR=/run/user/0
+export XDG_CONFIG_HOME=/etc

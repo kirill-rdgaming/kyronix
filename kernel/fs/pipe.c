@@ -1,15 +1,21 @@
 #include "pipe.h"
-#include "arch/x86_64/pit.h"
+#include "fs/vfs_internal.h"
 #include "lib/log.h"
 #include "lib/string.h"
 #include "mm/heap.h"
 #include "proc/proc.h"
+#include "syscall/poll.h"
 #include <stdbool.h>
 
 #define PIPE_MAGIC 0x4b59504950454d47ULL
 #define EPIPE 32
 #define EAGAIN 11
 #define EIO 5
+#define EINTR 4
+
+static uint64_t pipe_pending_signals(proc_t *p) {
+    return proc_blocking_sig_mask(p);
+}
 
 pipe_t *pipe_alloc(void) {
     pipe_t *p = (pipe_t *) kcalloc(1, sizeof(pipe_t));
@@ -23,16 +29,70 @@ pipe_t *pipe_alloc(void) {
 void pipe_free(pipe_t *p) {
     if (!p) return;
     spin_lock(&p->lock);
-    for (int i = 0; i < PROC_MAX; i++) {
-        proc_t *t = &g_proctable[i];
-        if (t->state != PROC_WAITING || t->blocked_pipe != p) continue;
-        t->blocked_pipe = NULL;
-        t->wakeup_tick = 0;
-        if (__sync_bool_compare_and_swap(&t->state, PROC_WAITING, PROC_READY)) proc_set_ready(t);
+    uint64_t waiters = p->reader_waiters | p->writer_waiters;
+    p->reader_waiters = 0;
+    p->writer_waiters = 0;
+    while (waiters) {
+        int slot = __builtin_ctzll(waiters);
+        proc_t *t = &g_proctable[slot];
+        if (t->blocked_pipe == p) t->blocked_pipe = NULL;
+        if (__sync_bool_compare_and_swap(&t->state, PROC_WAITING, PROC_READY))
+            proc_set_ready(t);
+        waiters &= waiters - 1;
+    }
+    while (p->anc_rd != p->anc_wr) {
+        pipe_anc_t *slot = &p->anc_q[p->anc_rd];
+        for (int i = 0; i < slot->nfds; i++)
+            vfs_file_close((vfs_file_t *) slot->files[i]);
+        p->anc_rd = (p->anc_rd + 1) % PIPE_ANC_SLOTS;
     }
     p->magic = 0;
     spin_unlock(&p->lock);
+    poll_notify_object(p);
     kfree(p);
+}
+
+static void pipe_endpoint_put(pipe_t *p) {
+    if (__atomic_sub_fetch(&p->endpoint_refs, 1, __ATOMIC_ACQ_REL) == 0) pipe_free(p);
+}
+
+void pipe_ref_read(pipe_t *p) {
+    if (!p) return;
+    /* Keep the allocation alive before publishing the new directional ref. */
+    __atomic_add_fetch(&p->endpoint_refs, 1, __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&p->read_refs, 1, __ATOMIC_RELEASE);
+}
+
+void pipe_ref_write(pipe_t *p) {
+    if (!p) return;
+    __atomic_add_fetch(&p->endpoint_refs, 1, __ATOMIC_ACQ_REL);
+    __atomic_add_fetch(&p->write_refs, 1, __ATOMIC_RELEASE);
+}
+
+void pipe_unref_read(pipe_t *p) {
+    if (!p) return;
+    uint32_t refs = __atomic_load_n(&p->read_refs, __ATOMIC_ACQUIRE);
+    while (refs) {
+        if (__atomic_compare_exchange_n(&p->read_refs, &refs, refs - 1, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            if (refs == 1) pipe_wake(p, 0);
+            pipe_endpoint_put(p);
+            return;
+        }
+    }
+}
+
+void pipe_unref_write(pipe_t *p) {
+    if (!p) return;
+    uint32_t refs = __atomic_load_n(&p->write_refs, __ATOMIC_ACQUIRE);
+    while (refs) {
+        if (__atomic_compare_exchange_n(&p->write_refs, &refs, refs - 1, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            if (refs == 1) pipe_wake(p, 1);
+            pipe_endpoint_put(p);
+            return;
+        }
+    }
 }
 
 static bool pipe_valid(pipe_t *p) {
@@ -44,14 +104,41 @@ static bool pipe_valid(pipe_t *p) {
 /* wake every proc blocked on this pipe in one direction (want_read=1 -> readers) */
 void pipe_wake(pipe_t *p, int want_read) {
     spin_lock(&p->lock);
-    for (int i = 0; i < PROC_MAX; i++) {
-        proc_t *t = &g_proctable[i];
-        if (t->state != PROC_WAITING || t->blocked_pipe != p) continue;
-        if (t->blocked_pipe_read != want_read) continue;
-        t->state = PROC_READY;
-        proc_set_ready(t);
+    uint64_t *mask = want_read ? &p->reader_waiters : &p->writer_waiters;
+    uint64_t waiters = *mask;
+    *mask = 0;
+    while (waiters) {
+        int slot = __builtin_ctzll(waiters);
+        proc_t *t = &g_proctable[slot];
+        if (t->blocked_pipe == p && t->blocked_pipe_read == want_read &&
+            __sync_bool_compare_and_swap(&t->state, PROC_WAITING, PROC_READY))
+            proc_set_ready(t);
+        waiters &= waiters - 1;
     }
     spin_unlock(&p->lock);
+    poll_notify_object(p);
+}
+
+void pipe_cancel_wait(pipe_t *p, void *proc) {
+    proc_t *task = (proc_t *) proc;
+    if (!p || !task || task->blocked_pipe != p) return;
+    spin_lock(&p->lock);
+    uint64_t bit = 1ULL << proc_slot(task);
+    p->reader_waiters &= ~bit;
+    p->writer_waiters &= ~bit;
+    if (task->blocked_pipe == p) task->blocked_pipe = NULL;
+    spin_unlock(&p->lock);
+}
+
+static void pipe_block_locked(pipe_t *p, proc_t *task, int want_read) {
+    task->blocked_pipe = p;
+    task->blocked_pipe_read = want_read;
+    task->state = PROC_WAITING;
+    uint64_t bit = 1ULL << proc_slot(task);
+    if (want_read)
+        p->reader_waiters |= bit;
+    else
+        p->writer_waiters |= bit;
 }
 
 int64_t pipe_read(pipe_t *p, void *buf, uint64_t len) {
@@ -63,7 +150,7 @@ int64_t pipe_read(pipe_t *p, void *buf, uint64_t len) {
         spin_lock(&p->lock);
         while (done < len) {
             if (p->count == 0) {
-                if (p->write_refs == 0) {
+                if (__atomic_load_n(&p->write_refs, __ATOMIC_ACQUIRE) == 0) {
                     spin_unlock(&p->lock);
                     return (int64_t) done;
                 }
@@ -73,25 +160,23 @@ int64_t pipe_read(pipe_t *p, void *buf, uint64_t len) {
                 }
 
                 proc_t *_rp = g_current_proc;
-                if (_rp) {
-                    _rp->wakeup_tick = g_ticks + 10;
-                    _rp->blocked_pipe = p;
-                    _rp->blocked_pipe_read = 1;
-                    proc_set_timer(_rp);
-                }
-                p->waiting_reader = _rp;
+                if (_rp) pipe_block_locked(p, _rp, 1);
                 spin_unlock(&p->lock);
-                sched_yield_blocking();
-                p->waiting_reader = NULL;
-                if (_rp) {
-                    _rp->blocked_pipe = NULL;
-                    _rp->wakeup_tick = 0;
-                }
+                if (_rp) sched_block_current();
+                pipe_cancel_wait(p, _rp);
+                if (pipe_pending_signals(_rp))
+                    return done ? (int64_t) done : -(int64_t) EINTR;
                 goto restart_read;
             }
-            out[done++] = p->buf[p->rpos];
-            p->rpos = (p->rpos + 1) % PIPE_BUFSZ;
-            p->count--;
+            uint64_t take = len - done;
+            if (take > p->count) take = p->count;
+            uint64_t first = take;
+            if (first > PIPE_BUFSZ - p->rpos) first = PIPE_BUFSZ - p->rpos;
+            memcpy(out + done, p->buf + p->rpos, first);
+            if (take > first) memcpy(out + done + first, p->buf, take - first);
+            p->rpos = (p->rpos + (uint32_t) take) % PIPE_BUFSZ;
+            p->count -= (uint32_t) take;
+            done += take;
         }
         spin_unlock(&p->lock);
         break;
@@ -111,7 +196,7 @@ int64_t pipe_peek(pipe_t *p, void *buf, uint64_t len, uint64_t skip) {
         spin_lock(&p->lock);
         while (done < len) {
             if (p->count <= skip + done) {
-                if (p->write_refs == 0) {
+                if (__atomic_load_n(&p->write_refs, __ATOMIC_ACQUIRE) == 0) {
                     spin_unlock(&p->lock);
                     return (int64_t) done;
                 }
@@ -121,25 +206,24 @@ int64_t pipe_peek(pipe_t *p, void *buf, uint64_t len, uint64_t skip) {
                 }
 
                 proc_t *_rp = g_current_proc;
-                if (_rp) {
-                    _rp->wakeup_tick = g_ticks + 10;
-                    _rp->blocked_pipe = p;
-                    _rp->blocked_pipe_read = 1;
-                    proc_set_timer(_rp);
-                }
-                p->waiting_reader = _rp;
+                if (_rp) pipe_block_locked(p, _rp, 1);
                 spin_unlock(&p->lock);
-                sched_yield_blocking();
-                p->waiting_reader = NULL;
-                if (_rp) {
-                    _rp->blocked_pipe = NULL;
-                    _rp->wakeup_tick = 0;
-                }
+                if (_rp) sched_block_current();
+                pipe_cancel_wait(p, _rp);
+                if (pipe_pending_signals(_rp))
+                    return done ? (int64_t) done : -(int64_t) EINTR;
                 goto restart_peek;
             }
 
-            uint32_t pos = (p->rpos + skip + done) % PIPE_BUFSZ;
-            out[done++] = p->buf[pos];
+            uint64_t available = p->count - skip - done;
+            uint64_t take = len - done;
+            if (take > available) take = available;
+            uint32_t pos = (p->rpos + (uint32_t) skip + (uint32_t) done) % PIPE_BUFSZ;
+            uint64_t first = take;
+            if (first > PIPE_BUFSZ - pos) first = PIPE_BUFSZ - pos;
+            memcpy(out + done, p->buf + pos, first);
+            if (take > first) memcpy(out + done + first, p->buf, take - first);
+            done += take;
         }
         spin_unlock(&p->lock);
         break;
@@ -151,7 +235,7 @@ int64_t pipe_peek(pipe_t *p, void *buf, uint64_t len, uint64_t skip) {
 
 int64_t pipe_write(pipe_t *p, const void *buf, uint64_t len) {
     if (!pipe_valid(p)) return -(int64_t) EIO;
-    if (p->read_refs == 0) {
+    if (__atomic_load_n(&p->read_refs, __ATOMIC_ACQUIRE) == 0) {
         proc_send_signal(g_current_proc, SIGPIPE);
         return -(int64_t) EPIPE;
     }
@@ -164,28 +248,32 @@ int64_t pipe_write(pipe_t *p, const void *buf, uint64_t len) {
         spin_lock(&p->lock);
         while (done < len) {
             while (p->count == PIPE_BUFSZ) {
-                if (p->read_refs == 0) {
+                if (__atomic_load_n(&p->read_refs, __ATOMIC_ACQUIRE) == 0) {
                     spin_unlock(&p->lock);
                     proc_send_signal(g_current_proc, SIGPIPE);
                     return done ? (int64_t) done : -(int64_t) EPIPE;
                 }
 
                 proc_t *_wp = g_current_proc;
-                if (_wp) {
-                    _wp->blocked_pipe = p;
-                    _wp->blocked_pipe_read = 0;
-                }
-                p->waiting_writer = _wp;
+                if (_wp) pipe_block_locked(p, _wp, 0);
                 spin_unlock(&p->lock);
                 pipe_wake(p, 1); /* let readers drain so space frees up */
-                sched_yield_blocking();
-                p->waiting_writer = NULL;
-                if (_wp) _wp->blocked_pipe = NULL;
+                if (_wp) sched_block_current();
+                pipe_cancel_wait(p, _wp);
+                if (pipe_pending_signals(_wp))
+                    return done ? (int64_t) done : -(int64_t) EINTR;
                 goto restart_write;
             }
             uint32_t wpos = (p->rpos + p->count) % PIPE_BUFSZ;
-            p->buf[wpos] = in[done++];
-            p->count++;
+            uint64_t put = len - done;
+            uint64_t space = PIPE_BUFSZ - p->count;
+            if (put > space) put = space;
+            uint64_t first = put;
+            if (first > PIPE_BUFSZ - wpos) first = PIPE_BUFSZ - wpos;
+            memcpy(p->buf + wpos, in + done, first);
+            if (put > first) memcpy(p->buf, in + done + first, put - first);
+            p->count += (uint32_t) put;
+            done += put;
         }
         spin_unlock(&p->lock);
         break;

@@ -1,6 +1,7 @@
 #include "netdev.h"
 #include "../arch/x86_64/cpu.h"
 #include "../lib/log.h"
+#include "../lib/printf.h"
 #include "../lib/string.h"
 #include "../mm/pmm.h"
 #include "pci.h"
@@ -54,6 +55,7 @@ static inline void rtl_w16(rtl8139_t *r, uint16_t reg, uint16_t v) { outw(r->iob
 static inline void rtl_w32(rtl8139_t *r, uint16_t reg, uint32_t v) { outl(r->iobase + reg, v); }
 static inline uint8_t rtl_r8(rtl8139_t *r, uint16_t reg) { return inb(r->iobase + reg); }
 static inline uint16_t rtl_r16(rtl8139_t *r, uint16_t reg) { return inw(r->iobase + reg); }
+static inline uint32_t rtl_r32(rtl8139_t *r, uint16_t reg) { return inl(r->iobase + reg); }
 
 static int rtl8139_send(netdev_t *nd, const uint8_t *frame, uint16_t len) {
     rtl8139_t *r = (rtl8139_t *) nd->priv;
@@ -61,8 +63,8 @@ static int rtl8139_send(netdev_t *nd, const uint8_t *frame, uint16_t len) {
     rtl_w32(r, RTL_TSAD0, (uint32_t) r->txbuf_phys);
     rtl_w32(r, RTL_TSD0, len);
     uint32_t to = 100000;
-    while (!(rtl_r8(r, RTL_CR) & 0) && to--) cpu_relax();
-    return 0;
+    while ((rtl_r32(r, RTL_TSD0) & (1u << 13)) && to--) cpu_relax();
+    return to ? 0 : -1;
 }
 
 static void rtl8139_poll(netdev_t *nd) {
@@ -83,7 +85,6 @@ static void rtl8139_poll(netdev_t *nd) {
         }
         netdev_receive(nd, pkt + 4, (uint16_t) (plen - 4));
         r->rx_off = (uint16_t) ((r->rx_off + plen + 4 + 3) & ~3u);
-        if (r->rx_off >= RTL_RX_BUF_SIZE) r->rx_off -= RTL_RX_BUF_SIZE;
         rtl_w16(r, RTL_CAPR, (uint16_t) (r->rx_off - 16));
     }
 }

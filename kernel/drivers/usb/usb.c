@@ -11,7 +11,7 @@ static usb_hc_t *g_hcs;
 static bool g_usb_ready;
 
 void usb_msleep(uint32_t ms) {
-    uint64_t end = g_ticks + ((uint64_t) ms * 1000u) / 54945u + 1u;
+    uint64_t end = g_ticks + ms + 1u;
     while (g_ticks < end) cpu_relax();
 }
 
@@ -172,7 +172,8 @@ static void usb_hub_configure(usb_device_t *dev, int depth) {
 }
 
 static void usb_enumerate_port(usb_hc_t *hc, int port, usb_device_t *parent, int depth) {
-    if (hc->ops->reset_port(hc, port) < 0) return;
+    int speed = hc->ops->reset_port(hc, port);
+    if (speed < 0) return;
     usb_msleep(20);
 
     usb_device_t *dev = usb_alloc_device();
@@ -181,6 +182,7 @@ static void usb_enumerate_port(usb_hc_t *hc, int port, usb_device_t *parent, int
     dev->port = port;
     dev->parent = parent;
     dev->addr = 0;
+    dev->speed = speed;
     dev->max_packet0 = 8;
 
     uint8_t rawdesc[256];
@@ -196,8 +198,8 @@ static void usb_enumerate_port(usb_hc_t *hc, int port, usb_device_t *parent, int
     if (hc->ops->reset_port(hc, port) < 0) return;
     usb_msleep(20);
 
-    static int next_addr = 1;
-    int addr = next_addr++ & 0x7F;
+    int addr = g_usb_ndevs + 1;
+    if (addr > 0x7F) addr = 1;
     if (usb_set_address(dev, addr) < 0) {
         log_warn("USB: port %d: SET_ADDRESS failed", port);
         return;

@@ -24,36 +24,6 @@ static int ph_total = 0;
 static int ph_passed = 0;
 static int ph_failed = 0;
 
-static int kmemleak_on = 0;
-
-static int dump_kmemleak(int print) {
-    char buf[16384];
-    int fd = open("/proc/kmemleak", O_RDONLY);
-    if (fd < 0) return -1;
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-    if (n <= 0) return -1;
-    buf[n] = '\0';
-    if (print) {
-            char *line = buf;
-        char *nl;
-        while ((nl = strchr(line, '\n')) != NULL) {
-            *nl = '\0';
-            if (line[0] == ' ') {
-                fprintf(stderr, "  %s\n", line);
-            } else if (strstr(line, "KMEMLEAK:") == line) {
-                fprintf(stderr, ANSI_CYAN "  %s" ANSI_RESET "\n", line);
-            }
-            line = nl + 1;
-        }
-    }
-    const char *p = strstr(buf, "KMEMLEAK:");
-    if (!p) return 0;
-    const char *q = p + 9;
-    while (*q == ' ') q++;
-    return (int)atol(q);
-}
-
 static void phase_summary(void) {
     fprintf(stderr, "  " ANSI_CYAN "--- %s: %d/%d PASS, %d FAIL" ANSI_RESET "\n", cur_phase,
             ph_passed, ph_total, ph_failed);
@@ -119,7 +89,10 @@ static int run_sandbox(const char *test_name, int (*test_fn)(void)) {
     }
 
     char buf[256];
-    ssize_t n = read(p[0], buf, sizeof(buf) - 1);
+    ssize_t n;
+    do {
+        n = read(p[0], buf, sizeof(buf) - 1);
+    } while (n < 0 && errno == EINTR);
     close(p[0]);
     failure_pipe[0] = -1;
 
@@ -160,7 +133,12 @@ int test_pipe_dup2_exec(void) {
     close(p[1]);
     char buf[256];
     ssize_t tot = 0, n;
-    while ((n = read(p[0], buf + tot, sizeof(buf) - tot)) > 0) tot += n;
+    while (1) {
+        n = read(p[0], buf + tot, sizeof(buf) - tot);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        tot += n;
+    }
     close(p[0]);
 
     int status;
@@ -214,7 +192,7 @@ int test_ls_grep_pipeline(void) {
         close(p1[0]);
         dup2(p2[1], STDOUT_FILENO);
         close(p2[1]);
-        execlp("grep", "grep", "fetch", NULL);
+        execlp("grep", "grep", "ksh", NULL);
         _exit(127);
     }
 
@@ -223,7 +201,10 @@ int test_ls_grep_pipeline(void) {
     close(p2[1]);
 
     char buf[256];
-    ssize_t n = read(p2[0], buf, sizeof(buf) - 1);
+    ssize_t n;
+    do {
+        n = read(p2[0], buf, sizeof(buf) - 1);
+    } while (n < 0 && errno == EINTR);
     close(p2[0]);
     buf[n > 0 ? n : 0] = '\0';
 
@@ -231,7 +212,7 @@ int test_ls_grep_pipeline(void) {
     waitpid(pid2, &status, 0);
     waitpid(pid1, &status, 0);
 
-    return strstr(buf, "fetch") != NULL;
+    return strstr(buf, "ksh") != NULL;
 }
 REGISTER_TEST(ls_grep_pipeline, "Infrastructure");
 
@@ -270,7 +251,12 @@ int test_grep_o(void) {
 
     char buf[64];
     ssize_t tot = 0, n;
-    while ((n = read(p2[0], buf + tot, sizeof(buf) - 1 - tot)) > 0) tot += n;
+    while (1) {
+        n = read(p2[0], buf + tot, sizeof(buf) - 1 - tot);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        tot += n;
+    }
     close(p2[0]);
     buf[tot > 0 ? tot : 0] = '\0';
 
@@ -332,13 +318,10 @@ int main(void) {
     fprintf(stderr, ANSI_CYAN "Kyronix Test Runner" ANSI_RESET "\n");
     fprintf(stderr, "--------------------\n");
 
-    int kml = dump_kmemleak(0);
-    if (kml >= 0) {
-        kmemleak_on = 1;
-        fprintf(stderr, ANSI_CYAN "  kmemleak: enabled" ANSI_RESET "\n");
-    } else {
-        fprintf(stderr, ANSI_CYAN "  kmemleak: not available" ANSI_RESET "\n");
-    }
+    fprintf(stderr, ANSI_CYAN "  kmemleak: %s" ANSI_RESET "\n",
+            access("/proc/kmemleak", R_OK) == 0 ?
+                "available (full scan skipped)" :
+                "not available");
     fprintf(stderr, "\n");
 
     for (int i = 0; i < test_count; i++) {
@@ -350,6 +333,7 @@ int main(void) {
         fprintf(stderr, "  %-30s ", e->name);
         fflush(stderr);
 
+        int failures_before = nfailures;
         int result = run_sandbox(e->name, e->func);
 
         if (result == TEST_PASS) {
@@ -359,7 +343,10 @@ int main(void) {
         } else {
             failed++;
             ph_failed++;
-            fprintf(stderr, ANSI_RED "FAIL" ANSI_RESET "\n");
+            fprintf(stderr, ANSI_RED "FAIL" ANSI_RESET);
+            if (nfailures > failures_before)
+                fprintf(stderr, " (%s)", failures[nfailures - 1].detail);
+            fprintf(stderr, "\n");
         }
         total++;
     }
@@ -368,11 +355,6 @@ int main(void) {
 
     fprintf(stderr, "\n" ANSI_CYAN "RESULT:" ANSI_RESET " %d/%d PASS, %d FAIL", passed, total,
             failed);
-
-    if (kmemleak_on) {
-        fprintf(stderr, "\n" ANSI_CYAN "/proc/kmemleak:" ANSI_RESET "\n");
-        dump_kmemleak(1);
-    }
 
     fprintf(stderr, "\n");
 

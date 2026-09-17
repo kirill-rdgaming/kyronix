@@ -2,6 +2,7 @@
 #include "../fs/vfs.h"
 #include "../fs/vfs_internal.h"
 #include "../lib/log.h"
+#include "../lib/printf.h"
 #include "../lib/string.h"
 #include "../mm/heap.h"
 

@@ -1,127 +1,285 @@
 #include "net.h"
-#include "../arch/x86_64/pit.h"
-#include "../drivers/netdev.h"
-#include "../drivers/virtio_net.h"
-#include "../lib/log.h"
-#include "../mm/heap.h"
+#include "arch/x86_64/spinlock.h"
+#include "drivers/netdev.h"
+#include "lib/log.h"
+#include "lib/string.h"
+#include "mm/heap.h"
+#include "proc/proc.h"
 
 #include "lwip/dhcp.h"
 #include "lwip/dns.h"
-#include "lwip/etharp.h"
 #include "lwip/init.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/netif.h"
-#include "lwip/opt.h"
 #include "lwip/timeouts.h"
 #include "netif/ethernet.h"
 
 err_t kyronix_netif_init(struct netif *nif);
 void kyronix_netif_input(struct netif *nif, const uint8_t *data, uint16_t len);
-void kyronix_netif_bind(netdev_t *nd);
 
 static struct netif g_netif;
-static bool g_lwip_up;
+static spinlock_t g_driver_lock;
+static spinlock_t g_lifecycle_lock;
+static const net_driver_ops_t *g_driver;
+static netdev_t *g_local_device;
+static uint32_t g_driver_calls;
+static bool g_lwip_initialized;
+static bool g_netif_active;
+static bool g_starting;
 static bool g_dhcp_active;
+static proc_t *g_net_worker;
+static volatile uint32_t g_poll_pending;
 
-struct virtnet_shim {
-    netdev_t nd;
+static const net_driver_ops_t *driver_acquire(bool require_netif, bool polling) {
+    uint64_t flags = irq_save();
+    spin_lock(&g_driver_lock);
+    const net_driver_ops_t *ops = NULL;
+    if (g_driver && (!require_netif || g_netif_active) && (!polling || !g_starting)) {
+        ops = g_driver;
+        g_driver_calls++;
+    }
+    spin_unlock(&g_driver_lock);
+    irq_restore(flags);
+    return ops;
+}
+
+static void driver_release(void) {
+    uint64_t flags = irq_save();
+    spin_lock(&g_driver_lock);
+    g_driver_calls--;
+    spin_unlock(&g_driver_lock);
+    irq_restore(flags);
+}
+
+static void driver_drain(void) {
+    for (;;) {
+        uint64_t flags = irq_save();
+        spin_lock(&g_driver_lock);
+        bool idle = g_driver_calls == 0;
+        spin_unlock(&g_driver_lock);
+        irq_restore(flags);
+        if (idle) return;
+        cpu_relax();
+    }
+}
+
+static void net_worker_main(void) {
+    for (;;) {
+        uint64_t flags = irq_save();
+        if (!__atomic_exchange_n(&g_poll_pending, 0, __ATOMIC_ACQ_REL)) {
+            g_current_proc->state = PROC_WAITING;
+            if (__atomic_exchange_n(&g_poll_pending, 0, __ATOMIC_ACQ_REL)) {
+                g_current_proc->state = PROC_RUNNING;
+                __atomic_store_n(&g_poll_pending, 1, __ATOMIC_RELEASE);
+                irq_restore(flags);
+                continue;
+            }
+            irq_restore(flags);
+            sched_block_current();
+            continue;
+        }
+        irq_restore(flags);
+        const net_driver_ops_t *ops = driver_acquire(true, true);
+        if (!ops) continue;
+        ops->poll();
+        sys_check_timeouts();
+        driver_release();
+    }
+}
+
+static bool local_send(const uint8_t *data, uint16_t len) {
+    netdev_t *nd = g_local_device;
+    return nd && nd->send(nd, data, len) >= 0;
+}
+
+static void local_poll(void) {
+    netdev_t *nd = g_local_device;
+    if (nd) nd->poll(nd);
+}
+
+static const uint8_t *local_mac(void) {
+    return g_local_device ? g_local_device->mac : NULL;
+}
+
+static const net_driver_ops_t g_local_ops = {
+    .send = local_send,
+    .poll = local_poll,
+    .mac = local_mac,
 };
-static struct virtnet_shim g_vnet_shim;
 
-static int vnet_shim_send(netdev_t *nd, const uint8_t *frame, uint16_t len) {
-    (void) nd;
-    return virtnet_send(frame, len);
-}
+static bool register_driver(const net_driver_ops_t *ops, netdev_t *nd) {
+    if (!ops || !ops->send || !ops->poll || !ops->mac) return false;
+    spin_lock(&g_lifecycle_lock);
+    uint64_t flags = irq_save();
+    spin_lock(&g_driver_lock);
+    if (g_driver) {
+        spin_unlock(&g_driver_lock);
+        irq_restore(flags);
+        spin_unlock(&g_lifecycle_lock);
+        return false;
+    }
+    g_driver = ops;
+    g_local_device = nd;
+    g_starting = true;
+    spin_unlock(&g_driver_lock);
+    irq_restore(flags);
 
-static void vnet_shim_poll(netdev_t *nd) {
-    (void) nd;
-    virtnet_poll();
-}
+    if (!g_lwip_initialized) {
+        lwip_init();
+        dns_init();
+        g_lwip_initialized = true;
+    }
+    if (!__atomic_load_n(&g_net_worker, __ATOMIC_ACQUIRE)) {
+        proc_t *worker = proc_create_kernel("[net-rx]", net_worker_main);
+        if (!worker) goto fail;
+        __atomic_store_n(&g_net_worker, worker, __ATOMIC_RELEASE);
+    }
 
-static void netif_bring_up(netdev_t *nd, bool use_dhcp) {
-    kyronix_netif_bind(nd);
-    netif_add(&g_netif, NULL, NULL, NULL, NULL, kyronix_netif_init, ethernet_input);
-    netif_set_default(&g_netif);
-    netif_set_up(&g_netif);
-
-    if (use_dhcp) {
-        dhcp_start(&g_netif);
-        g_dhcp_active = true;
-        log_info("net: DHCP started on %s", nd->name);
+    ip4_addr_t ip, mask, gw;
+    if (nd) {
+        ip4_addr_set_zero(&ip);
+        ip4_addr_set_zero(&mask);
+        ip4_addr_set_zero(&gw);
     } else {
-        ip4_addr_t ip, mask, gw;
         IP4_ADDR(&ip, 10, 0, 2, 15);
         IP4_ADDR(&mask, 255, 255, 255, 0);
         IP4_ADDR(&gw, 10, 0, 2, 2);
-        netif_set_addr(&g_netif, &ip, &mask, &gw);
-        ip4_addr_t dns1;
-        IP4_ADDR(&dns1, 10, 0, 2, 3);
-        dns_setserver(0, &dns1);
-        log_info("net: static IP 10.0.2.15/24 gw 10.0.2.2 on %s", nd->name);
     }
-    g_lwip_up = true;
+    if (!netif_add(&g_netif, &ip, &mask, &gw, NULL, kyronix_netif_init, ethernet_input))
+        goto fail;
+
+    flags = irq_save();
+    spin_lock(&g_driver_lock);
+    g_netif_active = true;
+    spin_unlock(&g_driver_lock);
+    irq_restore(flags);
+    netif_set_default(&g_netif);
+    netif_set_up(&g_netif);
+    if (nd) {
+        if (dhcp_start(&g_netif) != ERR_OK) {
+            flags = irq_save();
+            spin_lock(&g_driver_lock);
+            g_netif_active = false;
+            spin_unlock(&g_driver_lock);
+            irq_restore(flags);
+            driver_drain();
+            dhcp_stop(&g_netif);
+            dhcp_cleanup(&g_netif);
+            netif_set_down(&g_netif);
+            netif_remove(&g_netif);
+            goto fail;
+        }
+        g_dhcp_active = true;
+        log_info("net: DHCP started on %s", nd->name);
+    } else {
+        ip4_addr_t dns;
+        IP4_ADDR(&dns, 10, 0, 2, 3);
+        dns_setserver(0, &dns);
+        log_info("net: static IP 10.0.2.15/24 gw 10.0.2.2 dns 10.0.2.3");
+    }
+    flags = irq_save();
+    spin_lock(&g_driver_lock);
+    g_starting = false;
+    spin_unlock(&g_driver_lock);
+    irq_restore(flags);
+    spin_unlock(&g_lifecycle_lock);
+    net_schedule_poll();
+    return true;
+
+fail:
+    flags = irq_save();
+    spin_lock(&g_driver_lock);
+    g_driver = NULL;
+    g_netif_active = false;
+    spin_unlock(&g_driver_lock);
+    irq_restore(flags);
+    driver_drain();
+    g_local_device = NULL;
+    g_starting = false;
+    g_dhcp_active = false;
+    spin_unlock(&g_lifecycle_lock);
+    return false;
+}
+
+bool net_driver_register(const net_driver_ops_t *ops) {
+    return register_driver(ops, NULL);
+}
+
+void net_driver_unregister(const net_driver_ops_t *ops) {
+    if (!ops) return;
+    spin_lock(&g_lifecycle_lock);
+    uint64_t flags = irq_save();
+    spin_lock(&g_driver_lock);
+    if (g_driver != ops) {
+        spin_unlock(&g_driver_lock);
+        irq_restore(flags);
+        spin_unlock(&g_lifecycle_lock);
+        return;
+    }
+    g_netif_active = false;
+    g_driver = NULL;
+    spin_unlock(&g_driver_lock);
+    irq_restore(flags);
+    driver_drain();
+    if (g_dhcp_active) {
+        dhcp_stop(&g_netif);
+        dhcp_cleanup(&g_netif);
+        g_dhcp_active = false;
+    }
+    netif_set_down(&g_netif);
+    netif_remove(&g_netif);
+    g_local_device = NULL;
+    spin_unlock(&g_lifecycle_lock);
+}
+
+bool net_driver_send(const uint8_t *data, uint16_t len) {
+    if (!data || len < 14 || len > 1514) return false;
+    const net_driver_ops_t *ops = driver_acquire(true, false);
+    if (!ops) return false;
+    bool sent = ops->send(data, len);
+    driver_release();
+    return sent;
+}
+
+bool net_driver_mac(uint8_t mac[6]) {
+    if (!mac) return false;
+    const net_driver_ops_t *ops = driver_acquire(false, false);
+    if (!ops) return false;
+    const uint8_t *address = ops->mac();
+    bool valid = address != NULL;
+    if (valid) memcpy(mac, address, 6);
+    driver_release();
+    return valid;
+}
+
+void net_receive(const uint8_t *frame, uint16_t len) {
+    const net_driver_ops_t *ops = driver_acquire(true, true);
+    if (!ops) return;
+    kyronix_netif_input(&g_netif, frame, len);
+    driver_release();
+}
+
+void net_receive_device(netdev_t *nd, const uint8_t *frame, uint16_t len) {
+    if (!nd) return;
+    const net_driver_ops_t *ops = driver_acquire(true, true);
+    if (!ops) return;
+    if (ops == &g_local_ops && nd == g_local_device)
+        kyronix_netif_input(&g_netif, frame, len);
+    driver_release();
 }
 
 void net_init(void) {
-    dns_init();
-
-    netdev_t *primary = NULL;
-    if (virtnet_ready()) {
-        memcpy(g_vnet_shim.nd.name, "vnet0", 6);
-        memcpy(g_vnet_shim.nd.mac, virtnet_mac(), 6);
-        g_vnet_shim.nd.send = vnet_shim_send;
-        g_vnet_shim.nd.poll = vnet_shim_poll;
-        g_vnet_shim.nd.priv = NULL;
-        netdev_register(&g_vnet_shim.nd);
-        primary = &g_vnet_shim.nd;
-    }
-    if (!primary) primary = netdev_first();
-    if (!primary) {
-        log_warn("net: no network device available");
-        return;
-    }
-
-    lwip_init();
-
-    bool use_dhcp = (primary != &g_vnet_shim.nd);
-    netif_bring_up(primary, use_dhcp);
-}
-
-bool net_dhcp_bound(void) {
-    if (!g_dhcp_active) return true;
-    return dhcp_supplied_address(&g_netif) != 0;
-}
-
-void net_maybe_rebind(void) {
-    if (g_lwip_up) return;
     netdev_t *nd = netdev_first();
-    if (!nd) return;
-    if (!g_lwip_up) {
-        lwip_init();
-        netif_bring_up(nd, true);
-    }
-}
-
-void net_receive(const uint8_t *eth_frame, uint16_t len) {
-    if (!g_lwip_up) return;
-    kyronix_netif_input(&g_netif, eth_frame, len);
+    if (nd) register_driver(&g_local_ops, nd);
 }
 
 void net_poll(void) {
-    netdev_poll_all();
-    static uint8_t s_ctr;
-    if (++s_ctr == 0) sys_check_timeouts();
-    if (g_dhcp_active && dhcp_supplied_address(&g_netif)) {
-        g_dhcp_active = false;
-        uint32_t ip = ip4_addr_get_u32(netif_ip4_addr(&g_netif));
-        uint32_t gw = ip4_addr_get_u32(netif_ip4_gw(&g_netif));
-        log_info("net: DHCP bound, IP %u.%u.%u.%u gw %u.%u.%u.%u", ip & 0xFF, (ip >> 8) & 0xFF,
-                 (ip >> 16) & 0xFF, (ip >> 24) & 0xFF, gw & 0xFF, (gw >> 8) & 0xFF,
-                 (gw >> 16) & 0xFF, (gw >> 24) & 0xFF);
-        uint32_t dns = ip & 0x00FFFFFFu;
-        dns |= 0x01000000u;
-        ip4_addr_t dns1;
-        dns1.addr = gw;
-        dns_setserver(0, &dns1);
-    }
+    net_schedule_poll();
+}
+
+void net_schedule_poll(void) {
+    __atomic_store_n(&g_poll_pending, 1, __ATOMIC_RELEASE);
+    proc_t *worker = __atomic_load_n(&g_net_worker, __ATOMIC_ACQUIRE);
+    if (worker && __sync_bool_compare_and_swap(&worker->state, PROC_WAITING, PROC_READY))
+        proc_set_ready(worker);
 }

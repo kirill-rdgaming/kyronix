@@ -5,7 +5,7 @@
 #include "arch/x86_64/syscall_setup.h"
 #include "cred.h"
 #include "crypto/chacha20.h"
-#include "drivers/acpi.h"
+#include "drivers/acpi/acpi.h"
 #include "epoll.h"
 #include "exec/process.h"
 #include "file.h"
@@ -17,24 +17,29 @@
 #include "inotify.h"
 #include "internal.h"
 #include "jailsys.h"
+#include "jitter.h"
 #include "lib/log.h"
 #include "lib/printf.h"
 #include "lib/string.h"
 #include "mem.h"
+#include "module/loader.h"
+#include "phantom.h"
 #include "mm/pmm.h"
+#include "mm/shm.h"
 #include "mm/vmm.h"
+#include "mount.h"
 #include "poll.h"
 #include "proc/jail.h"
 #include "proc/proc.h"
+#include "security/phantom.h"
+#include "security/anti_toctou.h"
 #include "proc/signal.h"
 #include "proc/smp.h"
 #include "procctl.h"
 #include "ptrace.h"
 #include "sig.h"
-#include "signalfd.h"
 #include "socket.h"
 #include "time.h"
-#include "mount.h"
 #include "version.h"
 
 static bool copy_user_path(char *out, const char *in) {
@@ -48,6 +53,8 @@ static bool copy_user_path(char *out, const char *in) {
         out[i] = c;
         if (!c) return true;
     }
+    const char *last = in + 511;
+    if (!uptr_ok(last, 1) || *last) return false;
     out[511] = '\0';
     return true;
 }
@@ -164,12 +171,20 @@ static int64_t sys_prctl(int op, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t
 }
 
 void syscall_dispatch(syscall_frame_t *f) {
+    vfs_syscall_borrow_begin();
+    vmm_syscall_access_begin();
+    phantom_safe_point(f);
+    anti_toctou_safe_point();
     uint64_t nr = f->rax;
     uint64_t a1 = f->rdi, a2 = f->rsi, a3 = f->rdx;
     uint64_t a4 = f->r10, a5 = f->r8, a6 = f->r9;
 
     proc_t *tp = cur();
-    if (tp) tp->ptrace_orig_rax = nr;
+    if (tp) {
+        tp->ptrace_orig_rax = nr;
+        tp->cur_syscall = (int64_t) nr;
+        tp->cur_syscall_arg0 = (int64_t) a1;
+    }
     if (tp && tp->ptrace_syscall_trace && nr != 101) {
         tp->ptrace_in_syscall = 1;
         proc_ptrace_stop(tp, SIGTRAP | 0x80, 1, f, &f->r11);
@@ -220,7 +235,7 @@ void syscall_dispatch(syscall_frame_t *f) {
         ret = sys_mremap(a1, a2, a3, a4, a5);
         break;
     case 26:
-        ret = 0; /* noop ramfs*/
+        ret = 0; // noop ramfs
         break;
     case 27:
         if (a3) {
@@ -824,17 +839,19 @@ void syscall_dispatch(syscall_frame_t *f) {
         break;
     }
     case 164:
-        ret = host_priv() ? 0 : -(int64_t) EPERM;
+        ret = host_priv() ? sys_settimeofday((const void *) a1, (const void *) a2)
+                          : -(int64_t) EPERM;
         break; /* settimeofday */
-    case 165: /* mount(source, target, fstype, flags, data) */
-        ret = sys_mount((const char *) a1, (const char *) a2, (const char *) a3,
-                        a4, (void *) a5);
+    case 165:  /* mount(source, target, fstype, flags, data) */
+        ret = sys_mount((const char *) a1, (const char *) a2, (const char *) a3, a4, (void *) a5);
         break;
     case 166: /* umount2(target, flags) */
         ret = sys_umount2((const char *) a1, (int) a2);
         break;
-    case 170:
-        ret = host_priv() ? 0 : -(int64_t) EPERM; /* sethostname */
+    case 170: /* sethostname(name, length) */
+        ret = host_priv()
+                  ? sys_sethostname((const char *) a1, a2)
+                  : -(int64_t) EPERM;
         break;
     case 171:
         ret = host_priv() ? 0 : -(int64_t) EPERM;
@@ -861,9 +878,11 @@ void syscall_dispatch(syscall_frame_t *f) {
         break;
     }
     case 175:
+        ret = sys_init_module((const void *) a1, a2, (const char *) a3);
+        break;
     case 176:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break; /* init/delete_module: stub */
+        ret = sys_delete_module((const char *) a1, (uint32_t) a2);
+        break;
     case 188:
     case 189:
     case 190:
@@ -883,7 +902,7 @@ void syscall_dispatch(syscall_frame_t *f) {
         ret = sys_gettid();
         break;
     case 201: {
-        uint64_t t = g_epoch_base + g_ticks / 1000;
+        uint64_t t = realtime_now_ms() / 1000;
         if (a1) {
             if (!uptr_ok_w((void *) a1, 8)) {
                 ret = -(int64_t) EFAULT;
@@ -929,7 +948,8 @@ void syscall_dispatch(syscall_frame_t *f) {
         ret = 0;
         break; /* timer_getoverrun */
     case 227:
-        ret = host_priv() ? 0 : -(int64_t) EPERM;
+        ret = host_priv() ? sys_clock_settime((int) a1, (const void *) a2)
+                          : -(int64_t) EPERM;
         break; /* clock_settime */
     case 232:
         ret = sys_epoll_wait((int) a1, (struct epoll_event *) a2, (int) a3, (int) a4);
@@ -1006,13 +1026,13 @@ void syscall_dispatch(syscall_frame_t *f) {
         ret = (int64_t) vfs_mkdir(abs, (uint32_t) a3);
         break;
     }
-    case 260: {
+    case 259: {
         char abs[512];
         if (!AT_RESOLVED(ret, a1, a2, abs)) break;
         ret = (int64_t) vfs_mknod(abs, (uint32_t) a3, a4);
         break;
     } /* mknodat */
-    case 261: {
+    case 260: {
         char abs[512];
         if (!AT_RESOLVED(ret, a1, a2, abs)) break;
         int _r = (int) a5 & AT_SYMLINK_NOFOLLOW ?
@@ -1021,9 +1041,26 @@ void syscall_dispatch(syscall_frame_t *f) {
         ret = _r;
         break;
     } /* fchownat */
-    case 262:
+    case 261: {
+        char abs[512];
+        if (a3 && !uptr_ok((void *) a3, 32)) {
+            ret = -(int64_t) EFAULT;
+            break;
+        }
+        if (!AT_RESOLVED(ret, a1, a2, abs)) break;
+        vfs_node_t *n = vfs_lookup(abs);
+        if (!n) {
+            ret = -(int64_t) ENOENT;
+            break;
+        }
+        vfs_node_unref_internal(n);
+        ret = 0;
+        break;
+    } /* futimesat: timestamps are not persisted yet */
+    case 262: {
         ret = fd_fstatat((int) a1, (const char *) a2, (struct linux_stat *) a3, (int) a4);
         break;
+    }
     case 263: {
         char abs[512];
         if (!AT_RESOLVED(ret, a1, a2, abs)) break;
@@ -1094,22 +1131,52 @@ void syscall_dispatch(syscall_frame_t *f) {
     case 275:
     case 276:
     case 277:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break; /* splice/tee/sync_file_range/vmsplice: stub */
     case 278:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break; /* move_pages: stub */
     case 279:
-        ret = 0; /* utimensat */
+        ret = -(int64_t) ENOSYS;
+        break; // get_robust_list/splice/tee/sync_file_range/vmsplice/move_pages
+    case 280: {
+        if (a3 && !uptr_ok((void *) a3, 32)) {
+            ret = -(int64_t) EFAULT;
+            break;
+        }
+        if (a4 & ~(uint64_t) AT_SYMLINK_NOFOLLOW) {
+            ret = -(int64_t) EINVAL;
+            break;
+        }
+        vfs_node_t *n = NULL;
+        if (!a2) {
+            n = fd_get_node((int) a1);
+            if (!n) {
+                ret = -(int64_t) EBADF;
+                break;
+            }
+        } else {
+            char abs[512];
+            if (!AT_RESOLVED(ret, a1, a2, abs)) break;
+            n = (a4 & AT_SYMLINK_NOFOLLOW) ? vfs_lookup_nofollow(abs) : vfs_lookup(abs);
+            if (!n) {
+                ret = -(int64_t) ENOENT;
+                break;
+            }
+            vfs_node_unref_internal(n);
+        }
+        ret = 0; /* timestamps are not persisted yet */
         break;
-    case 280:
-        ret = fd_openat((int) a1, (const char *) a2, (int) a3, (int) a4);
-        break; /* openat2 */
+    }
     case 281:
         ret = sys_epoll_wait((int) a1, (struct epoll_event *) a2, (int) a3, (int) a4);
         break; /* epoll_pwait */
     case 282:
-        ret = (int64_t)sys_signalfd((int)a1, (const uint64_t *)a2, (uint32_t)a3);
+        if (a3 != sizeof(uint64_t)) {
+            ret = -(int64_t) EINVAL;
+            break;
+        }
+        if (!a2 || !uptr_ok((void *) a2, sizeof(uint64_t))) {
+            ret = -(int64_t) EFAULT;
+            break;
+        }
+        ret = fd_signalfd((int) a1, *(const uint64_t *) a2, 0);
         break;
     case 283:
         ret = fd_timerfd_create((int) a1, (int) a2);
@@ -1118,8 +1185,8 @@ void syscall_dispatch(syscall_frame_t *f) {
         ret = fd_eventfd((uint32_t) a1, (int) a2);
         break; /* eventfd */
     case 285:
-        ret = 0;
-        break; /* fallocate: no-op */
+        ret = sys_fallocate((int) a1, (int) a2, a3, a4);
+        break; /* fallocate */
     case 286:  /* timerfd_settime(fd, flags, new, old) */
         if (!a3 || !uptr_ok((void *) a3, 32)) {
             ret = -(int64_t) EFAULT;
@@ -1143,7 +1210,15 @@ void syscall_dispatch(syscall_frame_t *f) {
         ret = sys_socket_accept((int) a1, (struct sockaddr_un *) a2, (int *) a3, (int) a4);
         break;
     case 289:
-        ret = (int64_t)sys_signalfd((int)a1, (const uint64_t *)a2, (uint32_t)a3);
+        if (a3 != sizeof(uint64_t)) {
+            ret = -(int64_t) EINVAL;
+            break;
+        }
+        if (!a2 || !uptr_ok((void *) a2, sizeof(uint64_t))) {
+            ret = -(int64_t) EFAULT;
+            break;
+        }
+        ret = fd_signalfd((int) a1, *(const uint64_t *) a2, (int) a4);
         break;
     case 290:
         ret = fd_eventfd((uint32_t) a1, (int) a2);
@@ -1189,8 +1264,8 @@ void syscall_dispatch(syscall_frame_t *f) {
         ret = sys_prlimit64(a1, a2, (void *) a3, (void *) a4);
         break;
     case 303:
-        ret = is_root() ? 0 : -(int64_t) EPERM;
-        break; /* finit_module: stub */
+        ret = -(int64_t) ENOSYS;
+        break;
     case 304:
         ret = is_root() ? 0 : -(int64_t) EPERM;
         break; /* sched_setattr */
@@ -1212,19 +1287,10 @@ void syscall_dispatch(syscall_frame_t *f) {
         break;
     } /* renameat2 */
     case 307:
-        if (!a1) { ret = -(int64_t)EINVAL; break; }
-        {
-            uint32_t op = (uint32_t)a1;
-            if (op == 1) { /* SECCOMP_SET_MODE_STRICT */
-                proc_t *p = cur();
-                if (p) p->seccomp_strict = 1;
-                ret = 0;
-            } else if (op == 2) { /* SECCOMP_SET_MODE_FILTER */
-                ret = is_root() ? 0 : -(int64_t)EPERM;
-            } else {
-                ret = -(int64_t)EINVAL;
-            }
-        }
+        ret = -(int64_t) ENOSYS;
+        break;
+    case 313:
+        ret = sys_finit_module((int) a1, (const char *) a2, (uint32_t) a3);
         break;
     case 318:
         ret = sys_getrandom((void *) a1, a2, (uint32_t) a3);
@@ -1288,6 +1354,21 @@ void syscall_dispatch(syscall_frame_t *f) {
     case SYS_jail_set_auto:
         ret = sys_jail_set_auto((int) a1);
         break;
+    case SYS_phantom_mode:
+        ret = sys_phantom_mode((int) a1);
+        break;
+    case SYS_phantom_read:
+        ret = sys_phantom_read((void *) a1, (uint32_t) a2);
+        break;
+    case SYS_phantom_clone:
+        ret = sys_phantom_clone(f);
+        break;
+    case SYS_phantom_control:
+        ret = sys_phantom_control((uint32_t) a1, (uint32_t) a2);
+        break;
+    case SYS_anti_toctou:
+        ret = sys_anti_toctou((uint32_t) a1, (void *) a2);
+        break;
 
     default:
         log_debug("[syscall %lu  a1=%lx a2=%lx a3=%lx]", nr, a1, a2, a3);
@@ -1301,5 +1382,9 @@ void syscall_dispatch(syscall_frame_t *f) {
         proc_ptrace_stop(tp, SIGTRAP | 0x80, 1, f, &f->r11);
     }
 
+    proc_t *tp_now = cur();
+    if (tp_now) tp_now->cur_syscall = -1;
     signal_check(f);
+    vmm_syscall_access_end();
+    vfs_syscall_borrow_end();
 }

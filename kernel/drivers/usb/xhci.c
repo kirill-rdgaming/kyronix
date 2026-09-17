@@ -227,6 +227,7 @@ typedef struct {
     xhci_dev_ctx_t *dev_ctx;
     uint64_t dev_ctx_phys;
     bool active;
+    bool addressed;
 } xhci_slot_t;
 
 typedef struct {
@@ -283,7 +284,7 @@ static void xhci_ring_push(xhci_ring_t *r, const xhci_trb_t *trb) {
 }
 
 static void xhci_doorbell(xhci_t *x, uint32_t slot, uint32_t target) {
-    x->db[slot * 2] = target;
+    x->db[slot] = target;
     __asm__ volatile("" ::: "memory");
 }
 
@@ -386,6 +387,7 @@ static xhci_slot_t *xhci_find_slot_by_dev(xhci_t *x, usb_device_t *dev) {
 
 static int xhci_ep_dci(uint8_t ep_addr) {
     int ep = ep_addr & 0x0F;
+    if (ep == 0) return 1;
     return ep * 2 + ((ep_addr & 0x80) ? 1 : 0);
 }
 
@@ -426,7 +428,7 @@ static int xhci_ensure_ep(xhci_t *x, xhci_slot_t *slot, uint8_t ep_addr, uint8_t
         uint8_t ival = interval ? interval : 10;
         uint8_t exp = 3;
         while (exp < 15 && (1u << exp) < ival) exp++;
-        ep->dw[0] = ((uint32_t) exp << EP_CTX_INTERVAL_SHIFT);
+        ep->dw[0] = (uint32_t) exp;
         ep->dw[4] = (uint32_t) mps;
     }
 
@@ -508,8 +510,7 @@ static int xhci_control(usb_hc_t *hc, usb_device_t *dev, const usb_setup_pkt_t *
             sc->dw[2] = 0;
             sc->dw[3] = 0;
 
-            int mps = dev->max_packet0;
-            if (mps <= 0) mps = (dev->speed >= USB_SPEED_SUPER) ? 512 : 64;
+            int mps = 8;
             xhci_ep_ctx_t *ep0 = &slot->in_ctx->ep[0];
             ep0->dw[0] = 0;
             ep0->dw[1] = (3u << EP_CTX_CERR_SHIFT) | (EP_TYPE_CONTROL << EP_CTX_EP_TYPE_SHIFT) |
@@ -572,8 +573,7 @@ static int xhci_control(usb_hc_t *hc, usb_device_t *dev, const usb_setup_pkt_t *
     }
     if (!slot) return -1;
 
-    static bool addressed[XHCI_MAX_SLOTS];
-    if (!addressed[slot->slot_id - 1]) {
+    if (!slot->addressed) {
         memset(slot->in_ctx, 0, x->ctx_size * 32);
         slot->in_ctx->ctrl.add_flags = 0x3u;
         xhci_slot_ctx_t *sc = &slot->in_ctx->slot;
@@ -591,7 +591,7 @@ static int xhci_control(usb_hc_t *hc, usb_device_t *dev, const usb_setup_pkt_t *
         int r = xhci_address_device(x, slot->slot_id, slot, false);
         if (r) return r;
         slot->addr = (uint8_t) dev->addr;
-        addressed[slot->slot_id - 1] = true;
+        slot->addressed = true;
         return 0;
     }
 

@@ -19,10 +19,11 @@ typedef struct {
     uint8_t buf[PIPE_BUFSZ];
     uint32_t rpos;
     uint32_t count;
-    uint32_t write_refs;
-    uint32_t read_refs;
-    void *waiting_reader;
-    void *waiting_writer;
+    volatile uint32_t write_refs;
+    volatile uint32_t read_refs;
+    volatile uint32_t endpoint_refs;
+    uint64_t reader_waiters;
+    uint64_t writer_waiters;
     pipe_anc_t anc_q[PIPE_ANC_SLOTS];
     uint32_t anc_wr;
     uint32_t anc_rd;
@@ -33,9 +34,14 @@ typedef struct {
 
 pipe_t *pipe_alloc(void);
 void pipe_free(pipe_t *p);
+void pipe_ref_read(pipe_t *p);
+void pipe_ref_write(pipe_t *p);
+void pipe_unref_read(pipe_t *p);
+void pipe_unref_write(pipe_t *p);
 int64_t pipe_read(pipe_t *p, void *buf, uint64_t len);
 int64_t pipe_peek(pipe_t *p, void *buf, uint64_t len, uint64_t skip);
 int64_t pipe_write(pipe_t *p, const void *buf, uint64_t len);
 void pipe_wake(pipe_t *p, int want_read); /* wake all procs blocked on p in one direction */
+void pipe_cancel_wait(pipe_t *p, void *proc);
 int pipe_anc_send(pipe_t *p, void **files, int nfds);
 int pipe_anc_recv(pipe_t *p, void **out, int max);

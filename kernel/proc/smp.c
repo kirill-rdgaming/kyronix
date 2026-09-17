@@ -49,6 +49,7 @@ void smp_init(void) {
         cpu->extra_argument = 0;
         if (cpu->lapic_id == bsp_lapic) {
             g_cpu_local[0].lapic_id = cpu->lapic_id;
+            g_cpu_local[0].online = 1;
             cpu->extra_argument = (uint64_t) &g_cpu_local[0];
             log_info("SMP:   CPU%u lapic=%u (BSP)", 0, cpu->lapic_id);
         } else {
@@ -99,6 +100,10 @@ void __attribute__((noreturn)) ap_init_cpu(cpu_local_t *cpu) {
     wrmsr(0xC0000102, (uint64_t) cpu);
 
     cpu_enable_sse();
+
+    uint32_t eax = 7, ebx = 0, ecx = 0, edx = 0;
+    cpuid(7, &eax, &ebx, &ecx, &edx);
+    if (ebx & (1u << 7)) write_cr4(read_cr4() | (1ULL << 20));
 
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | (1ULL << 0) | (1ULL << 11));
     wrmsr(MSR_STAR,

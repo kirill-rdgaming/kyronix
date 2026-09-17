@@ -1,6 +1,7 @@
 #include "ieee80211.h"
 #include "../../arch/x86_64/cpu.h"
 #include "../../lib/log.h"
+#include "../../lib/printf.h"
 #include "../../lib/string.h"
 #include "../../mm/pmm.h"
 #include "../../mm/vmm.h"

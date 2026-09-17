@@ -1,7 +1,8 @@
 #include "idt.h"
 #include "arch/x86_64/lapic.h"
 #include "arch/x86_64/syscall_setup.h"
-#include "drivers/fb.h"
+#include "drivers/input/input.h"
+#include "drivers/video/fb.h"
 #include "exec/process.h"
 #include "fs/vfs.h"
 #include "gdt.h"
@@ -13,9 +14,14 @@
 #include "pic.h"
 #include "pit.h"
 #include "proc/proc.h"
+#include "security/phantom.h"
 #include "proc/signal.h"
+#include "proc/loadavg.h"
 #include "proc/smp.h"
 #include "syscall/syscall.h"
+#ifdef CONFIG_PROFILER
+#include "prof/profiler.h"
+#endif
 
 #define IDT_INT_GATE 0x8E
 #define IDT_TRAP_GATE 0x8F
@@ -26,15 +32,41 @@ static idt_entry_t g_idt[256] __attribute__((aligned(16)));
 typedef struct {
     void (*fn)(int, void *);
     void *arg;
+    uint32_t active;
 } irq_handler_t;
 static irq_handler_t g_irq_handlers[16];
+static spinlock_t g_irq_handler_lock;
 
 void request_irq(uint8_t irq, void (*fn)(int, void *), void *arg) {
     if (irq < 16) {
+        uint64_t flags = irq_save();
+        pic_mask_irq(irq);
+        spin_lock(&g_irq_handler_lock);
         g_irq_handlers[irq].fn = fn;
         g_irq_handlers[irq].arg = arg;
+        spin_unlock(&g_irq_handler_lock);
         pic_unmask_irq(irq);
+        irq_restore(flags);
     }
+}
+
+bool free_irq(uint8_t irq, void (*fn)(int, void *), void *arg) {
+    if (irq >= 16) return false;
+    uint64_t flags = irq_save();
+    irq_handler_t *handler = &g_irq_handlers[irq];
+    spin_lock(&g_irq_handler_lock);
+    if (handler->fn != fn || handler->arg != arg) {
+        spin_unlock(&g_irq_handler_lock);
+        irq_restore(flags);
+        return false;
+    }
+    pic_mask_irq(irq);
+    handler->fn = NULL;
+    handler->arg = NULL;
+    spin_unlock(&g_irq_handler_lock);
+    irq_restore(flags);
+    while (__atomic_load_n(&handler->active, __ATOMIC_ACQUIRE)) cpu_relax();
+    return true;
 }
 
 extern uint64_t isr_stub_table[];
@@ -131,7 +163,12 @@ static bool page_fault_stack_growth_ok(cpu_state_t *state, uint64_t page, bool e
 static page_fault_result_t handle_user_page_fault(cpu_state_t *state) {
     if (!g_current_proc || !g_current_proc->space) return PF_SIGSEGV;
 
-    if (state->error_code & 0x1) return PF_SIGSEGV; /* protection violation */
+    if (state->error_code & 0x1) {
+        if ((state->error_code & 0x2) &&
+            vmm_handle_cow_fault(g_current_proc->space, read_cr2()) > 0)
+            return PF_HANDLED;
+        return PF_SIGSEGV; /* protection violation */
+    }
 
     uint64_t cr2 = read_cr2();
     uint64_t page = cr2 & ~0xFFFULL;
@@ -202,6 +239,9 @@ void isr_dispatch(cpu_state_t *state) {
             if (n == 14) {
                 page_fault_result_t pf = handle_user_page_fault(state);
                 if (pf == PF_HANDLED) return;
+                uint64_t fault_address = read_cr2();
+                bool candidate = phantom_fault_candidate(state, fault_address);
+                if (candidate && phantom_handle_fault(state, fault_address)) return;
                 sig = (pf == PF_SIGBUS) ? SIGBUS : SIGSEGV;
             }
 
@@ -212,10 +252,17 @@ void isr_dispatch(cpu_state_t *state) {
                 return;
             }
 
-            kdbg("\n[exc#%lu pid=%u RIP=%lx] -> sig %d\n", n, g_current_proc->pid, state->rip, sig);
+            kdbg("\n[exc#%lu pid=%u %s RIP=%lx] -> sig %d\n", n, g_current_proc->pid,
+                 g_current_proc->exe_path[0] ? g_current_proc->exe_path : "?", state->rip, sig);
             if (n == 14) {
                 uint64_t cr2 = read_cr2();
                 kdbg("  CR2=%lx err=%lx\n", cr2, state->error_code);
+                uint64_t vs = 0, ve = 0;
+                uint32_t vp = 0;
+                if (g_current_proc->space &&
+                    vma_lookup(g_current_proc->space, state->rip, &vs, &ve, &vp))
+                    kdbg("  RIP in [%lx-%lx) len=%lx prot=%x off=%lx\n", vs, ve, ve - vs, vp,
+                         state->rip - vs);
             }
             proc_do_exit(-sig);
         }
@@ -254,10 +301,15 @@ void isr_dispatch(cpu_state_t *state) {
     } else if (n < 48) {
         uint8_t irq = (uint8_t) (n - 32);
         if (irq == 0) {
-            g_ticks++;
+            g_ticks += PIT_TICK_MS;
+#ifdef CONFIG_PROFILER
+            prof_tick(state->rip, g_current_proc ? g_current_proc->pid : 0);
+#endif
             fb_cursor_blink_tick(g_ticks);
+            input_watchdog();
             proc_reap_pending();
             net_poll();
+            if (this_cpu_id() == 0) calc_load_tick();
             pic_send_eoi(0);
             uint64_t timer_mask = __atomic_load_n(&g_timer_mask, __ATOMIC_RELAXED);
             uint64_t tm = timer_mask;
@@ -290,8 +342,9 @@ void isr_dispatch(cpu_state_t *state) {
                     still_active |= (1ULL << b);
                 tm &= tm - 1;
             }
-            if (still_active != timer_mask)
-                __atomic_store_n(&g_timer_mask, still_active, __ATOMIC_RELAXED);
+            uint64_t finished = timer_mask & ~still_active;
+            if (finished)
+                __atomic_fetch_and(&g_timer_mask, ~finished, __ATOMIC_RELAXED);
             if ((state->cs & 3) == 3 && g_current_proc) {
                 proc_t *p = g_current_proc;
                 proc_t *next = sched_claim_next(p);
@@ -310,7 +363,19 @@ void isr_dispatch(cpu_state_t *state) {
             }
         } else {
             irq_handler_t *h = &g_irq_handlers[irq];
-            if (h->fn) h->fn((int) irq, h->arg);
+            void (*fn)(int, void *) = NULL;
+            void *arg = NULL;
+            spin_lock(&g_irq_handler_lock);
+            if (h->fn) {
+                fn = h->fn;
+                arg = h->arg;
+                __atomic_fetch_add(&h->active, 1, __ATOMIC_RELAXED);
+            }
+            spin_unlock(&g_irq_handler_lock);
+            if (fn) {
+                fn((int) irq, arg);
+                __atomic_fetch_sub(&h->active, 1, __ATOMIC_RELEASE);
+            }
             pic_send_eoi(irq);
         }
     } else if (n == LAPIC_SPURIOUS_VEC) {

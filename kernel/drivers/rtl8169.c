@@ -1,6 +1,7 @@
 #include "netdev.h"
 #include "../arch/x86_64/cpu.h"
 #include "../lib/log.h"
+#include "../lib/printf.h"
 #include "../lib/string.h"
 #include "../mm/pmm.h"
 #include "../mm/vmm.h"
@@ -113,7 +114,7 @@ static int rtl8169_send(netdev_t *nd, const uint8_t *frame, uint16_t len) {
     r9_w8(r, R9_TPPOLL, R9_TPPOLL_NPQ);
     uint32_t to = 100000;
     while ((r->tx[t].opts1 & R9_DESC_OWN) && to--) cpu_relax();
-    return 0;
+    return to ? 0 : -1;
 }
 
 static void rtl8169_poll(netdev_t *nd) {
@@ -128,6 +129,7 @@ static void rtl8169_poll(netdev_t *nd) {
             netdev_receive(nd, r->rx_bufs + r->rx_tail * R9_RX_BUF, (uint16_t) (len - 4));
         d->opts1 = R9_DESC_OWN | R9_RX_BUF;
         if (r->rx_tail == R9_NUM_RX_DESC - 1) d->opts1 |= R9_DESC_EOR;
+        __asm__ volatile("" ::: "memory");
         r->rx_tail = (r->rx_tail + 1) % R9_NUM_RX_DESC;
     }
 }

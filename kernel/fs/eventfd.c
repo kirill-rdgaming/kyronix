@@ -1,9 +1,11 @@
 #include "eventfd.h"
 #include "arch/x86_64/cpu.h"
+#include "arch/x86_64/pit.h"
 #include "arch/x86_64/spinlock.h"
 #include "fs/vfs_internal.h"
 #include "mm/heap.h"
 #include "proc/proc.h"
+#include "syscall/poll.h"
 
 extern volatile uint64_t g_ticks;
 
@@ -12,11 +14,18 @@ extern volatile uint64_t g_ticks;
 #define EMFILE 24
 #define ENOMEM 12
 
+#define FD_FLAG_NONBLOCK 04000
+#define FD_FLAG_CLOEXEC 02000000
+#define EFD_SEMAPHORE 1
+#define TFD_TIMER_ABSTIME 1
+#define CLOCK_REALTIME 0
+
 int fd_eventfd(uint32_t initval, int eflags) {
     eventfd_state_t *e = (eventfd_state_t *) kcalloc(1, sizeof(eventfd_state_t));
     if (!e) return -(int) ENOMEM;
     e->counter = initval;
-    e->semaphore = !!(eflags & 1);
+    e->semaphore = !!(eflags & EFD_SEMAPHORE);
+    e->refcnt = 1;
     e->lock.lock = 0;
 
     int fd = vfs_fd_alloc_from(0);
@@ -26,13 +35,14 @@ int fd_eventfd(uint32_t initval, int eflags) {
     }
     vfs_file_t *f = vfs_file_alloc();
     if (!f) {
+        vfs_fd_clear(fd);
         kfree(e);
         return -(int) ENOMEM;
     }
     f->efd = e;
     f->flags = O_RDWR;
-    if (eflags & 0x80000) f->flags |= O_NONBLOCK;
-    if (eflags & 0x40000) f->cloexec = 1;
+    if (eflags & FD_FLAG_NONBLOCK) f->flags |= O_NONBLOCK;
+    if (eflags & FD_FLAG_CLOEXEC) f->cloexec = 1;
     vfs_fd_install(fd, f);
     return fd;
 }
@@ -53,6 +63,7 @@ int64_t eventfd_read(vfs_file_t *f, char *buf, uint64_t len) {
                 e->counter = 0;
             }
             spin_unlock(&e->lock);
+            poll_notify_object(e);
             __builtin_memcpy(buf, &val, 8);
             return 8;
         }
@@ -62,19 +73,12 @@ int64_t eventfd_read(vfs_file_t *f, char *buf, uint64_t len) {
         }
         proc_t *p = g_current_proc;
         e->waiter = p;
+        if (p) p->state = PROC_WAITING;
         spin_unlock(&e->lock);
 
-        if (p) {
-            if (proc_next_ready(p))
-                sched_yield_blocking();
-            else {
-                sti();
-                hlt();
-                cli();
-            }
-        }
+        if (p) sched_block_current();
         spin_lock(&e->lock);
-        e->waiter = NULL;
+        if (e->waiter == p) e->waiter = NULL;
         spin_unlock(&e->lock);
     }
 }
@@ -94,6 +98,7 @@ int64_t eventfd_write(vfs_file_t *f, const char *buf, uint64_t len) {
         e->waiter = NULL;
     }
     spin_unlock(&e->lock);
+    poll_notify_object(e);
     return 8;
 }
 
@@ -101,6 +106,8 @@ int fd_timerfd_create(int clockid, int tflags) {
     timerfd_state_t *t = (timerfd_state_t *) kcalloc(1, sizeof(timerfd_state_t));
     if (!t) return -(int) ENOMEM;
     t->clockid = clockid;
+    t->refcnt = 1;
+    t->lock.lock = 0;
 
     int fd = vfs_fd_alloc_from(0);
     if (fd < 0) {
@@ -109,22 +116,23 @@ int fd_timerfd_create(int clockid, int tflags) {
     }
     vfs_file_t *f = vfs_file_alloc();
     if (!f) {
+        vfs_fd_clear(fd);
         kfree(t);
         return -(int) ENOMEM;
     }
     f->tfd = t;
     f->flags = O_RDWR;
-    if (tflags & 0x80000) f->flags |= O_NONBLOCK;
-    if (tflags & 0x40000) f->cloexec = 1;
+    if (tflags & FD_FLAG_NONBLOCK) f->flags |= O_NONBLOCK;
+    if (tflags & FD_FLAG_CLOEXEC) f->cloexec = 1;
     vfs_fd_install(fd, f);
     return fd;
 }
 
 int fd_timerfd_settime(int fd, int flags, const kitimerspec_t *new_val, kitimerspec_t *old_val) {
-    (void) flags;
     vfs_file_t *f = vfs_fd_get(fd);
     if (!f || !f->tfd) return -(int) EINVAL;
     timerfd_state_t *t = f->tfd;
+    spin_lock(&t->lock);
     if (old_val) {
         uint64_t remaining_ms = (t->next_tick > g_ticks) ? (t->next_tick - g_ticks) : 0;
         old_val->value.sec = remaining_ms / 1000;
@@ -134,8 +142,23 @@ int fd_timerfd_settime(int fd, int flags, const kitimerspec_t *new_val, kitimers
     }
     uint64_t val_ms = new_val->value.sec * 1000 + new_val->value.nsec / 1000000;
     t->interval_ms = new_val->interval.sec * 1000 + new_val->interval.nsec / 1000000;
-    t->next_tick = val_ms ? g_ticks + val_ms : 0;
+    if (!val_ms && !new_val->value.sec && !new_val->value.nsec) {
+        t->next_tick = 0; // disarmed
+    } else if (flags & TFD_TIMER_ABSTIME) {
+        // absolute deadline on the fd's clock - libwayland arms every timer
+        // this way, so treating it as a relative delay stalls the event loop
+        uint64_t base_ms = (t->clockid == CLOCK_REALTIME) ? realtime_now_ms() : g_ticks;
+        t->next_tick = (val_ms > base_ms) ? g_ticks + (val_ms - base_ms) : g_ticks;
+    } else {
+        t->next_tick = g_ticks + val_ms;
+    }
     t->overruns = 0;
+    proc_t *waiter = (proc_t *) t->waiter;
+    t->waiter = NULL;
+    if (waiter && __sync_bool_compare_and_swap(&waiter->state, PROC_WAITING, PROC_READY))
+        proc_set_ready(waiter);
+    spin_unlock(&t->lock);
+    poll_notify_object(t);
     return 0;
 }
 
@@ -143,11 +166,13 @@ int fd_timerfd_gettime(int fd, kitimerspec_t *cur_val) {
     vfs_file_t *f = vfs_fd_get(fd);
     if (!f || !f->tfd || !cur_val) return -(int) EINVAL;
     timerfd_state_t *t = f->tfd;
+    spin_lock(&t->lock);
     uint64_t remaining_ms = (t->next_tick > g_ticks) ? (t->next_tick - g_ticks) : 0;
     cur_val->value.sec = remaining_ms / 1000;
     cur_val->value.nsec = (remaining_ms % 1000) * 1000000;
     cur_val->interval.sec = t->interval_ms / 1000;
     cur_val->interval.nsec = (t->interval_ms % 1000) * 1000000;
+    spin_unlock(&t->lock);
     return 0;
 }
 
@@ -155,6 +180,7 @@ int64_t timerfd_read(vfs_file_t *f, char *buf, uint64_t len) {
     if (len < 8) return -(int) EINVAL;
     timerfd_state_t *t = f->tfd;
     for (;;) {
+        spin_lock(&t->lock);
         if (t->next_tick && g_ticks >= t->next_tick) {
             uint64_t exp = 1 + t->overruns;
             t->overruns = 0;
@@ -162,19 +188,28 @@ int64_t timerfd_read(vfs_file_t *f, char *buf, uint64_t len) {
                 t->next_tick += t->interval_ms;
             else
                 t->next_tick = 0;
+            spin_unlock(&t->lock);
             __builtin_memcpy(buf, &exp, 8);
             return 8;
         }
-        if (f->flags & O_NONBLOCK) return -(int) EAGAIN;
+        if (f->flags & O_NONBLOCK) {
+            spin_unlock(&t->lock);
+            return -(int) EAGAIN;
+        }
         proc_t *p = g_current_proc;
         if (p) {
-            if (proc_next_ready(p))
-                sched_yield_blocking();
-            else {
-                sti();
-                hlt();
-                cli();
+            t->waiter = p;
+            if (t->next_tick) {
+                p->wakeup_tick = t->next_tick;
+                proc_set_timer(p);
             }
+            p->state = PROC_WAITING;
         }
+        spin_unlock(&t->lock);
+        if (p) sched_block_current();
+        spin_lock(&t->lock);
+        if (t->waiter == p) t->waiter = NULL;
+        spin_unlock(&t->lock);
+        if (p) p->wakeup_tick = 0;
     }
 }

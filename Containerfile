@@ -7,19 +7,22 @@ RUN apk add --no-cache \
     bison flex \
     ncurses-dev \
     cpio \
-    e2fsprogs \
+    e2fsprogs dosfstools mtools \
     xorriso \
-    autoconf automake libtool \
+    qemu-system-x86_64 \
     pkgconfig \
-    texinfo \
-    gawk \
+    gtk+3.0-dev glib-dev pango-dev cairo-dev gdk-pixbuf-dev \
+    meson ninja \
+    wayland-dev wayland-protocols \
+    libxkbcommon-dev libinput-dev libevdev-dev \
+    libdrm-dev libpng-dev mtdev-dev \
+    libcap-dev \
+    gawk file \
     curl wget tar \
     bash coreutils findutils \
     git
 
 RUN printf '#!/bin/sh\nexec gcc "$@"\n' > /usr/local/bin/musl-gcc \
-    && chmod +x /usr/local/bin/musl-gcc \
-    && ln -s /usr/bin/aclocal /usr/bin/aclocal-1.18 \
-    && ln -s /usr/bin/automake /usr/bin/automake-1.18
+    && chmod +x /usr/local/bin/musl-gcc
 
 WORKDIR /src

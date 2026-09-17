@@ -2,6 +2,7 @@
 #include "../../lib/log.h"
 #include "../../lib/string.h"
 #include "../../mm/heap.h"
+#include "../../mm/pmm.h"
 #include "../input.h"
 #include "../tty.h"
 

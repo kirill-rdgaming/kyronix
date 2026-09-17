@@ -23,7 +23,9 @@ void *memmove(void *dst, const void *src, size_t n) {
     if (dst == src || n == 0) return dst;
     const uint8_t *s = src;
     uint8_t *d = dst;
-    if (d < s || d >= s + n) return memcpy(dst, src, n);
+    uintptr_t du = (uintptr_t) d;
+    uintptr_t su = (uintptr_t) s;
+    if (du < su || du - su >= n) return memcpy(dst, src, n);
 
     size_t r = n & 7;
     while (r--) {
@@ -84,7 +86,10 @@ char *strcpy(char *dst, const char *src) {
 
 char *strncpy(char *dst, const char *src, size_t n) {
     char *d = dst;
-    while (n && (*d++ = *src++)) n--;
+    while (n && *src) {
+        *d++ = *src++;
+        n--;
+    }
     while (n--) *d++ = '\0';
     return dst;
 }
@@ -101,6 +106,20 @@ char *strchr(const char *s, int c) {
         s++;
     }
     return (c == '\0') ? (char *) s : NULL;
+}
+
+char *strstr(const char *haystack, const char *needle) {
+    if (!*needle) return (char *) haystack;
+    for (; *haystack; haystack++) {
+        const char *h = haystack;
+        const char *n = needle;
+        while (*h && *n && *h == *n) {
+            h++;
+            n++;
+        }
+        if (!*n) return (char *) haystack;
+    }
+    return NULL;
 }
 
 int atoi(const char *s) {

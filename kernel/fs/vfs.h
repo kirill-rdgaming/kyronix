@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 struct net_conn;
+struct shmem_obj;
 
 extern char g_cwd[512];
 
@@ -78,6 +79,8 @@ struct linux_dirent64 {
 
 #define S_IFSOCK 0140000U
 #define S_ISVTX 0001000U /* sticky bit: restrict deletion in a shared dir */
+#define S_ISGID 0002000U /* set-group-ID */
+#define S_ISUID 0004000U /* set-user-ID */
 
 struct block_device;
 
@@ -86,6 +89,7 @@ struct vfs_node;
 struct vfs_fs_ops {
     int64_t (*read)(struct vfs_node *, char *, uint64_t off, uint64_t len);
     int64_t (*write)(struct vfs_node *, const char *, uint64_t off, uint64_t len);
+    int (*truncate)(struct vfs_node *, uint64_t len);
     void (*close)(struct vfs_node *);
 };
 
@@ -94,6 +98,7 @@ struct filesystem {
     const char *name;
     bool (*check_root)(struct block_device *);
     bool (*mount)(struct block_device *, const char *);
+    bool (*unmount)(const char *);
     int (*sync)(void);
     int (*create)(struct vfs_node *node, const char *path, uint32_t mode);
 };
@@ -110,6 +115,8 @@ typedef struct vfs_node {
     uint8_t *data;
     uint64_t capacity;
     struct vfs_node *children;
+    struct vfs_node **child_index;
+    struct vfs_node *hash_next;
     struct vfs_node *next;
     struct vfs_node *parent;
     char *symlink;
@@ -117,6 +124,7 @@ typedef struct vfs_node {
     int64_t (*chr_write)(struct vfs_node *, const char *, uint64_t, uint64_t);
     int64_t (*chr_ioctl)(struct vfs_node *, uint64_t req, uint64_t arg);
     bool (*chr_pollin)(struct vfs_node *);
+    void *(*chr_pollobj)(struct vfs_node *);
     int (*chr_open)(struct vfs_node *, int flags);
     void (*chr_close)(struct vfs_node *);
     int64_t (*chr_mmap)(struct vfs_node *, uint64_t off, uint64_t len, uint64_t va,
@@ -126,12 +134,15 @@ typedef struct vfs_node {
 
     void *fs_private;          /* filesystem per-node data (e.g. ext2 inode) */
     struct vfs_fs_ops *fs_ops; /* NULL = ramfs / chr / symlink */
+    struct shmem_obj *shmem;   /* non-null for memfd_create() nodes */
+    uint32_t rdev;             /* device number reported as st_rdev */
     uint8_t dirty;
 } vfs_node_t;
 
 typedef struct {
     volatile uint64_t counter;
     uint32_t semaphore;
+    uint32_t refcnt;
     void *waiter;
     spinlock_t lock;
 } eventfd_state_t;
@@ -141,7 +152,16 @@ typedef struct {
     uint64_t interval_ms;
     uint64_t next_tick;
     uint64_t overruns;
+    uint32_t refcnt;
+    void *waiter;
+    spinlock_t lock;
 } timerfd_state_t;
+
+typedef struct {
+    uint64_t mask; /* signals this descriptor accepts */
+    uint32_t refcnt;
+    spinlock_t lock;
+} sigfd_state_t;
 
 typedef struct {
     uint64_t magic;
@@ -156,7 +176,10 @@ typedef struct {
     uint8_t cloexec;
     eventfd_state_t *efd;
     timerfd_state_t *tfd;
+    sigfd_state_t *sfd;
+    void *epoll; /* non-null for epoll handles; survives dup() (see syscall/epoll.c) */
     struct net_conn *inet; /* non-null for AF_INET sockets */
+    volatile uint32_t refs; /* descriptor ownership plus in-flight syscall borrows */
 
 } vfs_file_t;
 
@@ -173,7 +196,10 @@ void vfs_init(void);
 void vfs_cloexec_flush(void);
 void vfs_set_fdtable(vfs_file_t **fds);
 vfs_file_t **vfs_get_fdtable(void);
+void vfs_syscall_borrow_begin(void);
+void vfs_syscall_borrow_end(void);
 void vfs_copy_fdtable(vfs_file_t **dst, vfs_file_t **src);
+int vfs_phantom_sanitize_fdtable(vfs_file_t **fds);
 void vfs_free_fdtable(vfs_file_t **fds);
 
 const char *vfs_copy_user_path(const char *path, char *kbuf);
@@ -184,8 +210,10 @@ int fd_open_kpath(const char *path, int flags, int mode);
 int fd_openat(int dirfd, const char *path, int flags, int mode);
 int fd_close(int fd);
 int64_t fd_read(int fd, void *buf, uint64_t len);
+int64_t fd_read_ex(int fd, void *buf, uint64_t len, bool force_nonblock);
 int64_t fd_write(int fd, const void *buf, uint64_t len);
 int64_t fd_write_kbuf(int fd, const void *buf, uint64_t len);
+int64_t fd_write_ex(int fd, const void *buf, uint64_t len, bool force_nonblock);
 int64_t fd_lseek(int fd, int64_t off, int whence);
 int fd_stat(const char *path, struct linux_stat *st);
 int fd_lstat(const char *path, struct linux_stat *st);
@@ -202,12 +230,16 @@ bool fd_valid(int fd);
 vfs_node_t *fd_get_node(int fd);
 vfs_file_t *fd_get_file(int fd);
 int64_t fd_pread(int fd, void *buf, uint64_t len, uint64_t off);
+int64_t fd_pread_kbuf(int fd, void *buf, uint64_t len, uint64_t off);
 int64_t fd_pwrite(int fd, const void *buf, uint64_t len, uint64_t off);
 int64_t fd_pwrite_kbuf(int fd, const void *buf, uint64_t len, uint64_t off);
 int64_t fd_peek(int fd, void *buf, uint64_t len, uint64_t skip);
+int64_t fd_peek_ex(int fd, void *buf, uint64_t len, uint64_t skip, bool force_nonblock);
 bool fd_pollin(int fd);
 bool fd_pollout(int fd);
 bool fd_pollhup(int fd);
+uint64_t fd_poll_deadline(int fd);
+int fd_poll_objects(int fd, void **objects, int max_objects);
 int fd_pipe(int pipefd[2]);
 int fd_socketpair(int sv[2]);
 int fd_eventfd(uint32_t initval, int eflags);
@@ -225,6 +257,10 @@ typedef struct {
 int fd_timerfd_settime(int fd, int flags, const kitimerspec_t *new_val, kitimerspec_t *old_val);
 int fd_timerfd_gettime(int fd, kitimerspec_t *cur_val);
 
+int fd_signalfd(int fd, uint64_t mask, int flags);
+int64_t signalfd_read(vfs_file_t *f, char *buf, uint64_t len);
+bool signalfd_pollin(vfs_file_t *f);
+
 int fd_socket(int domain, int type, int proto);
 int fd_bind_unix(int fd, const char *path);
 int fd_listen_unix(int fd, int backlog);
@@ -240,6 +276,13 @@ vfs_node_t *vfs_create_chr(const char *path,
                            int64_t (*rfn)(vfs_node_t *, char *, uint64_t, uint64_t),
                            int64_t (*wfn)(vfs_node_t *, const char *, uint64_t, uint64_t));
 
+/* st_rdev encoding matching the Linux/musl major:minor split */
+#define VFS_MKDEV(maj, min) ((uint32_t) ((((maj) & 0xfffu) << 8) | ((min) & 0xffu)))
+void vfs_set_rdev(const char *path, uint32_t rdev);
+
+/* Anonymous shmem-backed regular file with no directory entry (memfd_create). */
+int fd_memfd_open(const char *name, int cloexec);
+
 int vfs_mkdir(const char *path, uint32_t mode);
 int vfs_unlink(const char *path);
 int vfs_rmdir(const char *path);
@@ -251,6 +294,7 @@ int vfs_chown(const char *path, uint32_t uid, uint32_t gid);
 int vfs_lchown(const char *path, uint32_t uid, uint32_t gid);
 int vfs_fchown(int fd, uint32_t uid, uint32_t gid);
 int vfs_truncate(const char *path, uint64_t len);
+int vfs_node_truncate(vfs_node_t *node, uint64_t len);
 int vfs_access(const char *path, int mode);
 int vfs_mknod(const char *path, uint32_t mode, uint64_t dev);
 char *vfs_node_abspath(vfs_node_t *n, char *buf, size_t sz);
