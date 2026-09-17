@@ -303,11 +303,16 @@ static void acpi_iterate(uint64_t sdt_phys, bool use_xsdt) {
              g_slp_typ_a, g_slp_typ_b);
 }
 
+static uint64_t g_rsdp_phys;
+
+uint64_t acpi_rsdp_phys(void) { return g_rsdp_phys; }
+
 void acpi_init(uint64_t rsdp_phys) {
     if (!rsdp_phys) {
         log_warn("ACPI: no RSDP from bootloader");
         return;
     }
+    g_rsdp_phys = rsdp_phys;
 
     const struct acpi_rsdp *rsdp = acpi_map_range(rsdp_phys, sizeof(struct acpi_rsdp));
     if (memcmp(rsdp->signature, "RSD PTR ", 8) != 0) {

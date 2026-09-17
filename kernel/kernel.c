@@ -14,8 +14,11 @@
 #include "version.h"
 
 #include "crypto/chacha20.h"
+#include "auth/auth.h"
 #include "drivers/acpi.h"
 #include "drivers/ahci.h"
+#include "drivers/netdev.h"
+#include "drivers/server.h"
 #include "drivers/block.h"
 #include "drivers/blockdev.h"
 #include "drivers/fbdev.h"
@@ -28,6 +31,7 @@
 #include "drivers/uio.h"
 #include "drivers/virtio_net.h"
 #include "drivers/vt.h"
+#include "drivers/usb/usb.h"
 #include "exec/process.h"
 #include "fs/cpio.h"
 #include "fs/ext2.h"
@@ -338,18 +342,32 @@ void kmain(void) {
         kstatus("Mounting /dev/pts", _n != NULL);
         vfs_node_unref_internal(_n);
     }
-    pci_enumerate();
-    kstatus("Enumerating PCI", true);
     /* Limine base revision >= 3 reports the RSDP as a physical address. */
     acpi_init(rsdp_req.response ? (uint64_t) rsdp_req.response->address : 0);
     kstatus("Initialising ACPI", acpi_available());
+    int n_ecam = server_tables_init();
+    pci_use_ecam(n_ecam > 0);
+    if (n_ecam > 0) kstatus("Server platform (ECAM/NUMA/IOAPIC)", true);
+    pci_enumerate();
+    kstatus("Enumerating PCI", true);
+    auth_init();
+    kstatus("Loading user database", auth_passwd_count() > 0);
     block_init();
     ahci_init();
     kstatus("Initialising AHCI", ahci_ready());
+    usbhid_init();
+    usbms_init();
+    usb_init();
+    kstatus("Initialising USB stack", usb_ready());
     blockdev_init();
     partition_scan_all();
     blockdev_create_all();
     kstatus("Initialising block devices", true);
+    netdev_init();
+    e1000_init();
+    rtl8139_init();
+    rtl8169_init();
+    ath5k_init();
     virtnet_init();
     kstatus("Initialising virtio-net", virtnet_ready());
     net_init();

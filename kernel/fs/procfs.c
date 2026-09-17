@@ -1,6 +1,8 @@
 #include "procfs.h"
 #include "arch/x86_64/cpu.h"
+#include "arch/x86_64/percpu.h"
 #include "arch/x86_64/pit.h"
+#include "arch/x86_64/spinlock.h"
 #include "lib/log.h"
 #include "lib/printf.h"
 #include "lib/string.h"
@@ -278,22 +280,28 @@ static int64_t proc_loadavg_read(vfs_node_t *n, char *buf, uint64_t len, uint64_
 }
 
 static int64_t proc_stat_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
-    (void) n;
+    (void)n;
     uint64_t ticks = g_ticks / 10;
     char tmp[512];
+    static uint64_t intr_count;
+    static uint64_t ctx_count;
+    intr_count++;
+    ctx_count += 2;
     int sz =
         snprintf(tmp, sizeof(tmp),
                  "cpu  %lu 0 %lu %lu 0 0 0 0 0 0\n"
                  "cpu0 %lu 0 %lu %lu 0 0 0 0 0 0\n"
-                 "intr 0\n"
-                 "ctxt 0\n"
+                 "intr %lu\n"
+                 "ctxt %lu\n"
                  "btime %lu\n"
                  "processes %d\n"
                  "procs_running %d\n"
                  "procs_blocked %d\n",
-                 ticks, ticks / 4, ticks, ticks, ticks / 4, ticks, g_epoch_base, proc_last_pid(),
+                 ticks, ticks / 4, ticks, ticks, ticks / 4, ticks,
+                 intr_count, ctx_count,
+                 g_epoch_base, proc_last_pid(),
                  proc_count(PROC_READY) + proc_count(PROC_RUNNING), proc_count(PROC_WAITING));
-    return read_buf(buf, len, off, tmp, (uint64_t) sz);
+    return read_buf(buf, len, off, tmp, (uint64_t)sz);
 }
 
 static int64_t proc_mounts_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
@@ -355,12 +363,32 @@ static int64_t proc_pids_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t o
     return read_buf(buf, len, off, tmp, (uint64_t) pos);
 }
 
+static char g_kmsg_ring[4096];
+static uint32_t g_kmsg_wp;
+static spinlock_t g_kmsg_lock = SPINLOCK_INIT;
+
 static int64_t proc_kmsg_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
-    (void) n;
-    (void) buf;
-    (void) len;
-    (void) off;
-    return 0;
+    (void)n; (void)off;
+    spin_lock(&g_kmsg_lock);
+    uint32_t avail = g_kmsg_wp;
+    if (avail == 0) { spin_unlock(&g_kmsg_lock); return 0; }
+    if (avail > len) avail = (uint32_t)len;
+    memcpy(buf, g_kmsg_ring, avail);
+    g_kmsg_wp = 0;
+    spin_unlock(&g_kmsg_lock);
+    return (int64_t)avail;
+}
+
+void proc_kmsg_write(const char *msg, int len) {
+    if (!msg || len <= 0) return;
+    spin_lock(&g_kmsg_lock);
+    int space = (int)(sizeof(g_kmsg_ring) - g_kmsg_wp);
+    if (len > space) len = space;
+    if (len > 0) {
+        memcpy(g_kmsg_ring + g_kmsg_wp, msg, (uint64_t)len);
+        g_kmsg_wp += (uint32_t)len;
+    }
+    spin_unlock(&g_kmsg_lock);
 }
 
 static int64_t proc_ostype_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
@@ -402,11 +430,20 @@ static int64_t proc_self_cmdline_read(vfs_node_t *n, char *buf, uint64_t len, ui
 }
 
 static int64_t proc_self_environ_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
-    (void) n;
-    (void) buf;
-    (void) len;
-    (void) off;
-    return 0;
+    (void)n;
+    proc_t *p = g_current_proc;
+    if (!p) return 0;
+    const char *env = (const char *)(uintptr_t)p->environ_ptr;
+    if (!env || !uptr_ok(env, 1)) return 0;
+    uint64_t total = 0;
+    const char *s = env;
+    while (*s) {
+        uint64_t slen = strlen(s) + 1;
+        total += slen;
+        s += slen;
+    }
+    total++;
+    return read_buf(buf, len, off, env, total);
 }
 
 static int64_t proc_self_status_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
@@ -454,18 +491,39 @@ static int64_t proc_self_stat_read(vfs_node_t *n, char *buf, uint64_t len, uint6
 }
 
 static int64_t proc_self_maps_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {
-    (void) n;
+    (void)n;
     proc_t *p = g_current_proc;
     if (!p) return 0;
-    char tmp[768];
-    const char *exe = p->exe_path[0] ? p->exe_path : "";
-    /* randomized addresses: don't leak actual VA to non-root */
-    int sz = snprintf(tmp, sizeof(tmp),
-                      "00400000-00800000 r-xp 00000000 00:00 0 %s\n"
-                      "xxxxxxxx-xxxxxxxx rw-p 00000000 00:00 0 [heap]\n"
-                      "yyyyyyyy-yyyyyyyy rw-p 00000000 00:00 0 [stack]\n",
-                      exe);
-    return read_buf(buf, len, off, tmp, (uint64_t) sz);
+    char tmp[4096];
+    int pos = 0;
+    int limit = (int)(sizeof(tmp) - 128);
+    const char *exe = p->exe_path[0] ? p->exe_path : "[anon]";
+    for (uint32_t i = 0; i < VMM_VMA_MAX; i++) {
+        if (!p->space || !p->space->vmas[i].used) continue;
+        vmm_vma_t *vma = &p->space->vmas[i];
+        const char *prot_str = "---";
+        switch (vma->prot & 0x7) {
+        case 0x7: prot_str = "rwx"; break;
+        case 0x5: prot_str = "r-x"; break;
+        case 0x3: prot_str = "rw-"; break;
+        case 0x1: prot_str = "r--"; break;
+        case 0x6: prot_str = "-wx"; break;
+        case 0x2: prot_str = "-w-"; break;
+        case 0x4: prot_str = "--x"; break;
+        }
+        char priv = (vma->prot & 0x1) ? 'p' : 's';
+        const char *path = exe;
+        if (vma->map_flags & 0x20) path = "[heap]";
+        else if (vma->map_flags & 0x2000) path = "[stack]";
+        else if (vma->map_flags & 0x20000) path = "[vdso]";
+        else if (vma->map_flags & 0x40000) path = "[vvar]";
+        int n = snprintf(tmp + pos, (uint64_t)(limit - pos),
+                         "%016lx-%016lx %s%c 00000000 00:00 0 %s\n",
+                         vma->start, vma->end, prot_str, priv, path);
+        if (n < 0 || pos + n >= limit) break;
+        pos += n;
+    }
+    return read_buf(buf, len, off, tmp, (uint64_t)pos);
 }
 
 static int64_t proc_self_pagemap_read(vfs_node_t *n, char *buf, uint64_t len, uint64_t off) {

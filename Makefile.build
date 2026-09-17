@@ -158,6 +158,28 @@ SRCS := \
     kernel/drivers/input.c            \
     kernel/drivers/ps2mouse.c         \
     kernel/drivers/vt.c               \
+    kernel/drivers/usb/usb.c          \
+    kernel/drivers/usb/uhci.c         \
+    kernel/drivers/usb/ohci.c         \
+    kernel/drivers/usb/ehci.c         \
+    kernel/drivers/usb/xhci.c         \
+    kernel/drivers/usb/usbhid.c       \
+    kernel/drivers/usb/usbms.c        \
+    kernel/drivers/usb/usbrndis.c     \
+    kernel/drivers/usb/usbcdcecm.c    \
+    kernel/drivers/usb/usbcdcacm.c    \
+    kernel/drivers/usb/usbnet.c       \
+    kernel/drivers/netdev.c           \
+    kernel/drivers/e1000.c            \
+    kernel/drivers/rtl8139.c          \
+    kernel/drivers/rtl8169.c          \
+    kernel/drivers/server.c           \
+    kernel/drivers/wifi/wpa.c         \
+    kernel/drivers/wifi/ieee80211.c   \
+    kernel/drivers/wifi/ath5k.c       \
+    kernel/drivers/wifi/rtl8188eu.c   \
+    kernel/auth/auth.c                \
+    kernel/auth/sha512.c              \
     kernel/lib/string.c               \
     kernel/lib/printf.c                \
     kernel/lib/log.c                   \

@@ -11,14 +11,23 @@ all:
 	$(MAKE) -C fetch
 	$(MAKE) -C pipes
 	$(MAKE) -C pkg/client
+	$(MAKE) -C passwd
+	$(MAKE) -C su
+	$(MAKE) -C sudo
+	$(MAKE) -C useradd
 	mkdir -p $(ROOTFS)/bin
 	cp ../build/bin/kyronix-init $(ROOTFS)/bin/init
 	cp ../build/bin/ksh $(ROOTFS)/bin/
 	cp ../build/bin/login $(ROOTFS)/bin/
 	cp ../build/bin/vi $(ROOTFS)/bin/
+	ln -sf vi $(ROOTFS)/bin/vim
 	cp ../build/bin/fetch $(ROOTFS)/bin/
 	cp ../build/bin/make $(ROOTFS)/bin/
 	cp ../build/bin/pkg $(ROOTFS)/bin/
+	cp ../build/bin/passwd $(ROOTFS)/bin/
+	cp ../build/bin/su $(ROOTFS)/bin/
+	cp ../build/bin/sudo $(ROOTFS)/bin/
+	cp ../build/bin/useradd $(ROOTFS)/bin/
 	cp ../build/bin/pipes $(ROOTFS)/usr/bin/
 	ln -sf ksh $(ROOTFS)/bin/sh
 	for app in awk basename cat chgrp chmod chown cksum clear cmp cp cut date dd diff dirname du echo env false \
@@ -40,6 +49,10 @@ clean:
 	$(MAKE) -C fetch clean
 	$(MAKE) -C pipes clean
 	$(MAKE) -C pkg/client clean
+	$(MAKE) -C passwd clean
+	$(MAKE) -C su clean
+	$(MAKE) -C sudo clean
+	$(MAKE) -C useradd clean
 	$(MAKE) -C extras clean
 	# keep st and cwm as blobs
 	for f in $(ROOTFS)/bin/*; do \

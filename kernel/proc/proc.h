@@ -63,6 +63,10 @@ typedef struct proc {
     uint8_t on_sigstack;  /* currently executing a handler on the alt stack */
     uint64_t pages_alloc; /* pages allocated via brk/mmap */
     uint64_t pages_freed; /* pages freed via munmap/shrink brk */
+    uint64_t robust_list_head;
+    uint64_t robust_list_len;
+    uint8_t seccomp_strict;
+    uint64_t environ_ptr;
     uint32_t jail_id;     /* 0 = host; appended at end so sched.S offsets stay fixed */
     uint8_t jail_exempt;  /* inherited; init=1, suppresses auto-isolation */
 
@@ -73,6 +77,7 @@ typedef struct proc {
     uint8_t ptrace_syscall_trace; /* PTRACE_SYSCALL: stop at syscall enter/exit */
     uint8_t ptrace_in_syscall;    /* toggles enter/exit for PTRACE_SYSCALL */
     uint8_t ptrace_step;          /* one-shot: set TF before next resume (PTRACE_SINGLESTEP) */
+    uint32_t ptrace_options;      /* PTRACE_O_* flags set via PTRACE_SETOPTIONS */
     uint8_t ptrace_frame_kind;    /* 0=none, 1=syscall_frame_t*, 2=cpu_state_t* */
     void *ptrace_frame;           /* frame the tracee is stopped in, valid while stopped */
     uint64_t ptrace_orig_rax;     /* syscall nr as of entry; rax itself gets clobbered by the

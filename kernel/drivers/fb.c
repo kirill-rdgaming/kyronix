@@ -1,6 +1,7 @@
 #include "fb.h"
 #include "../lib/string.h"
 #include "../mm/pmm.h"
+#include "../mm/vmm.h"
 #ifdef CONFIG_KMEMLEAK
 #include "../mm/kmemleak.h"
 #endif
@@ -19,8 +20,11 @@ static uint32_t g_cursor_last_col;
 static uint32_t g_cursor_last_row;
 
 static uint8_t *g_shadow;
+static uint8_t *g_alt_shadow;
 static uint64_t g_shadow_bytes;
 static uint32_t g_bytes_per_px = 4;
+static bool g_alt_screen;
+static bool g_bracketed_paste;
 
 static inline uint8_t *vram_at(uint64_t off) { return (uint8_t *)g_fb.addr + off; }
 
@@ -540,9 +544,20 @@ void fb_putchar(char c) {
                 } else if (p == 1) {
                     /* DECCKM: cursor key mode */
                 } else if (p == 1049) {
-                    /* Alternate screen — not supported */
+                    if (!g_alt_shadow) {
+                        g_alt_shadow = (uint8_t *)pmm_alloc_contiguous((g_shadow_bytes + PAGE_SIZE - 1) / PAGE_SIZE);
+                        if (g_alt_shadow) g_alt_shadow = (uint8_t *)phys_to_virt((uint64_t)g_alt_shadow);
+                    }
+                    if (g_alt_shadow) {
+                        memcpy(g_alt_shadow, g_shadow, g_shadow_bytes);
+                        memset(g_shadow, 0, g_shadow_bytes);
+                        memset(g_fb.addr, 0, g_shadow_bytes);
+                        g_fb.col = 0;
+                        g_fb.row = 0;
+                        g_alt_screen = true;
+                    }
                 } else if (p == 2004) {
-                    /* Bracketed paste — not supported */
+                    g_bracketed_paste = true;
                 }
             } else if (c == 'l') {
                 if (p == 25) {
@@ -554,9 +569,15 @@ void fb_putchar(char c) {
                 } else if (p == 1) {
                     /* DECCKM off */
                 } else if (p == 1049) {
-                    /* Leave alternate screen */
+                    if (g_alt_screen && g_alt_shadow) {
+                        memcpy(g_shadow, g_alt_shadow, g_shadow_bytes);
+                        memcpy(g_fb.addr, g_alt_shadow, g_shadow_bytes);
+                        g_fb.col = 0;
+                        g_fb.row = 0;
+                        g_alt_screen = false;
+                    }
                 } else if (p == 2004) {
-                    /* Disable bracketed paste */
+                    g_bracketed_paste = false;
                 }
             }
             g_esc_priv = false;

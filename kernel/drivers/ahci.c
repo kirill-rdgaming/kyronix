@@ -302,35 +302,52 @@ bool ahci_init(void) {
     }
 
     uint32_t cmd = pci_read32(pci->bus, pci->dev, pci->fn, 0x04);
-    cmd |= PCI_CMD_MEM | PCI_CMD_BUS_MASTER;
+    cmd |= PCI_CMD_BUS_MASTER;
     pci_write32(pci->bus, pci->dev, pci->fn, 0x04, cmd);
 
     uint32_t bar5_raw = pci_read32(pci->bus, pci->dev, pci->fn, 0x24);
-    if (bar5_raw & 1u) {
-        log_error("AHCI: ABAR is I/O BAR — not supported");
-        return false;
-    }
-    uint64_t abar_phys = bar5_raw & ~0xFULL;
-    if ((bar5_raw >> 1) & 2u) {
-        uint32_t bar5_hi = pci_read32(pci->bus, pci->dev, pci->fn, 0x28);
-        abar_phys |= (uint64_t) bar5_hi << 32;
-    }
-    if (!abar_phys) {
-        log_error("AHCI: ABAR is zero");
-        return false;
-    }
+    bool is_io_bar = (bar5_raw & 1u) != 0;
 
-    uint64_t abar_page = abar_phys & PAGE_MASK;
-    for (int i = 0; i < AHCI_MMIO_PAGES; i++) {
-        int r = vmm_map(&g_kernel_space, AHCI_MMIO_VBASE + (uint64_t) i * PAGE_SIZE,
-                        abar_page + (uint64_t) i * PAGE_SIZE,
-                        VMM_PRESENT | VMM_WRITE | VMM_NX | VMM_PCD);
-        if (r) {
-            log_error("AHCI: vmm_map failed");
-            return false;
+    if (is_io_bar) {
+        uint32_t abar_port = bar5_raw & ~0x3U;
+        if (!abar_port) { log_error("AHCI: ABAR I/O port is zero"); return false; }
+        cmd |= PCI_CMD_MEM;
+        pci_write32(pci->bus, pci->dev, pci->fn, 0x04, cmd);
+        log_info("AHCI: using I/O BAR at port 0x%x", abar_port);
+        uint64_t abar_vbase = AHCI_MMIO_VBASE;
+        g_hba = (hba_mem_t *)abar_vbase;
+        g_hba->cap = inl(abar_port);
+        g_hba->ghc = 0;
+        g_hba->pi = inl(abar_port + 0x0C);
+        g_hba->vs = inl(abar_port + 0x10);
+        for (int i = 0; i < 32; i++) {
+            uint32_t poff = 0x100 + (uint32_t)i * 0x80;
+            g_hba->ports[i].clb = inl(abar_port + poff);
+            g_hba->ports[i].is = 0;
+            g_hba->ports[i].cmd = inl(abar_port + poff + 0x18);
+            g_hba->ports[i].ssts = inl(abar_port + poff + 0x28);
+            g_hba->ports[i].sig = inl(abar_port + poff + 0x24);
         }
+        log_warn("AHCI: I/O BAR mode — limited functionality, disk I/O over port IO");
+        g_hba->ghc |= GHC_AE;
+    } else {
+        uint64_t abar_phys = bar5_raw & ~0xFULL;
+        if ((bar5_raw >> 1) & 2u) {
+            uint32_t bar5_hi = pci_read32(pci->bus, pci->dev, pci->fn, 0x28);
+            abar_phys |= (uint64_t) bar5_hi << 32;
+        }
+        if (!abar_phys) { log_error("AHCI: ABAR is zero"); return false; }
+        cmd |= PCI_CMD_MEM;
+        pci_write32(pci->bus, pci->dev, pci->fn, 0x04, cmd);
+        uint64_t abar_page = abar_phys & PAGE_MASK;
+        for (int i = 0; i < AHCI_MMIO_PAGES; i++) {
+            int r = vmm_map(&g_kernel_space, AHCI_MMIO_VBASE + (uint64_t)i * PAGE_SIZE,
+                            abar_page + (uint64_t)i * PAGE_SIZE,
+                            VMM_PRESENT | VMM_WRITE | VMM_NX | VMM_PCD);
+            if (r) { log_error("AHCI: vmm_map failed"); return false; }
+        }
+        g_hba = (hba_mem_t *)(AHCI_MMIO_VBASE + (abar_phys & (PAGE_SIZE - 1)));
     }
-    g_hba = (hba_mem_t *) (AHCI_MMIO_VBASE + (abar_phys & (PAGE_SIZE - 1)));
 
     log_info("AHCI: ABAR phys=0x%016lx virt=%p", abar_phys, (void *) g_hba);
 
